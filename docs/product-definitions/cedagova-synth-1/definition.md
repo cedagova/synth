@@ -2,7 +2,7 @@
 
 - Product definition issue: https://github.com/cedagova/synth/issues/1
 - Product definition PR: https://github.com/cedagova/synth/pull/2
-- Requirements brief: Pending
+- Requirements brief: https://github.com/cedagova/synth/issues/1#issuecomment-5382594160
 - Status: Reconciling
 - Classification: DECOMPOSE
 - Definition lead: product-definition-lead (Claude Opus 5, claude-opus-5-high)
@@ -233,4 +233,7 @@ Non-goals:
 
 ## Publication verification
 
-Pending: brief publication, outcome-issue creation, graph verification, exact-head decision-owner approval, and exact-head independent review are recorded here once complete.
+- Requirements Brief published: https://github.com/cedagova/synth/issues/1#issuecomment-5382594160
+- Outcome issues OUT001-OUT006 published and attached as native sub-issues of the root; graph verified with `definition verify-graph`.
+- Exact-head decision-owner approval and exact-head independent review are recorded on the definition PR when given; the PR's Validation section carries the authoritative record.
+- Next action after Ready for planning: `plan https://github.com/cedagova/synth/issues/1`

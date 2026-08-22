@@ -3,7 +3,7 @@
 - Product definition issue: https://github.com/cedagova/synth/issues/1
 - Product definition PR: https://github.com/cedagova/synth/pull/2
 - Requirements brief: Pending
-- Status: Draft ready
+- Status: Reconciling
 - Classification: DECOMPOSE
 - Definition lead: product-definition-lead (Claude Opus 5, claude-opus-5-high)
 - Started: 2026-08-22
@@ -224,12 +224,12 @@ Non-goals:
 | Key | Kind | Parent | Title | Issue |
 | --- | --- | --- | --- | --- |
 | ROOT | ROOT | None | Synth: native macOS high-quality MusicXML player with per-line synth/instrument sound assignment | https://github.com/cedagova/synth/issues/1 |
-| OUT001 | OUTCOME | ROOT | Music library: MusicXML import, permanent storage, and piece browsing | Pending |
-| OUT002 | OUTCOME | ROOT | High-fidelity playback: score interpretation, humanization, transport, and audio output | Pending |
-| OUT003 | OUTCOME | ROOT | Per-line sound assignment, mixer, and per-piece presets | Pending |
-| OUT004 | OUTCOME | ROOT | Synthesizer and sound design studio with shipped synth sound collection | Pending |
-| OUT005 | OUTCOME | ROOT | Instrument sound libraries: curated download experience and instrument customization | Pending |
-| OUT006 | OUTCOME | ROOT | Audio export of configured pieces | Pending |
+| OUT001 | OUTCOME | ROOT | Music library: MusicXML import, permanent storage, and piece browsing | https://github.com/cedagova/synth/issues/3 |
+| OUT002 | OUTCOME | ROOT | High-fidelity playback: score interpretation, humanization, transport, and audio output | https://github.com/cedagova/synth/issues/4 |
+| OUT003 | OUTCOME | ROOT | Per-line sound assignment, mixer, and per-piece presets | https://github.com/cedagova/synth/issues/5 |
+| OUT004 | OUTCOME | ROOT | Synthesizer and sound design studio with shipped synth sound collection | https://github.com/cedagova/synth/issues/6 |
+| OUT005 | OUTCOME | ROOT | Instrument sound libraries: curated download experience and instrument customization | https://github.com/cedagova/synth/issues/7 |
+| OUT006 | OUTCOME | ROOT | Audio export of configured pieces | https://github.com/cedagova/synth/issues/8 |
 
 ## Publication verification
 

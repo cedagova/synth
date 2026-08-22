@@ -1,0 +1,35 @@
+#!/bin/sh
+
+set -eu
+
+expected_owner="cedagova"
+remote_name="$1"
+remote_url="$2"
+
+case "$remote_url" in
+  https://cedagova@github.com/cedagova/*)
+    ;;
+  *)
+    echo "Push blocked: remote '$remote_name' is not a GitHub repository owned by '$expected_owner'." >&2
+    exit 1
+    ;;
+esac
+
+if ! command -v gh >/dev/null 2>&1; then
+  echo "Push blocked: GitHub CLI is required to verify the active account." >&2
+  exit 1
+fi
+
+repo_root="$(git rev-parse --show-toplevel)"
+personal_gh="$repo_root/bin/gh-personal"
+
+if [ ! -x "$personal_gh" ]; then
+  echo "Push blocked: project-scoped GitHub wrapper is missing or not executable." >&2
+  exit 1
+fi
+
+active_account="$("$personal_gh" api user --jq .login 2>/dev/null || true)"
+if [ "$active_account" != "$expected_owner" ]; then
+  echo "Push blocked: project-scoped GitHub account is '${active_account:-unknown}', expected '$expected_owner'." >&2
+  exit 1
+fi

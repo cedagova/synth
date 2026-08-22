@@ -1,0 +1,25 @@
+#!/bin/sh
+# One-time per-clone wiring so every guard in bin/ is actually active.
+# This repository is always worked on as the GitHub account 'cedagova'.
+
+set -eu
+
+expected_account="cedagova"
+repo_root="$(git rev-parse --show-toplevel)"
+
+git -C "$repo_root" config core.hooksPath .githooks
+git -C "$repo_root" config credential.useHttpPath true
+git -C "$repo_root" config "credential.https://github.com.username" "$expected_account"
+
+# Replace any inherited helper rather than stacking on top of it.
+git -C "$repo_root" config --unset-all credential.helper || true
+git -C "$repo_root" config --add credential.helper ""
+git -C "$repo_root" config --add credential.helper "$repo_root/bin/git-credential-personal"
+
+active="$("$repo_root/bin/gh-personal" api user --jq .login)"
+if [ "$active" != "$expected_account" ]; then
+  echo "Setup failed: resolved GitHub account is '$active', expected '$expected_account'." >&2
+  exit 1
+fi
+
+echo "Wired to GitHub account '$expected_account'. Hooks: .githooks"

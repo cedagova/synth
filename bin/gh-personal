@@ -1,0 +1,24 @@
+#!/bin/sh
+# Runs 'gh' as 'cedagova' regardless of the machine-global active account.
+# This repository is always worked on as the GitHub account 'cedagova'. See bin/README.md.
+
+set -eu
+
+expected_account="cedagova"
+
+case "${1:-}" in
+  auth | config)
+    echo "Refusing to modify machine-wide GitHub CLI configuration from this project." >&2
+    exit 1
+    ;;
+esac
+
+if ! command -v gh >/dev/null 2>&1; then
+  echo "GitHub CLI is required." >&2
+  exit 1
+fi
+
+personal_token="$(gh auth token --hostname github.com --user "$expected_account")"
+export GH_TOKEN="$personal_token"
+
+exec gh "$@"

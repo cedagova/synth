@@ -3,7 +3,7 @@
 - Product definition issue: https://github.com/cedagova/synth/issues/1
 - Product definition PR: https://github.com/cedagova/synth/pull/2
 - Requirements brief: https://github.com/cedagova/synth/issues/1#issuecomment-5382594160
-- Status: Reconciling
+- Status: Ready for planning
 - Classification: DECOMPOSE
 - Definition lead: product-definition-lead (Claude Opus 5, claude-opus-5-high)
 - Started: 2026-08-22

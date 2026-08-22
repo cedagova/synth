@@ -100,69 +100,69 @@ The owner (a solo user) wants to hear classical instrumental works from MusicXML
 
 ### Library
 
-- **R-LIB-001** Importing a MusicXML file (`.musicxml`, `.xml`, `.mxl`) stores the piece permanently in the app library, independent of the source file. *Acceptance: import a file, delete the original, relaunch — the piece still opens and plays.*
-- **R-LIB-002** The library shows title/composer/movement metadata read from each file and is browsable, searchable, and sortable. *Acceptance: find an imported piece by typing part of its composer's name.*
-- **R-LIB-003** Removing a piece requires explicit confirmation and also removes its presets.
-- **R-LIB-004** A failed import names the file and reason and leaves the library unchanged.
+- **REQ-001** Importing a MusicXML file (`.musicxml`, `.xml`, `.mxl`) stores the piece permanently in the app library, independent of the source file. *Acceptance: import a file, delete the original, relaunch — the piece still opens and plays.*
+- **REQ-002** The library shows title/composer/movement metadata read from each file and is browsable, searchable, and sortable. *Acceptance: find an imported piece by typing part of its composer's name.*
+- **REQ-003** Removing a piece requires explicit confirmation and also removes its presets.
+- **REQ-004** A failed import names the file and reason and leaves the library unchanged.
 
 ### Line assignment
 
-- **R-ASGN-001** The app enumerates every independent line the score encodes (voice level; D1) with names derived from part/voice information; the user can rename lines. *Acceptance: a WTC fugue for keyboard shows one line per fugue voice, not one line for "Piano".*
-- **R-ASGN-002** Each line has exactly one assigned sound: synth or instrument, mutually exclusive.
-- **R-ASGN-003** First open auto-creates a playable initial preset mapping lines to the closest available instruments named in the score, else a sensible default.
-- **R-ASGN-004** Per line: volume, pan, mute, and solo. *Acceptance: soloing one fugue voice plays only that voice.*
+- **REQ-005** The app enumerates every independent line the score encodes (voice level; D1) with names derived from part/voice information; the user can rename lines. *Acceptance: a WTC fugue for keyboard shows one line per fugue voice, not one line for "Piano".*
+- **REQ-006** Each line has exactly one assigned sound: synth or instrument, mutually exclusive.
+- **REQ-007** First open auto-creates a playable initial preset mapping lines to the closest available instruments named in the score, else a sensible default.
+- **REQ-008** Per line: volume, pan, mute, and solo. *Acceptance: soloing one fugue voice plays only that voice.*
 
 ### Playback and interpretation
 
-- **R-PLAY-001** Transport: play, pause, stop, seek by measure/beat and by time, loop over a measure range.
-- **R-PLAY-002** Notated structure is honored: pitches, rhythms, key/time changes, tempo marks and changes, repeats, D.C./D.S./coda, fermatas (D4). *Acceptance: a piece with repeats and a D.C. al Fine plays the correct expanded sequence.*
-- **R-PLAY-003** Expressive notation is honored: dynamics including crescendo/diminuendo, articulations (staccato, legato, accents), slurs, pedal, grace notes, and realized ornaments (trills, mordents, turns) (D4). *Acceptance: a notated trill is audibly realized as alternating notes, not a single held note.*
-- **R-PLAY-004** Subtle humanization (micro-timing and phrase-shaped dynamics) is on by default, with a global enable/disable and intensity control (D4). *Acceptance: toggling humanization off produces a strictly literal rendering.*
-- **R-PLAY-005** Playback is gapless and dropout-free on target hardware.
-- **R-PLAY-006** A per-piece report lists score notation that was not honored. *Acceptance: a file containing an unsupported marking shows it in the report.*
+- **REQ-009** Transport: play, pause, stop, seek by measure/beat and by time, loop over a measure range.
+- **REQ-010** Notated structure is honored: pitches, rhythms, key/time changes, tempo marks and changes, repeats, D.C./D.S./coda, fermatas (D4). *Acceptance: a piece with repeats and a D.C. al Fine plays the correct expanded sequence.*
+- **REQ-011** Expressive notation is honored: dynamics including crescendo/diminuendo, articulations (staccato, legato, accents), slurs, pedal, grace notes, and realized ornaments (trills, mordents, turns) (D4). *Acceptance: a notated trill is audibly realized as alternating notes, not a single held note.*
+- **REQ-012** Subtle humanization (micro-timing and phrase-shaped dynamics) is on by default, with a global enable/disable and intensity control (D4). *Acceptance: toggling humanization off produces a strictly literal rendering.*
+- **REQ-013** Playback is gapless and dropout-free on target hardware.
+- **REQ-014** A per-piece report lists score notation that was not honored. *Acceptance: a file containing an unsupported marking shows it in the report.*
 
 ### Audio output
 
-- **R-OUT-001** Audio plays through the system default output; the user can choose any available output device in-app; device connects/disconnects during playback are handled gracefully.
+- **REQ-015** Audio plays through the system default output; the user can choose any available output device in-app; device connects/disconnects during playback are handled gracefully.
 
 ### Synthesizer
 
-- **R-SYN-001** Fixed-but-rich architecture (D6): multiple oscillators with analog-style, wavetable, and FM synthesis types; filters; envelopes; LFOs; a modulation matrix; per-sound effects (reverb, delay, chorus, EQ). Every parameter is user-editable.
-- **R-SYN-002** Sounds can be created from scratch, duplicated, and modified; shipped sounds are read-only and edited as copies.
-- **R-SYN-003** Sounds can be auditioned with test notes and edited live during piece playback. *Acceptance: filter changes are audible while the piece keeps playing.*
-- **R-SYN-004** The app ships a categorized starter collection of high-quality synth sounds.
+- **REQ-016** Fixed-but-rich architecture (D6): multiple oscillators with analog-style, wavetable, and FM synthesis types; filters; envelopes; LFOs; a modulation matrix; per-sound effects (reverb, delay, chorus, EQ). Every parameter is user-editable.
+- **REQ-017** Sounds can be created from scratch, duplicated, and modified; shipped sounds are read-only and edited as copies.
+- **REQ-018** Sounds can be auditioned with test notes and edited live during piece playback. *Acceptance: filter changes are audible while the piece keeps playing.*
+- **REQ-019** The app ships a categorized starter collection of high-quality synth sounds.
 
 ### Instruments
 
-- **R-INST-001** The app offers in-app download of curated free, legal, high-quality sampled instrument libraries covering standard classical instrumentation (strings, woodwinds, brass, keyboard instruments including piano/harpsichord/organ, harp, timpani and common orchestral percussion), with licenses and attribution shown (D3).
-- **R-INST-002** Instrument customization offers tone/EQ, dynamics response, envelope shaping within realistic bounds, vibrato depth/rate, tuning offset, and per-line volume/pan/room send — bounded by what each downloaded asset supports; unsupported controls are disabled with an explanation (D7).
-- **R-INST-003** After download, all instrument content works fully offline and is re-downloadable.
+- **REQ-020** The app offers in-app download of curated free, legal, high-quality sampled instrument libraries covering standard classical instrumentation (strings, woodwinds, brass, keyboard instruments including piano/harpsichord/organ, harp, timpani and common orchestral percussion), with licenses and attribution shown (D3).
+- **REQ-021** Instrument customization offers tone/EQ, dynamics response, envelope shaping within realistic bounds, vibrato depth/rate, tuning offset, and per-line volume/pan/room send — bounded by what each downloaded asset supports; unsupported controls are disabled with an explanation (D7).
+- **REQ-022** After download, all instrument content works fully offline and is re-downloadable.
 
 ### Storage
 
-- **R-STORE-001** A personal sound library stores, renames, organizes, and deletes user sounds: synth patches and named instrument-customization variants.
-- **R-STORE-002** Multiple named presets per piece capture complete assignment, customization, and mixer state; exactly one is active; changes auto-save; switching applies immediately.
-- **R-STORE-003** All library content, sounds, and presets persist locally across relaunches; no cloud dependency.
+- **REQ-023** A personal sound library stores, renames, organizes, and deletes user sounds: synth patches and named instrument-customization variants.
+- **REQ-024** Multiple named presets per piece capture complete assignment, customization, and mixer state; exactly one is active; changes auto-save; switching applies immediately.
+- **REQ-025** All library content, sounds, and presets persist locally across relaunches; no cloud dependency.
 
 ### Export
 
-- **R-EXP-001** Export the current piece with its active preset to WAV or AIFF at CD quality or better, faithful to live playback including the current humanization state (D5). *Acceptance: exported file and live playback of the same preset are indistinguishable in content.*
+- **REQ-026** Export the current piece with its active preset to WAV or AIFF at CD quality or better, faithful to live playback including the current humanization state (D5). *Acceptance: exported file and live playback of the same preset are indistinguishable in content.*
 
 ## Accessibility and content
 
-- **R-A11Y-001** Core flows (library, assignment, transport, presets) are fully keyboard-operable; controls carry VoiceOver labels; standard macOS text-size behavior applies.
+- **REQ-027** Core flows (library, assignment, transport, presets) are fully keyboard-operable; controls carry VoiceOver labels; standard macOS text-size behavior applies.
 - UI language: English. Musical terms use their conventional Italian/standard notation names.
 
 ## Privacy, security, and policy
 
-- **R-PRIV-001** No accounts, no telemetry, no user data leaves the machine. Network access exists only to download instrument assets over HTTPS from their curated legal sources.
+- **REQ-028** No accounts, no telemetry, no user data leaves the machine. Network access exists only to download instrument assets over HTTPS from their curated legal sources.
 - Sample-library licenses must permit this distribution model; license texts and attributions are preserved and viewable in-app (D3).
 - MusicXML files are user-owned content, consumed read-only, and never uploaded.
 
 ## Success measures and guardrails
 
 - Owner-validated reference set plays correctly end to end: at minimum one keyboard fugue (voice-level polyphony), one string quartet movement, and one orchestral excerpt.
-- For each reference piece, the notated structure and expressive detail of R-PLAY-002/003 are audibly present, and the owner judges the result clearly superior to a plain General-MIDI-style rendering of the same file.
+- For each reference piece, the notated structure and expressive detail of REQ-010/003 are audibly present, and the owner judges the result clearly superior to a plain General-MIDI-style rendering of the same file.
 - Guardrails: no audio dropouts on target hardware; export always matches live playback; imported pieces and presets are never lost across updates.
 
 ## Constraints and non-goals
@@ -187,12 +187,12 @@ Non-goals:
 ## Evidence
 
 - `cedagova/synth@63f1313b767a0cefdccae7a91daf1e86bfede1d9` is a blank slate (identity guards only): the entire product is new; no existing behavior constrains the definition.
-- MusicXML is a stable, widely used W3C Community Group interchange format whose encoding of parts, voices, dynamics, articulations, ornaments, and structure is documented; the interpretation requirements in R-PLAY-002/003 name standard MusicXML concepts.
+- MusicXML is a stable, widely used W3C Community Group interchange format whose encoding of parts, voices, dynamics, articulations, ornaments, and structure is documented; the interpretation requirements in REQ-010/003 name standard MusicXML concepts.
 - Owner statements in this conversation (2026-08-22) are the source of the objective and all D1–D9 decisions.
 
 ## Assumptions
 
-- Free, legally redistributable sampled instrument libraries of sufficient quality exist to cover the standard classical instrumentation in R-INST-001, including enough dynamic layering to make the D7 customization controls meaningful. Planning must validate concrete sources and licenses early; if coverage falls short for some instruments, the gap returns to the owner as a product decision.
+- Free, legally redistributable sampled instrument libraries of sufficient quality exist to cover the standard classical instrumentation in REQ-020, including enough dynamic layering to make the D7 customization controls meaningful. Planning must validate concrete sources and licenses early; if coverage falls short for some instruments, the gap returns to the owner as a product decision.
 - The owner's MusicXML files are broadly well-formed exports from mainstream notation software.
 - Voice-level line separation (D1) is derivable from the part/voice/staff information those files encode.
 
@@ -222,13 +222,13 @@ Non-goals:
 | Key | Kind | Parent | Title | Issue |
 | --- | --- | --- | --- | --- |
 | ROOT | ROOT | None | Synth: native macOS high-quality MusicXML player with per-line synth/instrument sound assignment | https://github.com/cedagova/synth/issues/1 |
-| OUT-1 | OUTCOME | ROOT | Music library: MusicXML import, permanent storage, and piece browsing | Pending |
-| OUT-2 | OUTCOME | ROOT | High-fidelity playback: score interpretation, humanization, transport, and audio output | Pending |
-| OUT-3 | OUTCOME | ROOT | Per-line sound assignment, mixer, and per-piece presets | Pending |
-| OUT-4 | OUTCOME | ROOT | Synthesizer and sound design studio with shipped synth sound collection | Pending |
-| OUT-5 | OUTCOME | ROOT | Instrument sound libraries: curated download experience and instrument customization | Pending |
-| OUT-6 | OUTCOME | ROOT | Audio export of configured pieces | Pending |
+| OUT001 | OUTCOME | ROOT | Music library: MusicXML import, permanent storage, and piece browsing | Pending |
+| OUT002 | OUTCOME | ROOT | High-fidelity playback: score interpretation, humanization, transport, and audio output | Pending |
+| OUT003 | OUTCOME | ROOT | Per-line sound assignment, mixer, and per-piece presets | Pending |
+| OUT004 | OUTCOME | ROOT | Synthesizer and sound design studio with shipped synth sound collection | Pending |
+| OUT005 | OUTCOME | ROOT | Instrument sound libraries: curated download experience and instrument customization | Pending |
+| OUT006 | OUTCOME | ROOT | Audio export of configured pieces | Pending |
 
 ## Publication verification
 
-PRODUCT-TODO: Record brief publication, graph verification, exact-head review, and next action.
+Pending: brief publication, outcome-issue creation, graph verification, exact-head decision-owner approval, and exact-head independent review are recorded here once complete.

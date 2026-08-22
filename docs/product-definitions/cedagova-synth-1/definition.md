@@ -94,6 +94,7 @@ The owner (a solo user) wants to hear classical instrumental works from MusicXML
 - **Instrument assets not yet downloaded / download interrupted:** affected instruments are visibly unavailable; downloads can be resumed; synth sounds remain fully usable offline. A line assigned to a missing instrument is flagged and audibly substituted only with explicit user awareness.
 - **Audio device changes (e.g. Bluetooth connect/disconnect) during playback:** playback continues or pauses gracefully on the new/remaining device; no crash, no corrupted audio.
 - **Long or complex pieces:** loading shows progress; playback start is prompt and dropout-free on target hardware.
+- **Insufficient disk space during import, download, or export:** the operation fails with a clear message; no partial or corrupted library content, assets, or files remain.
 - **Removing a piece:** explicit user action with confirmation; removes the piece and its presets.
 
 ## Requirements and acceptance
@@ -114,10 +115,10 @@ The owner (a solo user) wants to hear classical instrumental works from MusicXML
 
 ### Playback and interpretation
 
-- **REQ-009** Transport: play, pause, stop, seek by measure/beat and by time, loop over a measure range.
+- **REQ-009** Transport: play, pause, stop, seek by measure/beat and by time, loop over a measure range; the current position is always displayed as measure/beat and elapsed time (the only positional orientation, since no score is shown).
 - **REQ-010** Notated structure is honored: pitches, rhythms, key/time changes, tempo marks and changes, repeats, D.C./D.S./coda, fermatas (D4). *Acceptance: a piece with repeats and a D.C. al Fine plays the correct expanded sequence.*
 - **REQ-011** Expressive notation is honored: dynamics including crescendo/diminuendo, articulations (staccato, legato, accents), slurs, pedal, grace notes, and realized ornaments (trills, mordents, turns) (D4). *Acceptance: a notated trill is audibly realized as alternating notes, not a single held note.*
-- **REQ-012** Subtle humanization (micro-timing and phrase-shaped dynamics) is on by default, with a global enable/disable and intensity control (D4). *Acceptance: toggling humanization off produces a strictly literal rendering.*
+- **REQ-012** Subtle humanization (micro-timing and phrase-shaped dynamics) is on by default, with a global enable/disable and intensity control (D4). Rendering is deterministic: for a given piece, preset, and humanization setting, every playback produces the same interpretation until the user changes something. *Acceptance: toggling humanization off produces a strictly literal rendering; playing the same configuration twice sounds identical.*
 - **REQ-013** Playback is gapless and dropout-free on target hardware.
 - **REQ-014** A per-piece report lists score notation that was not honored. *Acceptance: a file containing an unsupported marking shows it in the report.*
 
@@ -142,15 +143,16 @@ The owner (a solo user) wants to hear classical instrumental works from MusicXML
 
 - **REQ-023** A personal sound library stores, renames, organizes, and deletes user sounds: synth patches and named instrument-customization variants.
 - **REQ-024** Multiple named presets per piece capture complete assignment, customization, and mixer state; exactly one is active; changes auto-save; switching applies immediately.
+- **REQ-029** Presets reference library sounds live: editing a user sound is heard by every preset that uses it. Deleting a sound that presets still use warns and, on confirmation, leaves each affected preset with a private embedded copy of the sound as it was — playback of an existing preset never breaks. *Acceptance: delete an in-use sound after confirming; the piece still plays with the same timbre, and the preset shows the sound as embedded.*
 - **REQ-025** All library content, sounds, and presets persist locally across relaunches; no cloud dependency.
 
 ### Export
 
-- **REQ-026** Export the current piece with its active preset to WAV or AIFF at CD quality or better, faithful to live playback including the current humanization state (D5). *Acceptance: exported file and live playback of the same preset are indistinguishable in content.*
+- **REQ-026** Export the current piece with its active preset to WAV or AIFF at CD quality or better, faithful to live playback including the current humanization state (D5). Because rendering is deterministic (REQ-012), the export equals what live playback of the same configuration produces. *Acceptance: exporting twice with an unchanged configuration yields the same musical content as live playback of that configuration.*
 
 ## Accessibility and content
 
-- **REQ-027** Core flows (library, assignment, transport, presets) are fully keyboard-operable; controls carry VoiceOver labels; standard macOS text-size behavior applies.
+- **REQ-027** Core flows (library, assignment, transport, presets) are fully keyboard-operable; controls carry VoiceOver labels; standard macOS text-size behavior applies. Sound-editor controls follow standard macOS keyboard-focus and adjustment conventions; pointer-first interaction is acceptable there beyond that baseline.
 - UI language: English. Musical terms use their conventional Italian/standard notation names.
 
 ## Privacy, security, and policy
@@ -162,7 +164,7 @@ The owner (a solo user) wants to hear classical instrumental works from MusicXML
 ## Success measures and guardrails
 
 - Owner-validated reference set plays correctly end to end: at minimum one keyboard fugue (voice-level polyphony), one string quartet movement, and one orchestral excerpt.
-- For each reference piece, the notated structure and expressive detail of REQ-010/003 are audibly present, and the owner judges the result clearly superior to a plain General-MIDI-style rendering of the same file.
+- For each reference piece, the notated structure and expressive detail of REQ-010/REQ-011 are audibly present, and the owner judges the result clearly superior to a plain General-MIDI-style rendering of the same file.
 - Guardrails: no audio dropouts on target hardware; export always matches live playback; imported pieces and presets are never lost across updates.
 
 ## Constraints and non-goals
@@ -187,7 +189,7 @@ Non-goals:
 ## Evidence
 
 - `cedagova/synth@63f1313b767a0cefdccae7a91daf1e86bfede1d9` is a blank slate (identity guards only): the entire product is new; no existing behavior constrains the definition.
-- MusicXML is a stable, widely used W3C Community Group interchange format whose encoding of parts, voices, dynamics, articulations, ornaments, and structure is documented; the interpretation requirements in REQ-010/003 name standard MusicXML concepts.
+- MusicXML is a stable, widely used W3C Community Group interchange format whose encoding of parts, voices, dynamics, articulations, ornaments, and structure is documented; the interpretation requirements in REQ-010/REQ-011 name standard MusicXML concepts.
 - Owner statements in this conversation (2026-08-22) are the source of the objective and all D1–D9 decisions.
 
 ## Assumptions

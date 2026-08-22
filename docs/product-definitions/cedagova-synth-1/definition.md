@@ -67,7 +67,19 @@ PRODUCT-TODO: Define how the owner will recognize success and unacceptable regre
 
 ## Constraints and non-goals
 
-PRODUCT-TODO: Make scope boundaries explicit without prescribing implementation.
+Constraints (stable so far):
+
+- macOS native app; audio through system output devices (built-in speakers, Bluetooth, etc.).
+- Classical instrumental music only; vocal/choral content and lyrics are out of scope.
+- Instrument sample content must be free and legally redistributable/downloadable, at high quality (D3).
+
+Non-goals (stable so far):
+
+- No score display of any kind — no engraved notation, no piano-roll/timeline visualization (D2).
+- No score editing or composition features; MusicXML files are consumed read-only.
+- Not a general-purpose MIDI player or DAW.
+
+PRODUCT-TODO: complete after remaining owner rounds (export, distribution, targets).
 
 ## Evidence
 
@@ -79,7 +91,11 @@ PRODUCT-TODO: List assumptions that planning may rely on.
 
 ## Owner decisions
 
-PRODUCT-TODO: Record dated material decisions and rationale, or `None`.
+| ID | Date | Decision | Rationale | Affects |
+| --- | --- | --- | --- | --- |
+| D1 | 2026-08-22 | Sound assignment happens at the level of **every independent line the score encodes** (voice level). A part with one voice is the trivial case. | The core use case (e.g. Bach polyphony) needs per-voice timbre; part-level would collapse a keyboard fugue into one line. | Assignment model, line inventory UI, presets |
+| D2 | 2026-08-22 | **No score display of any kind** — no engraved notation and no visual timeline. Lines are presented as a named list for assignment; the product is for listening, not reading. | Owner: "user wants to listen to music, not read it." Removes the largest optional scope block. | UI scope, non-goals |
+| D3 | 2026-08-22 | Instrument sounds come from **free, legal, high-quality openly licensed sample libraries**, **downloaded** (not bundled), keeping the app lean and fully usable offline after download. | No recurring cost, legal redistribution, high quality from the start. | Sound library, first-run experience, storage |
 
 ## Remaining uncertainty
 

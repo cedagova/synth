@@ -1,0 +1,166 @@
+import Foundation
+
+/// One forward step of the store schema.
+///
+/// Migrations are forward-only and numbered contiguously from 1. A build never
+/// downgrades a store: opening a store written by a newer build fails loudly
+/// instead (`StoreError.storeWrittenByNewerApp`).
+public struct Migration: Sendable {
+    /// Schema version this migration produces. Contiguous from 1.
+    public let version: Int
+
+    /// Stable identifier used in errors and in the recorded version row.
+    public let name: String
+
+    /// Applies the step. Runs inside the migrator's transaction; it must not
+    /// open one of its own.
+    public let apply: @Sendable (SQLiteDatabase) throws -> Void
+
+    public init(version: Int, name: String, apply: @escaping @Sendable (SQLiteDatabase) throws -> Void) {
+        self.version = version
+        self.name = name
+        self.apply = apply
+    }
+}
+
+/// What `SchemaMigrator.migrate` did.
+public struct MigrationOutcome: Equatable, Sendable {
+    /// Schema version found on disk before migrating. 0 means a fresh store.
+    public let previousVersion: Int
+
+    /// Schema version after migrating.
+    public let currentVersion: Int
+
+    /// Names of the migrations applied by this call, in order.
+    public let appliedMigrationNames: [String]
+
+    /// True when the store was already at the target version.
+    public var wasAlreadyCurrent: Bool { appliedMigrationNames.isEmpty }
+}
+
+/// Applies the versioned, forward-only schema chain to a database.
+public enum SchemaMigrator {
+    /// Name of the table holding the single current-version row.
+    public static let versionTableName = "schema_version"
+
+    /// The complete ordered migration chain for this build.
+    ///
+    /// Version 1 establishes the versioning mechanism itself: the single-row
+    /// `schema_version` table every later migration and every later leaf reads.
+    /// Content tables (pieces, sounds, presets, catalog) arrive as additive
+    /// version-2+ migrations in the leaves that own them.
+    public static let migrations: [Migration] = [
+        Migration(version: 1, name: "create_schema_version") { database in
+            try database.executeScript(
+                """
+                CREATE TABLE schema_version (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    version INTEGER NOT NULL,
+                    applied_at TEXT NOT NULL,
+                    app_version TEXT NOT NULL
+                ) STRICT;
+                """
+            )
+        }
+    ]
+
+    /// Highest schema version this build understands.
+    public static var latestVersion: Int { migrations.last?.version ?? 0 }
+
+    /// Reads the current schema version, or 0 when the store is fresh.
+    public static func currentVersion(of database: SQLiteDatabase) throws -> Int {
+        guard try database.tableExists(versionTableName) else { return 0 }
+        guard let version = try database.scalarInt(
+            "SELECT version FROM \(versionTableName) WHERE id = 1;"
+        ) else {
+            throw StoreError.schemaVersionUnreadable
+        }
+        return version
+    }
+
+    /// Brings `database` up to the newest schema this build understands.
+    ///
+    /// The whole pending chain runs inside one transaction, so a failure at any
+    /// step leaves the store exactly as it was found. A store already newer
+    /// than this build is refused rather than modified.
+    ///
+    /// - Parameters:
+    ///   - database: the store to migrate.
+    ///   - appVersion: recorded alongside the version row for diagnosis.
+    ///   - migrations: injectable for tests; defaults to the shipped chain.
+    @discardableResult
+    public static func migrate(
+        _ database: SQLiteDatabase,
+        appVersion: String,
+        migrations: [Migration] = SchemaMigrator.migrations
+    ) throws -> MigrationOutcome {
+        precondition(
+            migrations.enumerated().allSatisfy { $0.element.version == $0.offset + 1 },
+            "Migrations must be numbered contiguously from 1"
+        )
+
+        let target = migrations.last?.version ?? 0
+        let existing = try currentVersion(of: database)
+
+        guard existing <= target else {
+            throw StoreError.storeWrittenByNewerApp(
+                storedVersion: existing,
+                supportedVersion: target
+            )
+        }
+
+        let pending = migrations.filter { $0.version > existing }
+        guard !pending.isEmpty else {
+            return MigrationOutcome(
+                previousVersion: existing,
+                currentVersion: existing,
+                appliedMigrationNames: []
+            )
+        }
+
+        try database.withTransaction { transactionDatabase in
+            for migration in pending {
+                do {
+                    try migration.apply(transactionDatabase)
+                } catch {
+                    throw StoreError.migrationFailed(
+                        version: migration.version,
+                        name: migration.name,
+                        reason: (error as? LocalizedError)?.errorDescription
+                            ?? (error as NSError).localizedDescription
+                    )
+                }
+            }
+
+            try transactionDatabase.execute(
+                """
+                INSERT INTO \(versionTableName) (id, version, applied_at, app_version)
+                VALUES (1, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    version = excluded.version,
+                    applied_at = excluded.applied_at,
+                    app_version = excluded.app_version;
+                """,
+                [
+                    .integer(Int64(target)),
+                    .text(Self.timestamp()),
+                    .text(appVersion)
+                ]
+            )
+        }
+
+        return MigrationOutcome(
+            previousVersion: existing,
+            currentVersion: target,
+            appliedMigrationNames: pending.map(\.name)
+        )
+    }
+
+    /// ISO 8601 UTC, stable and sortable as text.
+    static func timestamp(_ date: Date = Date()) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.string(from: date)
+    }
+}

@@ -76,7 +76,7 @@ final class AppModel {
         try await Task.detached(priority: .userInitiated) {
             let store = try LibraryStore.open(appVersion: appVersion)
             let summary = StoreSummary(
-                containerPath: abbreviatedPath(store.container.rootURL),
+                containerPath: HomeRelativePath.display(store.container.rootURL),
                 schemaVersion: store.schemaVersion,
                 pieceCount: try store.storedPieceCount()
             )
@@ -84,10 +84,6 @@ final class AppModel {
         }.value
     }
 
-    /// `~/Library/...` rather than `/Users/<name>/Library/...`.
-    private nonisolated static func abbreviatedPath(_ url: URL) -> String {
-        (url.path(percentEncoded: false) as NSString).abbreviatingWithTildeInPath
-    }
 }
 
 extension Bundle {

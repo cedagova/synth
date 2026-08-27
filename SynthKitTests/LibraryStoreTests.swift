@@ -35,7 +35,8 @@ final class LibraryStoreTests: XCTestCase {
         XCTAssertTrue(
             FileManager.default.fileExists(atPath: container.databaseURL.path(percentEncoded: false))
         )
-        XCTAssertEqual(try store.storedPieceCount(), 0)
+        XCTAssertEqual(try store.pieceCount(), 0)
+        XCTAssertEqual(try store.storedContentFileCount(), 0)
         XCTAssertNotNil(try store.schemaVersionAppliedAt())
     }
 
@@ -56,17 +57,25 @@ final class LibraryStoreTests: XCTestCase {
         XCTAssertEqual(second.container, first.container)
     }
 
-    func testStoredPieceCountReflectsTheContainerContents() throws {
+    /// The catalog is the library's authority, not the `pieces/` directory.
+    /// A stray file there is debris, and must not be counted as a piece.
+    func testPieceCountComesFromTheCatalogRatherThanTheDirectory() throws {
         let store = try LibraryStore.open(container: container, appVersion: "1.0 (1)")
         defer { store.close() }
-        XCTAssertEqual(try store.storedPieceCount(), 0)
+        XCTAssertEqual(try store.pieceCount(), 0)
 
         try Data("<score-partwise/>".utf8)
-            .write(to: container.piecesURL.appending(path: "fugue.musicxml"))
-        try Data("<score-partwise/>".utf8)
-            .write(to: container.piecesURL.appending(path: "quartet.musicxml"))
+            .write(to: container.piecesURL.appending(path: "orphan.musicxml"))
 
-        XCTAssertEqual(try store.storedPieceCount(), 2)
+        XCTAssertEqual(try store.pieceCount(), 0)
+        XCTAssertEqual(try store.storedContentFileCount(), 1)
+
+        let source = sandboxRoot.appending(path: "prelude.musicxml")
+        try MusicXMLFixtures.score().write(to: source)
+        try store.makeImporter().importPiece(from: source)
+
+        XCTAssertEqual(try store.pieceCount(), 1)
+        XCTAssertEqual(try store.storedContentFileCount(), 2)
     }
 
     func testWriteAheadLoggingIsEnabled() throws {
@@ -107,7 +116,8 @@ final class LibraryStoreTests: XCTestCase {
             .statementFailed(sql: "SELECT 1;", code: 1, message: "syntax error"),
             .storeWrittenByNewerApp(storedVersion: 4, supportedVersion: 1),
             .migrationFailed(version: 2, name: "add_pieces", reason: "The disk is full."),
-            .schemaVersionUnreadable
+            .schemaVersionUnreadable,
+            .pieceRowUnreadable(id: "6E9B8F2A")
         ]
 
         for error in errors {

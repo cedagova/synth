@@ -8,6 +8,27 @@ public enum SQLiteValue: Equatable, Sendable {
     case null
 }
 
+/// One result row, keyed by column name.
+public struct SQLiteRow: Equatable, Sendable {
+    public let values: [String: SQLiteValue]
+
+    public init(values: [String: SQLiteValue]) {
+        self.values = values
+    }
+
+    /// The column's text, or `nil` when it is absent or NULL.
+    public func text(_ column: String) -> String? {
+        guard case .text(let string)? = values[column] else { return nil }
+        return string
+    }
+
+    /// The column's integer, or `nil` when it is absent or NULL.
+    public func integer(_ column: String) -> Int64? {
+        guard case .integer(let number)? = values[column] else { return nil }
+        return number
+    }
+}
+
 /// A minimal, dependency-free wrapper over the system SQLite library.
 ///
 /// Deliberately small: open/close, multi-statement scripts, single
@@ -146,6 +167,51 @@ public final class SQLiteDatabase: @unchecked Sendable {
             return nil
         default:
             throw statementError(sql: sql, code: status)
+        }
+    }
+
+    /// Reads every row the statement returns, keyed by column name.
+    ///
+    /// Only the column types this store uses are decoded (integer and text);
+    /// anything else, and every SQL NULL, comes back as `.null`.
+    public func query(_ sql: String, _ parameters: [SQLiteValue] = []) throws -> [SQLiteRow] {
+        lock.lock()
+        defer { lock.unlock() }
+        let statement = try prepareLocked(sql, parameters)
+        defer { sqlite3_finalize(statement) }
+
+        let columnCount = sqlite3_column_count(statement)
+        var columnNames: [String] = []
+        columnNames.reserveCapacity(Int(columnCount))
+        for index in 0..<columnCount {
+            columnNames.append(sqlite3_column_name(statement, index).map { String(cString: $0) } ?? "")
+        }
+
+        var rows: [SQLiteRow] = []
+        while true {
+            let status = sqlite3_step(statement)
+            switch status {
+            case SQLITE_ROW:
+                var values: [String: SQLiteValue] = [:]
+                for index in 0..<columnCount {
+                    let value: SQLiteValue
+                    switch sqlite3_column_type(statement, index) {
+                    case SQLITE_INTEGER:
+                        value = .integer(sqlite3_column_int64(statement, index))
+                    case SQLITE_TEXT:
+                        value = sqlite3_column_text(statement, index)
+                            .map { .text(String(cString: $0)) } ?? .null
+                    default:
+                        value = .null
+                    }
+                    values[columnNames[Int(index)]] = value
+                }
+                rows.append(SQLiteRow(values: values))
+            case SQLITE_DONE:
+                return rows
+            default:
+                throw statementError(sql: sql, code: status)
+            }
         }
     }
 

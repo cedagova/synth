@@ -61,6 +61,37 @@ public enum SchemaMigrator {
                 ) STRICT;
                 """
             )
+        },
+        Migration(version: 2, name: "create_pieces") { database in
+            // The metadata half of an imported piece. The score itself stays
+            // beside the database as a verbatim file under `pieces/`;
+            // `content_file_name` is the link, and `content_sha256` is both the
+            // duplicate key and an integrity check for later readers.
+            try database.executeScript(
+                """
+                CREATE TABLE pieces (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    composer TEXT,
+                    work_title TEXT,
+                    work_number TEXT,
+                    movement_title TEXT,
+                    movement_number TEXT,
+                    source_file_name TEXT NOT NULL,
+                    source_format TEXT NOT NULL,
+                    content_file_name TEXT NOT NULL,
+                    content_sha256 TEXT NOT NULL,
+                    content_byte_count INTEGER NOT NULL,
+                    imported_at TEXT NOT NULL
+                ) STRICT;
+
+                CREATE UNIQUE INDEX pieces_content_sha256
+                    ON pieces (content_sha256);
+
+                CREATE UNIQUE INDEX pieces_content_file_name
+                    ON pieces (content_file_name);
+                """
+            )
         }
     ]
 

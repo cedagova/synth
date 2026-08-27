@@ -30,6 +30,11 @@ public enum StoreError: Error, Equatable, Sendable {
 
     /// The `schema_version` table exists but holds no readable current row.
     case schemaVersionUnreadable
+
+    /// A `pieces` row could not be decoded into a `PieceRecord`. The database
+    /// no longer matches this build's schema, which is loud rather than a
+    /// silently vanishing piece.
+    case pieceRowUnreadable(id: String)
 }
 
 extension StoreError: LocalizedError {
@@ -60,6 +65,8 @@ extension StoreError: LocalizedError {
             return "Synth could not upgrade its library to schema \(version) (\(name)). \(reason)"
         case .schemaVersionUnreadable:
             return "Synth's library database has no readable schema version."
+        case .pieceRowUnreadable(let id):
+            return "Synth could not read the library entry \(id); its stored form does not match this version of Synth."
         }
     }
 
@@ -81,6 +88,8 @@ extension StoreError: LocalizedError {
             return "Your library was left unchanged. Check disk space, then reopen Synth."
         case .schemaVersionUnreadable:
             return "The library database may be damaged. Restore it from a backup."
+        case .pieceRowUnreadable:
+            return "Update Synth to the newest version you have used with this library, or restore the library from a backup."
         }
     }
 }

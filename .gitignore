@@ -9,6 +9,20 @@ secrets/
 # macOS
 .DS_Store
 
+# Xcode / Swift build output
+.build/
+DerivedData/
+build/
+*.xcuserdatad/
+xcuserdata/
+*.xcworkspace/xcuserdata/
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+.swiftpm/
+
 # Personal agent instructions (machine-local, never committed)
 /CLAUDE.md
 /AGENTS.md

@@ -33,16 +33,22 @@ public enum StoreError: Error, Equatable, Sendable {
 }
 
 extension StoreError: LocalizedError {
+    /// Paths are shown home-relative so messages stay readable and never put
+    /// the account name on screen or in a screenshot.
+    private static func display(_ path: String) -> String {
+        HomeRelativePath.display(path, relativeTo: HomeRelativePath.realHomeDirectory)
+    }
+
     public var errorDescription: String? {
         switch self {
         case .applicationSupportUnavailable(let reason):
             return "Synth could not locate your Application Support folder. \(reason)"
         case .containerCreationFailed(let path, let reason):
-            return "Synth could not create its library folder at \(path). \(reason)"
+            return "Synth could not create its library folder at \(Self.display(path)). \(reason)"
         case .containerPathIsNotADirectory(let path):
-            return "Synth expected a folder at \(path), but something else is already there."
+            return "Synth expected a folder at \(Self.display(path)), but something else is already there."
         case .databaseOpenFailed(let path, let code, let message):
-            return "Synth could not open its library database at \(path). SQLite error \(code): \(message)"
+            return "Synth could not open its library database at \(Self.display(path)). SQLite error \(code): \(message)"
         case .statementFailed(_, let code, let message):
             return "Synth's library database rejected an operation. SQLite error \(code): \(message)"
         case .storeWrittenByNewerApp(let storedVersion, let supportedVersion):
@@ -63,8 +69,8 @@ extension StoreError: LocalizedError {
             return "Check that your home folder is available, then reopen Synth."
         case .containerCreationFailed:
             return "Check available disk space and folder permissions, then reopen Synth."
-        case .containerPathIsNotADirectory(let path):
-            return "Move or rename the item at \(path), then reopen Synth."
+        case .containerPathIsNotADirectory:
+            return "Move or rename that item, then reopen Synth."
         case .databaseOpenFailed:
             return "Check available disk space and folder permissions, then reopen Synth."
         case .statementFailed:

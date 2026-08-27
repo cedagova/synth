@@ -117,4 +117,29 @@ final class LibraryStoreTests: XCTestCase {
             XCTAssertNotNil(error.recoverySuggestion, "\(error) has no recovery suggestion")
         }
     }
+
+    func testErrorMessagesDoNotExposeTheAccountName() throws {
+        let home = HomeRelativePath.realHomeDirectory
+        let insideHome = home + "/Library/Application Support/Synth"
+
+        let errors: [StoreError] = [
+            .containerCreationFailed(path: insideHome, reason: "The disk is full."),
+            .containerPathIsNotADirectory(path: insideHome),
+            .databaseOpenFailed(path: insideHome, code: 14, message: "unable to open")
+        ]
+
+        for error in errors {
+            let text = [error.errorDescription, error.recoverySuggestion]
+                .compactMap { $0 }
+                .joined(separator: " ")
+            XCTAssertFalse(
+                text.contains(home),
+                "\(error) leaks the real home directory: \(text)"
+            )
+            XCTAssertTrue(
+                text.contains("~/Library/Application Support/Synth"),
+                "\(error) should show the home-relative path: \(text)"
+            )
+        }
+    }
 }

@@ -2,7 +2,7 @@
 
 - Planning issue: https://github.com/cedagova/synth/issues/1
 - Planning PR: https://github.com/cedagova/synth/pull/9
-- Status: Review
+- Status: Ready for implementation
 - Root classification: INCREMENTAL
 - Delivery topology: INCREMENTAL
 - Planner: Planning lead (Claude Fable 5, implementation-planning-lead)
@@ -252,22 +252,22 @@ concerns are the owner's data and the sequential baseline:
 | INC004 | GROUP | ROOT | cedagova/synth | Per-line sound assignment, mixer, and per-piece presets | COLLECTOR | INC003 | https://github.com/cedagova/synth/issues/5 |
 | INC005 | GROUP | ROOT | cedagova/synth | Instrument sound libraries: curated download experience and instrument customization | COLLECTOR | INC004 | https://github.com/cedagova/synth/issues/7 |
 | INC006 | GROUP | ROOT | cedagova/synth | Audio export of configured pieces | DIRECT | INC005 | https://github.com/cedagova/synth/issues/8 |
-| LIB001 | LEAF | INC001 | cedagova/synth | App foundation: SwiftUI shell, persistent store container, CI build/test | None | None | Pending |
-| LIB002 | LEAF | INC001 | cedagova/synth | MusicXML import pipeline: formats, verbatim storage, metadata, failure states | None | LIB001 | Pending |
-| LIB003 | LEAF | INC001 | cedagova/synth | Library UI: browse, search, sort, remove, import experience | None | LIB002 | Pending |
-| PLY001 | LEAF | INC002 | cedagova/synth | Score model and structural interpretation compiler with line identity and honored-notation report | None | None | Pending |
-| PLY002 | LEAF | INC002 | cedagova/synth | Expressive realization and deterministic humanization producing performance event timelines | None | PLY001 | Pending |
-| PLY003 | LEAF | INC002 | cedagova/synth | Real-time audio engine, line-voice interface, built-in default voice, output-device handling | None | PLY002 | Pending |
-| PLY004 | LEAF | INC002 | cedagova/synth | Transport and playback UI: play/pause/stop/seek/loop, position display, piece report | None | PLY003 | Pending |
-| SYN001 | LEAF | INC003 | cedagova/synth | Synthesis engine: oscillators (analog/wavetable/FM), filters, envelopes, LFOs, mod matrix, per-sound effects | None | None | Pending |
-| SYN002 | LEAF | INC003 | cedagova/synth | Sound library: personal store, shipped read-only collection, edit-as-copy, patch documents | None | SYN001 | Pending |
-| SYN003 | LEAF | INC003 | cedagova/synth | Synth editor UI: full parameter editing, test-note audition, live editing during playback | None | SYN002 | Pending |
-| ASN001 | LEAF | INC004 | cedagova/synth | Assignment and preset model: line inventory, one-sound-per-line, named auto-saved presets, live references with embed-on-delete | None | None | Pending |
-| ASN002 | LEAF | INC004 | cedagova/synth | Assignment and mixer UI: line list, sound picker, volume/pan/mute/solo, preset management | None | ASN001 | Pending |
-| INS001 | LEAF | INC005 | cedagova/synth | Curated instrument catalog and download manager with licenses, resume, and offline integrity | None | None | Pending |
-| INS002 | LEAF | INC005 | cedagova/synth | SFZ-subset sampled-instrument playback engine behind the line-voice interface | None | INS001 | Pending |
-| INS003 | LEAF | INC005 | cedagova/synth | Instrument customization bounded by assets, named variants, missing-instrument states | None | INS002 | Pending |
-| EXP001 | LEAF | INC006 | cedagova/synth | Offline export of the active preset to WAV/AIFF equal to live playback | None | None | Pending |
+| LIB001 | LEAF | INC001 | cedagova/synth | App foundation: SwiftUI shell, persistent store container, CI build/test | None | None | https://github.com/cedagova/synth/issues/10 |
+| LIB002 | LEAF | INC001 | cedagova/synth | MusicXML import pipeline: formats, verbatim storage, metadata, failure states | None | LIB001 | https://github.com/cedagova/synth/issues/11 |
+| LIB003 | LEAF | INC001 | cedagova/synth | Library UI: browse, search, sort, remove, import experience | None | LIB002 | https://github.com/cedagova/synth/issues/12 |
+| PLY001 | LEAF | INC002 | cedagova/synth | Score model and structural interpretation compiler with line identity and honored-notation report | None | None | https://github.com/cedagova/synth/issues/13 |
+| PLY002 | LEAF | INC002 | cedagova/synth | Expressive realization and deterministic humanization producing performance event timelines | None | PLY001 | https://github.com/cedagova/synth/issues/14 |
+| PLY003 | LEAF | INC002 | cedagova/synth | Real-time audio engine, line-voice interface, built-in default voice, output-device handling | None | PLY002 | https://github.com/cedagova/synth/issues/15 |
+| PLY004 | LEAF | INC002 | cedagova/synth | Transport and playback UI: play/pause/stop/seek/loop, position display, piece report | None | PLY003 | https://github.com/cedagova/synth/issues/16 |
+| SYN001 | LEAF | INC003 | cedagova/synth | Synthesis engine: oscillators (analog/wavetable/FM), filters, envelopes, LFOs, mod matrix, per-sound effects | None | None | https://github.com/cedagova/synth/issues/17 |
+| SYN002 | LEAF | INC003 | cedagova/synth | Sound library: personal store, shipped read-only collection, edit-as-copy, patch documents | None | SYN001 | https://github.com/cedagova/synth/issues/18 |
+| SYN003 | LEAF | INC003 | cedagova/synth | Synth editor UI: full parameter editing, test-note audition, live editing during playback | None | SYN002 | https://github.com/cedagova/synth/issues/19 |
+| ASN001 | LEAF | INC004 | cedagova/synth | Assignment and preset model: line inventory, one-sound-per-line, named auto-saved presets, live references with embed-on-delete | None | None | https://github.com/cedagova/synth/issues/20 |
+| ASN002 | LEAF | INC004 | cedagova/synth | Assignment and mixer UI: line list, sound picker, volume/pan/mute/solo, preset management | None | ASN001 | https://github.com/cedagova/synth/issues/21 |
+| INS001 | LEAF | INC005 | cedagova/synth | Curated instrument catalog and download manager with licenses, resume, and offline integrity | None | None | https://github.com/cedagova/synth/issues/22 |
+| INS002 | LEAF | INC005 | cedagova/synth | SFZ-subset sampled-instrument playback engine behind the line-voice interface | None | INS001 | https://github.com/cedagova/synth/issues/23 |
+| INS003 | LEAF | INC005 | cedagova/synth | Instrument customization bounded by assets, named variants, missing-instrument states | None | INS002 | https://github.com/cedagova/synth/issues/24 |
+| EXP001 | LEAF | INC006 | cedagova/synth | Offline export of the active preset to WAV/AIFF equal to live playback | None | None | https://github.com/cedagova/synth/issues/25 |
 
 ## Instrument source evidence
 
@@ -316,7 +316,7 @@ keyswitches, no CC crossfades unless VPO is adopted.
 | --- | --- |
 | REQ-001 import + permanence | LIB002 (playable end-to-end once INC002 delivers) |
 | REQ-002 metadata, browse/search/sort | LIB002, LIB003 |
-| REQ-003 removal + preset cascade | LIB003 (cascade contract), ASN001 (presets side) |
+| REQ-003 removal + preset cascade | LIB003 (cascade contract), ASN001 (presets side; full verification with real presets completes at increment 004) |
 | REQ-004 failed import, library unchanged | LIB002, LIB003 |
 | REQ-005 voice-level line enumeration + rename | PLY001 (identity), ASN001/ASN002 (surface) |
 | REQ-006 one sound per line, mutually exclusive | ASN001 |
@@ -331,7 +331,7 @@ keyswitches, no CC crossfades unless VPO is adopted.
 | REQ-015 output device selection + graceful changes | PLY003 |
 | REQ-016 synth architecture, all parameters editable | SYN001 |
 | REQ-017 create/duplicate/modify, shipped read-only as copies | SYN002, SYN003 |
-| REQ-018 audition + live editing during playback | SYN003 |
+| REQ-018 audition + live editing during playback | SYN003 (in-increment play-through audition binding; assigned-line form re-verified at increment 004 completion) |
 | REQ-019 shipped categorized starter collection | SYN002 |
 | REQ-020 curated legal instrument downloads + licenses shown | INS001 |
 | REQ-021 bounded customization, unsupported disabled | INS003 |
@@ -340,7 +340,7 @@ keyswitches, no CC crossfades unless VPO is adopted.
 | REQ-024 multiple named auto-saved presets, one active | ASN001, ASN002 |
 | REQ-025 local persistence across relaunches | LIB001 (store), ASN001, SYN002 |
 | REQ-026 WAV/AIFF export equal to live playback | EXP001 |
-| REQ-027 keyboard operability + VoiceOver baseline | LIB003, PLY004, SYN003, ASN002 (each UI leaf carries it) |
+| REQ-027 keyboard operability + VoiceOver baseline | LIB003, PLY004, SYN003, ASN002, INS001, INS003 (every UI leaf carries it) |
 | REQ-028 no telemetry; network only for asset downloads | LIB001 (baseline), INS001 (only network user) |
 | REQ-029 live references, warn-and-embed on delete | ASN001 |
 
@@ -391,5 +391,20 @@ across all six increments. Disposition is `IMPLEMENTATION_REQUIRED`.
 
 ## Publication verification
 
-Pending — recorded after independent content review, issue publication,
-`plan reconcile-graph`, and `plan verify-graph`.
+- Independent content review (pass 1): COMMENT review by
+  `cedagova-codex-reviewer[bot]` on candidate head `f14afd7e`
+  (https://github.com/cedagova/synth/pull/9#pullrequestreview-5043698917),
+  verdict content-satisfied; its three advisory findings (REQ-018 in-increment
+  verification, REQ-027 coverage of INS001/INS003, REQ-003 cross-increment
+  cascade) are folded into this revision and the published leaves.
+- Leaf issues #10–#25 published 2026-08-27; tracking metadata added to root
+  #1 and GROUP/sequence/delivery metadata to increments #3–#8, preserving all
+  definition content.
+- `plan validate --phase publication-ready`: valid (23 manifest rows).
+- `plan reconcile-graph`: attached all 16 leaves to their increments; added
+  the five increment predecessor edges and eleven intra-increment leaf edges.
+- `plan verify-graph`: live native graph matches the manifest exactly
+  (23 rows valid, 2026-08-27).
+- Final exact-head validation (`ready-for-implementation` with head and
+  reviewed head) runs after the official exact-head review; the native PR
+  review is the approval record.

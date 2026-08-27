@@ -2,14 +2,6 @@ import Foundation
 import Observation
 import SynthKit
 
-/// A readable summary of the opened store, shown by the shell.
-struct StoreSummary: Sendable, Equatable {
-    /// Container path abbreviated with `~` so no user name is displayed.
-    let containerPath: String
-    let schemaVersion: Int
-    let pieceCount: Int
-}
-
 /// A store failure rendered for the owner.
 struct StoreFailure: Sendable, Equatable {
     let summary: String
@@ -27,9 +19,9 @@ struct StoreFailure: Sendable, Equatable {
 }
 
 /// What the shell is showing.
-enum LibraryState: Sendable, Equatable {
+enum LibraryState {
     case loading
-    case ready(StoreSummary)
+    case ready(LibraryModel)
     case failed(StoreFailure)
 }
 
@@ -38,6 +30,13 @@ enum LibraryState: Sendable, Equatable {
 @MainActor
 final class AppModel {
     private(set) var state: LibraryState = .loading
+
+    /// The live library surface, once the store is open. The menu commands
+    /// reach the library through this rather than through the view hierarchy.
+    var library: LibraryModel? {
+        guard case .ready(let library) = state else { return nil }
+        return library
+    }
 
     /// Held open for the app's lifetime; later leaves read and write through it.
     private var store: LibraryStore?
@@ -88,31 +87,21 @@ final class AppModel {
         let appVersion = Bundle.main.synthVersionString
         do {
             let opened = try await Self.openStore(appVersion: appVersion)
-            store = opened.store
-            state = .ready(opened.summary)
+            store = opened
+            state = .ready(LibraryModel(store: opened))
         } catch {
             state = .failed(StoreFailure(error))
         }
     }
 
-    private struct OpenedStore: Sendable {
-        let store: LibraryStore
-        let summary: StoreSummary
-    }
-
     /// Disk work runs off the main actor so launch stays responsive.
-    private static func openStore(appVersion: String) async throws -> OpenedStore {
+    private static func openStore(appVersion: String) async throws -> LibraryStore {
         try await Task.detached(priority: .userInitiated) {
-            let store = try LibraryStore.open(appVersion: appVersion)
-            let summary = StoreSummary(
-                containerPath: HomeRelativePath.display(store.container.rootURL),
-                schemaVersion: store.schemaVersion,
-                pieceCount: try store.pieceCount()
-            )
-            return OpenedStore(store: store, summary: summary)
+            // Increment 004 adds its preset store to `dependentStores` here, and
+            // piece removal cascades to it with no other change.
+            try LibraryStore.open(appVersion: appVersion, dependentStores: [])
         }.value
     }
-
 }
 
 extension Bundle {

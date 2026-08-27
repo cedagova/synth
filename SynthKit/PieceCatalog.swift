@@ -12,6 +12,21 @@ public protocol PieceCatalogReading: Sendable {
     func pieceCount() throws -> Int
 }
 
+/// Delete access to the library's piece records.
+///
+/// Separate from `PieceCatalogWriting` because removal's failure paths need a
+/// catalog that refuses to delete, and the importer's do not: keeping the two
+/// capabilities apart means neither side's test doubles have to implement the
+/// other's operations.
+public protocol PieceCatalogDeleting: PieceCatalogReading {
+    /// The piece with this identifier, if it exists.
+    func piece(withID id: String) throws -> PieceRecord?
+
+    /// Deletes the piece with this identifier. Deleting a piece that is not
+    /// there is not an error; the caller checks existence when it matters.
+    func delete(pieceID: String) throws
+}
+
 /// Write access to the library's piece records.
 ///
 /// A protocol rather than a concrete dependency so the importer's failure
@@ -28,7 +43,7 @@ public protocol PieceCatalogWriting: PieceCatalogReading {
 ///
 /// Bulk content stays beside the database as files under `pieces/`; this table
 /// holds only what the library must query.
-public final class PieceCatalog: PieceCatalogWriting, @unchecked Sendable {
+public final class PieceCatalog: PieceCatalogWriting, PieceCatalogDeleting, @unchecked Sendable {
     /// Name of the table this catalog owns.
     public static let tableName = "pieces"
 
@@ -93,6 +108,13 @@ public final class PieceCatalog: PieceCatalogWriting, @unchecked Sendable {
                 .integer(Int64(record.contentByteCount)),
                 .text(record.importedAt)
             ]
+        )
+    }
+
+    public func delete(pieceID: String) throws {
+        try database.execute(
+            "DELETE FROM \(Self.tableName) WHERE id = ?;",
+            [.text(pieceID)]
         )
     }
 

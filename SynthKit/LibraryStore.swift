@@ -15,6 +15,14 @@ public final class LibraryStore: @unchecked Sendable {
     /// Where each piece's verbatim MusicXML lives inside the container.
     public let pieceContent: PieceContentStoring
 
+    /// Stores whose rows belong to a piece and must go when it does.
+    ///
+    /// Empty in this build: presets, the one dependent REQ-003 names, arrive in
+    /// increment 004. That leaf adds its store to `open`'s `dependentStores`
+    /// and changes nothing else — the cascade, its ordering, and its
+    /// all-or-nothing transaction already exist here.
+    public let dependentStores: [PieceDependentStore]
+
     /// Schema version in effect after `open` finished migrating.
     public let schemaVersion: Int
 
@@ -26,6 +34,7 @@ public final class LibraryStore: @unchecked Sendable {
     private init(
         container: AppContainer,
         database: SQLiteDatabase,
+        dependentStores: [PieceDependentStore],
         schemaVersion: Int,
         migrationOutcome: MigrationOutcome,
         fileManager: FileManager
@@ -34,6 +43,7 @@ public final class LibraryStore: @unchecked Sendable {
         self.database = database
         self.pieces = PieceCatalog(database: database)
         self.pieceContent = DirectoryPieceContentStore(directoryURL: container.piecesURL)
+        self.dependentStores = dependentStores
         self.schemaVersion = schemaVersion
         self.migrationOutcome = migrationOutcome
         self.fileManager = fileManager
@@ -47,10 +57,15 @@ public final class LibraryStore: @unchecked Sendable {
     /// - Parameters:
     ///   - container: defaults to `<Application Support>/Synth`.
     ///   - appVersion: recorded in the schema-version row for diagnosis.
+    ///   - dependentStores: built once the database exists, and asked to delete
+    ///     their rows inside every piece-removal transaction. A factory rather
+    ///     than a ready store because a dependent needs the connection this
+    ///     call is what creates.
     public static func open(
         container: AppContainer? = nil,
         appVersion: String,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        dependentStores: [@Sendable (SQLiteDatabase) -> PieceDependentStore] = []
     ) throws -> LibraryStore {
         let resolved: AppContainer
         if let container {
@@ -76,6 +91,7 @@ public final class LibraryStore: @unchecked Sendable {
             return LibraryStore(
                 container: resolved,
                 database: database,
+                dependentStores: dependentStores.map { $0(database) },
                 schemaVersion: version,
                 migrationOutcome: outcome,
                 fileManager: fileManager
@@ -110,6 +126,16 @@ public final class LibraryStore: @unchecked Sendable {
     /// An importer writing into this store.
     public func makeImporter() -> MusicXMLImporter {
         MusicXMLImporter(store: self)
+    }
+
+    /// A remover deleting from this store, cascading to `dependentStores`.
+    public func makeRemover() -> PieceRemover {
+        PieceRemover(store: self)
+    }
+
+    /// Every piece in the library, ready for the list to filter and order.
+    public func allPieces() throws -> [PieceRecord] {
+        try pieces.allPieces()
     }
 
     /// When the current schema version was recorded, as stored ISO 8601 text.

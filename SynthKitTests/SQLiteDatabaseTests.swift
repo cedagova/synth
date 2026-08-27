@@ -106,6 +106,60 @@ final class SQLiteDatabaseTests: XCTestCase {
         XCTAssertTrue(try database.tableExists("t"))
     }
 
+    func testABusyTimeoutIsConfiguredSoContentionWaits() throws {
+        XCTAssertEqual(
+            try database.scalarInt("PRAGMA busy_timeout;"),
+            Int(SQLiteDatabase.busyTimeoutMilliseconds),
+            "Without a busy timeout any second writer fails immediately with SQLITE_BUSY"
+        )
+        XCTAssertGreaterThan(SQLiteDatabase.busyTimeoutMilliseconds, 0)
+    }
+
+    func testAnotherThreadsWriteCannotBeRolledBackByAnUnrelatedTransaction() throws {
+        try database.executeScript("CREATE TABLE t (a INTEGER);")
+
+        final class Box: @unchecked Sendable { var error: Error? }
+        struct Boom: Error {}
+
+        let box = Box()
+        let transactionIsOpen = DispatchSemaphore(value: 0)
+        let outsideWriteFinished = expectation(description: "outside write finished")
+        let db = try XCTUnwrap(database)
+
+        DispatchQueue.global().async {
+            transactionIsOpen.wait()
+            // Must block until the transaction releases the lock; if it were
+            // let through it would land inside the transaction and be rolled
+            // back with it.
+            do {
+                try db.execute("INSERT INTO t (a) VALUES (?);", [.integer(2)])
+            } catch {
+                box.error = error
+            }
+            outsideWriteFinished.fulfill()
+        }
+
+        XCTAssertThrowsError(
+            try database.withTransaction { transactional in
+                try transactional.execute("INSERT INTO t (a) VALUES (?);", [.integer(1)])
+                transactionIsOpen.signal()
+                // Give the other thread a real chance to try to interleave.
+                Thread.sleep(forTimeInterval: 0.2)
+                throw Boom()
+            }
+        )
+
+        wait(for: [outsideWriteFinished], timeout: 5)
+
+        XCTAssertNil(box.error, "The outside write should have waited, not failed")
+        XCTAssertEqual(try database.scalarInt("SELECT count(*) FROM t;"), 1)
+        XCTAssertEqual(
+            try database.scalarInt("SELECT a FROM t;"),
+            2,
+            "The rolled-back transaction must discard only its own row"
+        )
+    }
+
     func testUsingAClosedDatabaseFailsLoudly() throws {
         database.close()
         XCTAssertThrowsError(try database.executeScript("CREATE TABLE t (a INTEGER);")) { error in

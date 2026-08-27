@@ -15,10 +15,32 @@ public enum SQLiteValue: Equatable, Sendable {
 /// everything the store bootstrap and its migrations need; later leaves grow
 /// it as their queries require.
 ///
-/// All handle access is serialised by an internal lock, so an instance may be
-/// shared across tasks.
+/// ## Concurrency contract
+///
+/// An instance may be shared across tasks and threads. All handle access is
+/// serialised by an internal *recursive* lock, and `withTransaction` holds
+/// that lock for the transaction's whole duration. That is what makes the
+/// migrator's "a failure leaves the store exactly as it was" guarantee true:
+/// a statement issued from another task cannot land inside — and be rolled
+/// back with — someone else's transaction. It waits instead.
+///
+/// The one rule this imposes: a `withTransaction` body must not block waiting
+/// on another thread that touches the same database, because the lock is held
+/// throughout.
+///
+/// ## Contention
+///
+/// Connections are opened with a bounded busy timeout
+/// (`busyTimeoutMilliseconds`). Within one process the lock already serialises
+/// writers; the timeout covers a second connection to the same file — another
+/// `LibraryStore`, or an external tool — so contention waits briefly instead
+/// of failing instantly with `SQLITE_BUSY`.
 public final class SQLiteDatabase: @unchecked Sendable {
-    private let lock = NSLock()
+    /// How long a blocked write waits for a competing connection before it
+    /// gives up with `SQLITE_BUSY`.
+    public static let busyTimeoutMilliseconds: Int32 = 5_000
+
+    private let lock = NSRecursiveLock()
     private var handle: OpaquePointer?
 
     public let url: URL
@@ -49,6 +71,10 @@ public final class SQLiteDatabase: @unchecked Sendable {
             }
             throw StoreError.databaseOpenFailed(path: path, code: status, message: message)
         }
+
+        // Wait briefly for a competing connection instead of failing on the
+        // spot; see the concurrency contract above.
+        sqlite3_busy_timeout(handle, busyTimeoutMilliseconds)
 
         return SQLiteDatabase(handle: handle, url: url)
     }
@@ -126,21 +152,27 @@ public final class SQLiteDatabase: @unchecked Sendable {
     /// Runs `body` inside a write transaction, committing on success and
     /// rolling back on any thrown error.
     ///
-    /// `body` receives this same database. The lock is reentrant-safe here
-    /// because it is released before `body` runs.
+    /// The lock is held for the whole transaction, so nothing another task
+    /// issues can be swept into this transaction's commit or rollback. `body`
+    /// receives this same database and may call it freely: the lock is
+    /// recursive, so calls from the transaction's own thread pass straight
+    /// through.
     @discardableResult
     public func withTransaction<T>(_ body: (SQLiteDatabase) throws -> T) throws -> T {
-        try executeScript("BEGIN IMMEDIATE;")
+        lock.lock()
+        defer { lock.unlock() }
+
+        try executeScriptLocked("BEGIN IMMEDIATE;")
         do {
             let result = try body(self)
-            try executeScript("COMMIT;")
+            try executeScriptLocked("COMMIT;")
             return result
         } catch {
             // Roll back to the pre-transaction state. If the rollback itself
             // fails the original error is still the one worth reporting, but
             // the failure is logged rather than dropped.
             do {
-                try executeScript("ROLLBACK;")
+                try executeScriptLocked("ROLLBACK;")
             } catch let rollbackError {
                 NSLog("Synth: rollback after a failed transaction did not complete: %@",
                       String(describing: rollbackError))

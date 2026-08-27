@@ -446,6 +446,37 @@ final class MusicXMLImporterTests: XCTestCase {
         }
     }
 
+    /// REQ-028 at this module's boundary: `importPiece(from:)` is public API,
+    /// so it must refuse a non-file URL itself rather than trust every caller.
+    /// Without the guard the size check would stat a local path while the read
+    /// followed the URL's scheme — two different resources, one of them remote.
+    func testANonFileURLIsRefusedBeforeAnythingIsRead() throws {
+        // The path component names a real local file, so a stat-only guard
+        // would pass this through. The scheme is what must reject it.
+        let localFile = try writeFixture(
+            MusicXMLFixtures.score(),
+            named: "decoy.musicxml",
+            in: sourceDirectory
+        )
+        let remote = try XCTUnwrap(
+            URL(string: "https://example.com\(localFile.path(percentEncoded: false))")
+        )
+        XCTAssertEqual(remote.lastPathComponent, "decoy.musicxml")
+        XCTAssertFalse(remote.isFileURL)
+
+        XCTAssertThrowsError(try importer().importPiece(from: remote)) { error in
+            guard case ImportError.unreadableSource(let fileName, let reason) = error else {
+                return XCTFail("Expected unreadableSource, got \(error)")
+            }
+            XCTAssertEqual(fileName, "decoy.musicxml")
+            XCTAssertTrue(
+                reason.contains("local file"),
+                "The reason must say why the URL was refused: \(reason)"
+            )
+        }
+        XCTAssertEqual(try store.pieceCount(), 0)
+    }
+
     func testAMissingFileIsRejectedByName() throws {
         let missing = sourceDirectory.appending(path: "gone.musicxml")
 

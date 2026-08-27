@@ -48,7 +48,12 @@ final class NoNetworkBaselineTests: XCTestCase {
         "NWListener",
         "CFSocket",
         "CFStreamCreatePairWithSocketToHost",
-        "getaddrinfo"
+        "getaddrinfo",
+        // Not obviously networking, and that is exactly why it is listed:
+        // `Data(contentsOf:)` honours the URL's scheme, so it performs a
+        // synchronous network fetch for an http/https URL. Local reads use
+        // `FileHandle`, which cannot leave the filesystem.
+        "Data(contentsOf:"
     ]
 
     func testAppDeclaresSandboxWithoutAnyNetworkEntitlement() throws {

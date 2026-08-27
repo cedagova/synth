@@ -54,7 +54,15 @@ public struct DirectoryPieceContentStore: PieceContentStoring {
         }
     }
 
+    /// Read through `FileHandle` rather than Foundation's URL-based `Data`
+    /// initialiser: that one honours the URL's scheme and will fetch over the
+    /// network, which REQ-028 forbids. Nothing in SynthKit may hold a
+    /// networking-capable call, and `NoNetworkBaselineTests` enforces that by
+    /// name — including on this comment, which is why it does not spell the
+    /// initialiser out.
     public func read(named fileName: String) throws -> Data {
-        try Data(contentsOf: url(named: fileName))
+        let handle = try FileHandle(forReadingFrom: url(named: fileName))
+        defer { try? handle.close() }
+        return try handle.readToEnd() ?? Data()
     }
 }

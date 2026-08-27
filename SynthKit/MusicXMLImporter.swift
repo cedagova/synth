@@ -155,10 +155,26 @@ public struct MusicXMLImporter: Sendable {
 
     /// Reads the source, size-checked *before* the bytes are loaded.
     ///
-    /// Checking after the read would mean a 10 GB file had already been pulled
-    /// into memory by the time the limit rejected it, which is the opposite of
-    /// what the limit is for.
+    /// Three things this has to get right, in this order:
+    ///
+    /// 1. **It must be a local file.** The size is checked by stat'ing a
+    ///    filesystem path; a URL with any other scheme would make the stat and
+    ///    the read two different resources, and a scheme-honouring read is a
+    ///    network call — which REQ-028 forbids outright. Rejecting here means
+    ///    the guarantee holds at this module's boundary rather than depending
+    ///    on every present and future caller passing a file URL.
+    /// 2. **The size is checked before the read**, or a 10 GB file would
+    ///    already be in memory by the time the limit rejected it.
+    /// 3. **The read itself is filesystem-only.** `FileHandle` cannot reach the
+    ///    network at all, so no networking-capable call exists on this path.
     private func readSource(at sourceURL: URL, fileName: String) throws -> Data {
+        guard sourceURL.isFileURL else {
+            throw ImportError.unreadableSource(
+                fileName: fileName,
+                reason: "Synth imports files from this Mac, and that is not a local file."
+            )
+        }
+
         let declaredByteCount: Int
         do {
             let attributes = try FileManager.default.attributesOfItem(
@@ -182,7 +198,9 @@ public struct MusicXMLImporter: Sendable {
 
         let data: Data
         do {
-            data = try Data(contentsOf: sourceURL)
+            let handle = try FileHandle(forReadingFrom: sourceURL)
+            defer { try? handle.close() }
+            data = try handle.readToEnd() ?? Data()
         } catch {
             throw ImportError.unreadableSource(
                 fileName: fileName,

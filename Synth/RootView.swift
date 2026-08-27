@@ -11,7 +11,7 @@ struct RootView: View {
             case .loading:
                 LoadingView()
             case .ready(let summary):
-                EmptyLibraryView(summary: summary)
+                LibraryView(summary: summary)
             case .failed(let failure):
                 StoreFailureView(failure: failure) {
                     await model.retry()
@@ -36,15 +36,30 @@ private struct LoadingView: View {
     }
 }
 
-/// The empty-library state: the store is open and holds no pieces yet.
-struct EmptyLibraryView: View {
+/// The library area over an opened store.
+///
+/// This leaf can only ever reach the empty state through the app, because
+/// importing arrives with the import pipeline. The non-empty branch exists so
+/// the shell never contradicts its own status bar when the container already
+/// holds pieces; the library UI leaf replaces it with the real browse surface.
+struct LibraryView: View {
     let summary: StoreSummary
 
     var body: some View {
-        ContentUnavailableView {
-            Label("No pieces yet", systemImage: "music.note.list")
-        } description: {
-            Text("Your library is ready and empty. Importing MusicXML files arrives in the next step.")
+        Group {
+            if summary.pieceCount == 0 {
+                ContentUnavailableView {
+                    Label("No pieces yet", systemImage: "music.note.list")
+                } description: {
+                    Text("Your library is ready and empty. Importing MusicXML files arrives in the next step.")
+                }
+            } else {
+                ContentUnavailableView {
+                    Label("Library not browsable yet", systemImage: "music.note.list")
+                } description: {
+                    Text("\(summary.pieceCount) stored \(summary.pieceCount == 1 ? "piece is" : "pieces are") waiting. Browsing them arrives with the library screen.")
+                }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .safeAreaInset(edge: .bottom) {

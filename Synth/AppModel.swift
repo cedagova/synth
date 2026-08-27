@@ -107,7 +107,7 @@ final class AppModel {
             let summary = StoreSummary(
                 containerPath: HomeRelativePath.display(store.container.rootURL),
                 schemaVersion: store.schemaVersion,
-                pieceCount: try store.storedPieceCount()
+                pieceCount: try store.pieceCount()
             )
             return OpenedStore(store: store, summary: summary)
         }.value

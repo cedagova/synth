@@ -40,6 +40,9 @@
 		};
 		AA00000000000000000031 /* SynthKit */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				AA00000000000000000033 /* Exceptions for "SynthKit" folder in "SynthKit" target */,
+			);
 			path = SynthKit;
 			sourceTree = "<group>";
 		};
@@ -49,6 +52,17 @@
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		AA00000000000000000033 /* Exceptions for "SynthKit" folder in "SynthKit" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			publicHeaders = (
+				SynthKit.h,
+				SynthAudioCore.h,
+			);
+			target = AA00000000000000000011 /* SynthKit */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		AA00000000000000000041 /* Frameworks */ = {

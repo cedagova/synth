@@ -13,17 +13,43 @@ import SynthAudioCore
 /// The patch crosses the boundary as a flat C struct copied into the voice's
 /// own storage at construction. Nothing the render thread reads points back at
 /// Swift, so there is no object for it to retain and no way for an edit on the
-/// control thread to be half-visible to a render in progress. Changing a sound
-/// means building a new voice, which is what SYN003's editor will do.
+/// control thread to be half-visible to a render in progress.
+///
+/// **Choosing a sound builds a new voice; editing one does not.** Increment 003
+/// added the second case. A provider built with `init(live:)` takes its patch
+/// from a `SynthPatchLiveVoices` channel and registers every voice it makes
+/// with that channel, so an edit reaches the voices that are already rendering
+/// instead of requiring a program rebuild — which is what REQ-018's "audible
+/// while playback continues" actually costs. A provider built with
+/// `init(patch:)` is the fixed sound it always was.
 public struct SynthPatchVoiceProvider: LineVoiceProvider {
+    /// The sound, for a provider that has one of its own.
     public let patch: SynthPatch
+
+    /// The channel this provider follows, when it follows one.
+    ///
+    /// Its patch wins over `patch`, and it wins at every `makeVoice` rather
+    /// than only at the first — so a graph rebuilt for a device change comes
+    /// back playing what the owner has edited, not what the provider was
+    /// constructed with.
+    public let live: SynthPatchLiveVoices?
 
     public init(patch: SynthPatch = .defaultVoice) {
         self.patch = patch
+        self.live = nil
     }
 
-    public var identifier: String { patch.identifier }
-    public var displayName: String { patch.name }
+    /// A provider that renders whatever `live` currently holds.
+    public init(live: SynthPatchLiveVoices) {
+        self.patch = live.currentPatch
+        self.live = live
+    }
+
+    /// The sound this provider would build a voice for right now.
+    public var currentPatch: SynthPatch { live?.currentPatch ?? patch }
+
+    public var identifier: String { currentPatch.identifier }
+    public var displayName: String { currentPatch.name }
 
     /// How long this patch can still be heard after its last note ends.
     ///
@@ -34,6 +60,7 @@ public struct SynthPatchVoiceProvider: LineVoiceProvider {
     /// generous, because too long only makes an export slightly longer while
     /// too short truncates the sound.
     public var releaseTailSeconds: Double {
+        let patch = currentPatch
         var tail = patch.amplitudeEnvelope.releaseSeconds
 
         if patch.delay.isEnabled, patch.delay.mix > 0, patch.delay.feedback > 0 {
@@ -62,19 +89,27 @@ public struct SynthPatchVoiceProvider: LineVoiceProvider {
         let raw = UnsafeMutableRawPointer.allocate(byteCount: byteCount, alignment: alignment)
         raw.initializeMemory(as: UInt8.self, repeating: 0, count: byteCount)
 
-        var config = patch.renderConfiguration
+        var config = currentPatch.renderConfiguration
         var vtable = SynthLineVoice()
         // `SynthPatchVoiceState` is incomplete in the public header on purpose,
         // so it crosses into Swift as an opaque pointer.
         synth_patch_voice_init(OpaquePointer(raw), &vtable, sampleRate, &config)
+
+        // Registered before the voice is handed out and unregistered before its
+        // storage is freed, both under the channel's lock, so a live edit can
+        // never reach a voice that has gone.
+        live?.register(state: raw, sampleRate: sampleRate)
 
         // The pointer reaches the teardown closure as an integer because a raw
         // pointer is not `Sendable`. Ownership is unambiguous: this voice is
         // the only thing that holds it, and `release` runs exactly once, after
         // the engine using it has been destroyed.
         let address = UInt(bitPattern: raw)
+        let channel = live
         return LineVoiceInstance(vtable: vtable, release: {
-            UnsafeMutableRawPointer(bitPattern: address)?.deallocate()
+            guard let pointer = UnsafeMutableRawPointer(bitPattern: address) else { return }
+            channel?.unregister(state: pointer)
+            pointer.deallocate()
         })
     }
 }

@@ -16,6 +16,8 @@
 
 #include "SynthPatchEngine.h"
 
+#include <stdatomic.h>
+
 #pragma mark - Shared tables
 
 /// Wavetable length. A power of two so the index wrap is a mask.
@@ -201,6 +203,31 @@ typedef struct {
     float   filterLastK;
 
     float   noiseLevel;
+
+    /*
+     What the note-on-time derivations above were derived from.
+
+     SYN003 edits a patch while its notes are still sounding, so a value that
+     was resolved once at note-on and never looked at again is a knob that does
+     nothing until the next note. These caches make the resolution repeatable
+     without making it repeated: the control block compares, and only pays for
+     the `pow` or `powf` when the owner has actually moved something. For a
+     patch nobody is editing every comparison is equal and the arithmetic is
+     byte-for-byte what it was before — which is what keeps the determinism
+     tests meaningful.
+    */
+    /// The note's frequency before this oscillator's detune, so a detune edit
+    /// can be re-applied to the note that is already sounding.
+    double  noteFrequency;
+    /// The three tuning parameters behind the current base increments, kept
+    /// exactly as the config states them so the comparison is against what the
+    /// owner set rather than against a rounded combination of it.
+    float   tuningSemitones[SYNTH_PATCH_OSCILLATOR_COUNT];
+    float   tuningCents[SYNTH_PATCH_OSCILLATOR_COUNT];
+    float   tuningRatio[SYNTH_PATCH_OSCILLATOR_COUNT];
+    /// The exponent `velocityGain` was computed with.
+    float   velocitySensitivity;
+
     /// The voice's gain at the start of the current control block, at its end,
     /// and where it has actually reached.
     ///
@@ -266,6 +293,111 @@ typedef struct {
     float   mix;
 } SynthReverbState;
 
+#pragma mark - Live parameter updates
+
+/*
+ One patch, with everything expensive already worked out.
+
+ SYN003's editor changes a sound while it is being heard, and the acceptance
+ criterion is that playback *continues*. Rebuilding the voice would stop it, so
+ a patch has to be able to reach a rendering voice instead. The problem with
+ doing that directly is that installing a patch is not a single word: it is a
+ whole `SynthPatchConfig` plus three biquads, four effect geometries and a set
+ of per-control-block rates. Half of one and half of the other is not a sound.
+
+ So the crossing is split. Everything that costs a `pow`, a `cos` or a divide
+ is computed here, on the control thread, into this flat snapshot; the render
+ thread's whole job is to copy it into place. That keeps the transcendental
+ work off the audio thread — where `SYNTH_PATCH_MAX_SAMPLE_RATE`-sized effect
+ geometry and three RBJ biquads would be a real cost during a knob drag — and
+ it keeps the render-side operation short enough to be obviously bounded.
+
+ Deliberately *not* in here: anything that is running state rather than
+ parameter. No biquad histories, no delay or reverb buffers, no phases, no
+ write indices. Installing a snapshot changes what the voice is; it must not
+ change where the voice currently is, or every parameter move would click.
+*/
+typedef struct SynthPatchDerived {
+    SynthPatchConfig config;
+    /// The rate this snapshot was derived at. A voice refuses a snapshot from
+    /// another rate rather than rendering with the wrong geometry.
+    double  sampleRate;
+
+    float   amplitudeRate[3];
+    float   modulationRate[3];
+    double  lfoIncrement[SYNTH_PATCH_LFO_COUNT];
+    float   filterCutoffCeiling;
+    int32_t activeVoiceLimit;
+
+    /// b0, b1, b2, a1, a2 — coefficients only, never the four history terms.
+    float   equalizerLow[5];
+    float   equalizerMid[5];
+    float   equalizerHigh[5];
+
+    float   chorusCentreFrames;
+    float   chorusDepthFrames;
+    float   chorusMix;
+    float   chorusFeedback;
+    double  chorusLFOIncrement;
+
+    int32_t delayLengthFrames;
+    float   delayFeedback;
+    float   delayMix;
+    float   delayDampingCoefficient;
+
+    int32_t reverbCombLength[SYNTH_REVERB_COMB_COUNT];
+    int32_t reverbAllpassLength[SYNTH_REVERB_ALLPASS_COUNT];
+    int32_t reverbPreDelayLength;
+    float   reverbFeedback;
+    float   reverbDamping;
+    float   reverbMix;
+} SynthPatchDerived;
+
+/*
+ Three snapshots, because two are not enough.
+
+ This is the standard triple buffer: the producer owns one slot, the consumer
+ owns one, and one sits in `liveShared` as the most recent complete value.
+ Publishing is one `atomic_exchange`; adopting is one load and one exchange.
+ Neither side ever waits, neither side can ever be writing the slot the other
+ is reading, and a burst of edits during one long render block costs the
+ intermediate values rather than a torn one. A two-slot swap has no such
+ guarantee: a second publish landing while the render thread is mid-copy lands
+ on the slot being copied.
+
+ The fresh bit rides in the same word as the index so publish and adopt each
+ stay a single atomic operation.
+*/
+#define SYNTH_LIVE_SLOT_COUNT 3
+#define SYNTH_LIVE_INDEX_MASK 3
+#define SYNTH_LIVE_FRESH 4
+
+/// Live note events, control thread → render thread.
+enum {
+    SynthLiveEventNoteOn  = 1,
+    SynthLiveEventNoteOff = 2,
+    SynthLiveEventPedal   = 3,
+    /// Everything off at once, for a panic or for closing the editor.
+    SynthLiveEventAllOff  = 4
+};
+
+typedef struct SynthLiveNoteEvent {
+    int32_t kind;
+    int32_t note;
+    int32_t velocity;
+} SynthLiveNoteEvent;
+
+/*
+ Room for one test-note queue.
+
+ A power of two so the wrap is a mask. 128 is far more than the handful of
+ events a person can produce between two render blocks; the queue exists to
+ make the crossing correct rather than to buffer a performance, and a full
+ queue is reported to the caller rather than silently dropping a note-off.
+*/
+#define SYNTH_LIVE_NOTE_CAPACITY 128
+#define SYNTH_LIVE_NOTE_MASK (SYNTH_LIVE_NOTE_CAPACITY - 1)
+
 #pragma mark - Voice state
 
 struct SynthPatchVoiceState {
@@ -301,7 +433,38 @@ struct SynthPatchVoiceState {
     SynthChorusState    chorus;
     SynthDelayState     delay;
     SynthReverbState    reverb;
+
+    /* Live parameter updates. `liveWriteIndex` is the producer's alone,
+       `liveReadIndex` the consumer's alone, and `liveShared` is the only word
+       they both touch. */
+    SynthPatchDerived liveSlots[SYNTH_LIVE_SLOT_COUNT];
+    _Atomic int32_t   liveShared;
+    int32_t           liveWriteIndex;
+    int32_t           liveReadIndex;
+    /// Incremented by the render thread every time it takes a published patch.
+    /// Read from the control thread so a caller — or a test — can prove an edit
+    /// actually reached the audio rather than assume it.
+    _Atomic int64_t   liveAdoptions;
+
+    /* Live notes. Single-producer, single-consumer ring. */
+    SynthLiveNoteEvent liveNotes[SYNTH_LIVE_NOTE_CAPACITY];
+    _Atomic int64_t    liveNoteWrite;
+    _Atomic int64_t    liveNoteRead;
 };
+
+/// Copy `derived` into the voice's live parameters, leaving every running
+/// value — phases, buffers, biquad histories, indices — where it is.
+///
+/// Real-time safe: assignments and index wraps, no arithmetic that could be
+/// slow. Lives in the render core so the guard that scans that file covers it.
+void synth_patch_voice_install(SynthPatchVoiceState *state,
+                               const SynthPatchDerived *derived);
+
+/// Work out everything one patch determines at one sample rate. Control thread:
+/// this is where the `pow`s and the biquad design live.
+void synth_patch_derive(SynthPatchDerived *derived,
+                        const SynthPatchConfig *config,
+                        double sampleRate);
 
 /// Recompute every sample-rate-derived constant, including effect buffer
 /// lengths and biquad coefficients. Control thread.

@@ -209,10 +209,124 @@ void synth_patch_voice_reset(void *opaque) {
     synth_patch_voice_clear((SynthPatchVoiceState *)opaque);
 }
 
+#pragma mark - Installing a published patch
+
+static inline void synth_patch_load_biquad(SynthBiquad *biquad, const float coefficients[5]) {
+    /* Coefficients only. `x1`, `x2`, `y1` and `y2` are the filter's memory of
+       the audio that has already gone through it; replacing them mid-signal is
+       a click, and a filter whose shape changed still has the same past. */
+    biquad->b0 = coefficients[0];
+    biquad->b1 = coefficients[1];
+    biquad->b2 = coefficients[2];
+    biquad->a1 = coefficients[3];
+    biquad->a2 = coefficients[4];
+}
+
+void synth_patch_voice_install(SynthPatchVoiceState *state,
+                               const SynthPatchDerived *derived) {
+    state->config = derived->config;
+    state->sampleRate = derived->sampleRate;
+    state->filterCutoffCeiling = derived->filterCutoffCeiling;
+    state->activeVoiceLimit = derived->activeVoiceLimit;
+
+    for (int32_t index = 0; index < 3; index++) {
+        state->amplitudeRate[index] = derived->amplitudeRate[index];
+        state->modulationRate[index] = derived->modulationRate[index];
+    }
+    for (int32_t index = 0; index < SYNTH_PATCH_LFO_COUNT; index++) {
+        state->lfoIncrement[index] = derived->lfoIncrement[index];
+    }
+
+    synth_patch_load_biquad(&state->equalizer.low, derived->equalizerLow);
+    synth_patch_load_biquad(&state->equalizer.mid, derived->equalizerMid);
+    synth_patch_load_biquad(&state->equalizer.high, derived->equalizerHigh);
+
+    state->chorus.centreFrames = derived->chorusCentreFrames;
+    state->chorus.depthFrames  = derived->chorusDepthFrames;
+    state->chorus.mix          = derived->chorusMix;
+    state->chorus.feedback     = derived->chorusFeedback;
+    state->chorus.lfoIncrement = derived->chorusLFOIncrement;
+
+    state->delay.lengthFrames = derived->delayLengthFrames;
+    state->delay.feedback     = derived->delayFeedback;
+    state->delay.mix          = derived->delayMix;
+    state->delay.dampingCoefficient = derived->delayDampingCoefficient;
+    /* A shorter delay leaves the write head past its own end. Wrapping keeps
+       every subsequent read in bounds; the audio already in the line is heard
+       out at the new length, which is what a delay time knob does. */
+    if (state->delay.writeIndex >= state->delay.lengthFrames) {
+        state->delay.writeIndex = 0;
+    }
+
+    for (int32_t index = 0; index < SYNTH_REVERB_COMB_COUNT; index++) {
+        state->reverb.combLength[index] = derived->reverbCombLength[index];
+        if (state->reverb.combIndex[index] >= state->reverb.combLength[index]) {
+            state->reverb.combIndex[index] = 0;
+        }
+    }
+    for (int32_t index = 0; index < SYNTH_REVERB_ALLPASS_COUNT; index++) {
+        state->reverb.allpassLength[index] = derived->reverbAllpassLength[index];
+        if (state->reverb.allpassIndex[index] >= state->reverb.allpassLength[index]) {
+            state->reverb.allpassIndex[index] = 0;
+        }
+    }
+    state->reverb.preDelayLength = derived->reverbPreDelayLength;
+    if (state->reverb.preDelayIndex >= state->reverb.preDelayLength) {
+        state->reverb.preDelayIndex = 0;
+    }
+    state->reverb.feedback = derived->reverbFeedback;
+    state->reverb.damping  = derived->reverbDamping;
+    state->reverb.mix      = derived->reverbMix;
+}
+
+/// Take the most recently published patch, if there is one. Render thread.
+static inline void synth_patch_voice_adopt(SynthPatchVoiceState *state) {
+    const int32_t shared = atomic_load_explicit(&state->liveShared, memory_order_relaxed);
+    if (!(shared & SYNTH_LIVE_FRESH)) { return; }
+
+    /* Hand back the slot this thread owned and take the published one. After
+       the exchange the three indices are still distinct, so the publisher's
+       next write cannot land on what is about to be read. */
+    const int32_t exchanged = atomic_exchange_explicit(
+        &state->liveShared, state->liveReadIndex, memory_order_acq_rel);
+    state->liveReadIndex = exchanged & SYNTH_LIVE_INDEX_MASK;
+
+    synth_patch_voice_install(state, &state->liveSlots[state->liveReadIndex]);
+    atomic_fetch_add_explicit(&state->liveAdoptions, 1, memory_order_relaxed);
+}
+
 #pragma mark - Note lifecycle
 
 static void synth_patch_resolve_slot(SynthPatchVoiceState *state, SynthPatchVoiceSlot *slot);
 static inline float synth_patch_lfo_value(int32_t shape, double phase, float held);
+
+/*
+ Resolve one oscillator's tuning from the note and the patch.
+
+ Called at note-on, and again from the control block whenever the owner has
+ moved a detune or an FM ratio — which is what makes those knobs audible on a
+ note that is already sounding rather than only on the next one. The cached
+ values are what makes the second case free when nobody is editing: an
+ unchanged patch compares equal and no `pow` is paid for.
+*/
+static void synth_patch_retune_oscillator(SynthPatchVoiceState *state,
+                                          SynthPatchVoiceSlot *slot,
+                                          int32_t index) {
+    const SynthOscillatorConfig *oscillator = &state->config.oscillators[index];
+    const double semitones = (double)oscillator->detuneSemitones
+                           + (double)oscillator->detuneCents / 100.0;
+    const double tuned = slot->noteFrequency * pow(2.0, semitones / 12.0);
+
+    slot->tuningSemitones[index] = oscillator->detuneSemitones;
+    slot->tuningCents[index] = oscillator->detuneCents;
+    slot->tuningRatio[index] = oscillator->fmRatio;
+    slot->oscBaseFrequency[index] = (float)tuned;
+    slot->oscFrequency[index] = (float)tuned;
+    slot->oscBaseIncrement[index] = tuned / state->sampleRate;
+    slot->oscIncrement[index] = slot->oscBaseIncrement[index];
+    slot->fmBaseIncrement[index] = tuned * (double)oscillator->fmRatio / state->sampleRate;
+    slot->fmIncrement[index] = slot->fmBaseIncrement[index];
+}
 
 void synth_patch_voice_note_on(void *opaque, int32_t midiNoteNumber, int32_t velocity) {
     SynthPatchVoiceState *state = (SynthPatchVoiceState *)opaque;
@@ -257,18 +371,11 @@ void synth_patch_voice_note_on(void *opaque, int32_t midiNoteNumber, int32_t vel
 
     /* Equal temperament, A4 = 440 Hz. */
     const double frequency = 440.0 * pow(2.0, ((double)midiNoteNumber - 69.0) / 12.0);
+    slot->noteFrequency = frequency;
 
     for (int32_t index = 0; index < SYNTH_PATCH_OSCILLATOR_COUNT; index++) {
         const SynthOscillatorConfig *oscillator = &state->config.oscillators[index];
-        const double semitones = (double)oscillator->detuneSemitones
-                               + (double)oscillator->detuneCents / 100.0;
-        const double tuned = frequency * pow(2.0, semitones / 12.0);
-        slot->oscBaseFrequency[index] = (float)tuned;
-        slot->oscFrequency[index] = (float)tuned;
-        slot->oscBaseIncrement[index] = tuned / state->sampleRate;
-        slot->oscIncrement[index] = slot->oscBaseIncrement[index];
-        slot->fmBaseIncrement[index] = tuned * (double)oscillator->fmRatio / state->sampleRate;
-        slot->fmIncrement[index] = slot->fmBaseIncrement[index];
+        synth_patch_retune_oscillator(state, slot, index);
         if (oscillator->retriggersPhase || !reusing) {
             slot->oscPhase[index] = (double)oscillator->startPhase;
             slot->fmPhase[index] = 0.0;
@@ -298,7 +405,8 @@ void synth_patch_voice_note_on(void *opaque, int32_t midiNoteNumber, int32_t vel
     slot->modulation.phase = 0.0f;
     slot->modulation.level = 0.0f;
 
-    slot->velocityGain = powf(slot->velocity, state->config.velocitySensitivity);
+    slot->velocitySensitivity = state->config.velocitySensitivity;
+    slot->velocityGain = powf(slot->velocity, slot->velocitySensitivity);
     slot->noiseLevel = state->config.noiseLevel;
     slot->filterLastCutoff = -1.0f;
     slot->filterLastK = -1.0f;
@@ -519,6 +627,28 @@ static inline float synth_patch_filter_stage(SynthPatchVoiceSlot *slot, int32_t 
  */
 static void synth_patch_resolve_slot(SynthPatchVoiceState *state, SynthPatchVoiceSlot *slot) {
     const SynthPatchConfig *config = &state->config;
+
+    /*
+     Anything the owner may have moved since this note started.
+
+     These four were resolved once at note-on because nothing could change them
+     mid-note. SYN003's editor can, so they are re-resolved here — but only
+     when they actually differ, so a patch nobody is editing pays three float
+     comparisons per oscillator per control block and no arithmetic at all.
+    */
+    for (int32_t index = 0; index < SYNTH_PATCH_OSCILLATOR_COUNT; index++) {
+        const SynthOscillatorConfig *oscillator = &config->oscillators[index];
+        if (slot->tuningSemitones[index] != oscillator->detuneSemitones
+            || slot->tuningCents[index] != oscillator->detuneCents
+            || slot->tuningRatio[index] != oscillator->fmRatio) {
+            synth_patch_retune_oscillator(state, slot, index);
+        }
+    }
+    if (slot->velocitySensitivity != config->velocitySensitivity) {
+        slot->velocitySensitivity = config->velocitySensitivity;
+        slot->velocityGain = powf(slot->velocity, slot->velocitySensitivity);
+    }
+    slot->noiseLevel = config->noiseLevel;
 
     const float amplitudeEnvelope = slot->amplitude.level;
     const float modulationEnvelope = slot->modulation.level;
@@ -776,8 +906,62 @@ static inline float synth_patch_reverb_step(SynthReverbState *reverb, float inpu
 
 #pragma mark - The render callback
 
+/// Play out whatever the editor's keyboard has queued. Render thread.
+///
+/// Defined here rather than beside `synth_patch_voice_adopt` so it can call the
+/// note callbacks without forward declarations; it runs at the same point.
+static void synth_patch_voice_drain_events(SynthPatchVoiceState *state) {
+    const int64_t write = atomic_load_explicit(&state->liveNoteWrite, memory_order_acquire);
+    int64_t read = atomic_load_explicit(&state->liveNoteRead, memory_order_relaxed);
+    if (read == write) { return; }
+
+    while (read < write) {
+        const SynthLiveNoteEvent *event = &state->liveNotes[read & SYNTH_LIVE_NOTE_MASK];
+        switch (event->kind) {
+            case SynthLiveEventNoteOn:
+                synth_patch_voice_note_on(state, event->note, event->velocity);
+                break;
+            case SynthLiveEventNoteOff:
+                synth_patch_voice_note_off(state, event->note);
+                break;
+            case SynthLiveEventPedal:
+                synth_patch_voice_set_pedal(state, event->velocity);
+                break;
+            case SynthLiveEventAllOff:
+                /* Release rather than silence: closing the editor should let
+                   the sound end the way the patch says it ends. */
+                synth_patch_voice_set_pedal(state, 0);
+                for (int32_t index = 0; index < SYNTH_PATCH_MAX_VOICES; index++) {
+                    SynthPatchVoiceSlot *slot = &state->slots[index];
+                    if (!slot->inUse) { continue; }
+                    synth_patch_voice_note_off(state, slot->midiNoteNumber);
+                }
+                break;
+            default:
+                break;
+        }
+        read++;
+    }
+
+    atomic_store_explicit(&state->liveNoteRead, read, memory_order_release);
+}
+
 void synth_patch_voice_render(void *opaque, float *monoOut, int32_t frameCount) {
     SynthPatchVoiceState *state = (SynthPatchVoiceState *)opaque;
+
+    /*
+     The two control-thread crossings, both at a block boundary and both before
+     a single sample is produced.
+
+     A published patch is taken up whole, so no frame is ever rendered from
+     half of one patch and half of another; a queued test note lands on the
+     first frame of this block. Both are cheap enough to be unconditional: when
+     nothing has been published and nothing is queued this is two relaxed
+     atomic loads.
+    */
+    synth_patch_voice_adopt(state);
+    synth_patch_voice_drain_events(state);
+
     const SynthPatchConfig *config = &state->config;
 
     for (int32_t frame = 0; frame < frameCount; frame++) { monoOut[frame] = 0.0f; }
@@ -942,4 +1126,50 @@ void synth_patch_voice_render(void *opaque, float *monoOut, int32_t frameCount) 
 
         monoOut[frame] = synth_patch_flush(synth_patch_limit(synth_patch_finite(sample)));
     }
+}
+
+#pragma mark - Auditioning one voice on its own
+
+/*
+ One patch, straight into a stereo buffer list.
+
+ The editor auditions a sound that belongs to no piece, so there is no program
+ for `synth_audio_core_render` to walk: no timeline, no lines, no mixer, no
+ transport. What is left is exactly this — take the queued test notes, render
+ the voice, and put the mono result in both channels.
+
+ It is here rather than in Swift for the reason the whole render path is here.
+ The alternative is a Swift loop copying one channel into another on the audio
+ thread, and `RealtimeSafetyTests` exists precisely so that no such loop
+ appears. Rendering straight into the left channel and copying it across means
+ the voice needs no scratch buffer of its own, so this call allocates nothing
+ and the audition path costs the voice state and not a byte more.
+
+ `isSilence` is always reported as false. A voice with a second of delay and a
+ tenth of reverb pre-delay holds audio that has not reached the output yet, so
+ a silent block is not an idle chain — the render core makes the same point
+ about the effect chain it runs unconditionally.
+*/
+int32_t synth_patch_voice_render_stereo(SynthPatchVoiceState *state,
+                                        AudioBufferList *bufferList,
+                                        int32_t frameCount,
+                                        int32_t *isSilence) {
+    if (isSilence != NULL) { *isSilence = 0; }
+    if (state == NULL || bufferList == NULL || frameCount <= 0) { return 0; }
+    if (bufferList->mNumberBuffers < 1) { return 0; }
+
+    float *left = (float *)bufferList->mBuffers[0].mData;
+    if (left == NULL) { return 0; }
+
+    synth_patch_voice_render(state, left, frameCount);
+
+    for (UInt32 index = 1; index < bufferList->mNumberBuffers; index++) {
+        float *channel = (float *)bufferList->mBuffers[index].mData;
+        if (channel == NULL) { continue; }
+        for (int32_t frame = 0; frame < frameCount; frame++) {
+            channel[frame] = left[frame];
+        }
+    }
+
+    return 0;
 }

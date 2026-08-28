@@ -281,15 +281,18 @@ extension Realization {
             // are spread across the principal's span, and inside a hairpin
             // they have to swell with it. Taking one reading at the principal's
             // onset would flatten a trill into thirteen notes at one loudness.
+            //
+            // The articulation is added *after* any attached dynamic, not
+            // before: a note marked `f` with an accent on it is a loud note
+            // that is also accented, and folding the articulation in first
+            // would let the level overwrite it.
             func velocity(atTicks tick: Int) -> Int {
-                var result = curve.velocity(atTicks: tick)
-                    + curve.accent(atTicks: tick)
-                    + shaping.velocity
+                var result = curve.velocity(atTicks: tick) + curve.accent(atTicks: tick)
                 for dynamic in note.dynamics {
                     if let level = dynamic.sustainedLevel { result = level }
                     result += dynamic.momentaryBoost
                 }
-                return result
+                return result + shaping.velocity
             }
             let principalVelocity = velocity(atTicks: entry.absoluteTicks)
 

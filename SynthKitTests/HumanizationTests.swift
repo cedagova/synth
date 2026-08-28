@@ -228,6 +228,128 @@ final class HumanizationTests: XCTestCase {
         }
     }
 
+    // MARK: Humanization must never reorder the music
+
+    /// The defect this guards against is invisible to every other test here: a
+    /// timing offset larger than the space between two notes swaps them, so the
+    /// engine plays a *different pitch sequence* than the one realization
+    /// produced — while the timeline stays perfectly deterministic and every
+    /// byte-identity proof keeps passing.
+    ///
+    /// A trill's notes sit a thirty-second apart and a crushed grace group can
+    /// collapse to a tick or two, so this presses on the two worst cases at the
+    /// worst setting.
+    func testTheNotatedPitchOrderSurvivesEveryIntensity() throws {
+        let data = MusicXMLScoreFixtures.fastOrnamentsAndGraceNotes()
+        let compiled = try compiler.compile(pieceID: "ordering", musicXML: data)
+        let literalOrder = realizer.realize(compiled, settings: .literal)
+            .lines[0].events.map(\.midiNoteNumber)
+
+        XCTAssertGreaterThan(literalOrder.count, 60, "the fixture has to be dense to mean anything")
+
+        for intensity in [1, 20, 40, 70, 100] {
+            let played = realizer.realize(
+                compiled,
+                settings: RealizationSettings(
+                    humanization: HumanizationSettings(isEnabled: true, intensity: intensity)
+                )
+            )
+            XCTAssertEqual(
+                played.lines[0].events.map(\.midiNoteNumber),
+                literalOrder,
+                "intensity \(intensity) reordered the notated pitch sequence"
+            )
+        }
+    }
+
+    /// The same claim at a tempo quick enough that a thirty-second note is
+    /// shorter than the humanization range even at moderate settings.
+    func testOrderSurvivesEvenWhenTheFiguresAreShorterThanTheJitterRange() throws {
+        for tempo in [200, 280, 360] {
+            let compiled = try compiler.compile(
+                pieceID: "ordering-\(tempo)",
+                musicXML: MusicXMLScoreFixtures.fastOrnamentsAndGraceNotes(beatsPerMinute: tempo)
+            )
+            let literal = realizer.realize(compiled, settings: .literal).lines[0]
+            let played = realizer.realize(
+                compiled,
+                settings: RealizationSettings(
+                    humanization: HumanizationSettings(isEnabled: true, intensity: 100)
+                )
+            ).lines[0]
+
+            XCTAssertEqual(
+                played.events.map(\.midiNoteNumber),
+                literal.events.map(\.midiNoteNumber),
+                "at \(tempo) BPM the figure came out in a different order"
+            )
+            // And the onsets themselves stay in the notated order, not merely
+            // the pitches: two events that swapped and happened to have the
+            // same pitch would slip past a pitch-only check.
+            XCTAssertEqual(
+                played.events.map(\.onsetTicks),
+                literal.events.map(\.onsetTicks),
+                "at \(tempo) BPM the events came out at different notated positions"
+            )
+        }
+    }
+
+    /// A grace note must still arrive before the note it decorates. An
+    /// acciaccatura that sounds after its principal is not an acciaccatura.
+    func testAGraceNoteNeverOvertakesItsPrincipal() throws {
+        let compiled = try compiler.compile(
+            pieceID: "grace-order",
+            musicXML: MusicXMLScoreFixtures.fastOrnamentsAndGraceNotes()
+        )
+        let played = realizer.realize(
+            compiled,
+            settings: RealizationSettings(
+                humanization: HumanizationSettings(isEnabled: true, intensity: 100)
+            )
+        ).lines[0]
+
+        var graceGroups = 0
+        for (index, event) in played.events.enumerated() where event.origin == .grace {
+            guard let principal = played.events[index...].first(where: { $0.origin == .notated })
+            else { continue }
+            graceGroups += 1
+            XCTAssertLessThan(
+                event.onsetMicroseconds,
+                principal.onsetMicroseconds,
+                "a grace note overtook the note it leans on"
+            )
+        }
+        XCTAssertGreaterThanOrEqual(graceGroups, 12, "the fixture carries grace notes to check")
+    }
+
+    /// The room bound is a bound, not a silencer: notes with space around them
+    /// must still move by the full amount the dial asks for.
+    func testTheRoomBoundStillLeavesRoomToHumanise() throws {
+        let compiled = try compiler.compile(
+            pieceID: "room",
+            musicXML: MusicXMLScoreFixtures.expressiveKeyboardPiece()
+        )
+        let literal = realizer.realize(compiled, settings: .literal)
+        let played = realizer.realize(
+            compiled,
+            settings: RealizationSettings(
+                humanization: HumanizationSettings(isEnabled: true, intensity: 100)
+            )
+        )
+
+        var moved = 0
+        var largest: Int64 = 0
+        for (plain, humanized) in zip(literal.lines, played.lines) {
+            for (left, right) in zip(plain.events, humanized.events) {
+                let shift = abs(right.onsetMicroseconds - left.onsetMicroseconds)
+                if shift > 0 { moved += 1 }
+                largest = max(largest, shift)
+            }
+        }
+        XCTAssertGreaterThan(moved, literal.eventCount / 2, "most notes should still be moving")
+        XCTAssertGreaterThan(largest, 5_000, "and the movement should still be audible")
+    }
+
     /// Phrase shaping is the deliberate half of humanization: a slurred phrase
     /// should swell toward its middle rather than merely wobble.
     func testASlurredPhraseSwellsTowardItsMiddle() throws {

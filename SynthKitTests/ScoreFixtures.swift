@@ -1221,6 +1221,95 @@ enum MusicXMLScoreFixtures {
         ).data()
     }
 
+    /// Ornaments and grace groups at a tempo fast enough that their notes are
+    /// only milliseconds apart, for the humanization ordering guard.
+    ///
+    /// The point of the fixture is the *spacing*: a trill's notes sit a
+    /// thirty-second apart and a crushed grace group can collapse to a tick or
+    /// two, so an absolute timing jitter reorders them long before it does
+    /// anything to a whole note. At ♩=200 a thirty-second is 37.5 ms, well
+    /// inside the humanization range — which is exactly the case the ordinary
+    /// fixtures at ♩=60–90 never reach.
+    ///
+    /// - Parameter beatsPerMinute: the quicker this is, the tighter the figures
+    ///   and the harder the guard is pressed.
+    static func fastOrnamentsAndGraceNotes(beatsPerMinute: Int = 200) -> Data {
+        var measures: [ScoreXML.Measure] = []
+        for measureIndex in 0..<4 {
+            var items: [ScoreXML.Item] = []
+            if measureIndex == 0 {
+                items.append(
+                    .attributes(
+                        ScoreXML.Attributes(
+                            divisions: fineDivisions,
+                            fifths: 0,
+                            time: (4, 4),
+                            clefs: [("G", 2)]
+                        )
+                    )
+                )
+                items.append(
+                    .direction(
+                        ScoreXML.Direction(
+                            metronome: ("quarter", beatsPerMinute),
+                            sound: ["tempo": String(beatsPerMinute)]
+                        )
+                    )
+                )
+            }
+
+            // A trilled quarter; a three-note crushed grace group before an
+            // eighth; a turned quarter; and then the pathological case — a
+            // grace group before a thirty-second, where the "three quarters of
+            // the principal" cap collapses the group to one tick a note.
+            items.append(
+                .note(
+                    ScoreXML.Note(
+                        pitch: "C5",
+                        duration: fineQuarter,
+                        type: "quarter",
+                        notations: [ScoreXML.Notation.ornament("trill-mark")]
+                    )
+                )
+            )
+            items.append(.note(ScoreXML.graceNote(pitch: "F4", type: "32nd", slashed: true)))
+            items.append(.note(ScoreXML.graceNote(pitch: "G4", type: "32nd", slashed: true)))
+            items.append(.note(ScoreXML.graceNote(pitch: "A4", type: "32nd", slashed: true)))
+            items.append(
+                .note(ScoreXML.Note(pitch: "B4", duration: fineEighth, type: "eighth"))
+            )
+            items.append(
+                .note(
+                    ScoreXML.Note(
+                        pitch: "D5",
+                        duration: fineQuarter,
+                        type: "quarter",
+                        notations: [ScoreXML.Notation.ornament("turn")]
+                    )
+                )
+            )
+            items.append(.note(ScoreXML.graceNote(pitch: "C5", type: "32nd", slashed: true)))
+            items.append(.note(ScoreXML.graceNote(pitch: "D5", type: "32nd", slashed: true)))
+            items.append(
+                .note(ScoreXML.Note(pitch: "F5", duration: fineQuarter / 8, type: "32nd"))
+            )
+            items.append(
+                .note(ScoreXML.Note(pitch: "E5", duration: fineQuarter / 8, type: "32nd"))
+            )
+            items.append(.note(ScoreXML.Note(pitch: "G5", duration: fineQuarter, type: "quarter")))
+            items.append(
+                .note(ScoreXML.Note(pitch: "A5", duration: fineQuarter / 4, type: "16th"))
+            )
+            measures.append(ScoreXML.Measure(number: String(measureIndex + 1), items: items))
+        }
+
+        return ScoreXML.Score(
+            workTitle: "Fast Ornament Study",
+            composer: "Fixture",
+            parts: [ScoreXML.Part(id: "P1", name: "Piccolo", measures: measures)]
+        ).data()
+    }
+
     /// The increment's expressive reference piece: one keyboard part, two
     /// staves, two voices per staff, at the density of a real edition.
     ///

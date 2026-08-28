@@ -30,6 +30,22 @@ extension Realization {
     /// value, so the timeline is the literal reading of the score and REQ-012's
     /// "strictly literal" acceptance is a fact about the code path rather than
     /// a threshold a test has to tolerate.
+    ///
+    /// **Never enough to reorder the music.** The intensity dial alone cannot
+    /// set how far a note moves, because a fixed number of milliseconds means
+    /// something completely different to a whole note and to one step of a
+    /// trill. Each note's offset is additionally bounded by a third of its own
+    /// local room — the smaller of the gaps to the notes either side of it —
+    /// so two adjacent onsets can close on each other by at most two thirds of
+    /// the space between them and can never cross.
+    ///
+    /// That bound is load-bearing rather than tidy. A reordered trill or a
+    /// grace note thrown past its principal is a *different pitch sequence*
+    /// from the one this stage realized, so it fails REQ-011 — and it fails it
+    /// invisibly, because the result is still perfectly deterministic and every
+    /// byte-identity proof still passes. Scaling to the local spacing is also
+    /// what a player does: unevenness lives in the note values in front of
+    /// them, not in an absolute number of milliseconds.
     func humanize(_ notes: inout [RealizedNote], line: ScoreLine, slurs: [SlurSpan]) {
         guard !settings.humanization.isLiteral else { return }
         let intensity = settings.humanization.intensity
@@ -37,6 +53,7 @@ extension Realization {
         let timingSpread = Self.maximumTimingOffsetMicroseconds * intensity / 100
         let velocitySpread = Self.maximumVelocityJitter * intensity / 100
         let phraseAmplitude = Self.maximumPhraseAmplitude * intensity / 100
+        let room = timingRoomMicroseconds(notes)
 
         for index in notes.indices {
             let note = notes[index]
@@ -44,7 +61,7 @@ extension Realization {
             notes[index].timingOffsetMicroseconds = Int64(
                 SeededJitter.signed(
                     SeededJitter.value(seed: seed, key: key),
-                    magnitude: timingSpread
+                    magnitude: min(timingSpread, room[index])
                 )
             )
             let uneven = SeededJitter.signed(
@@ -59,6 +76,63 @@ extension Realization {
                     amplitude: phraseAmplitude
                 )
         }
+    }
+
+    /// How far each note may move without colliding with its neighbours: a
+    /// third of the smaller gap to the distinct onsets either side of it.
+    ///
+    /// A third, so that two adjacent notes moving toward each other close at
+    /// most two thirds of the space between them and the order is preserved
+    /// with room to spare.
+    ///
+    /// Notes that share an onset — a chord, or two voices of one line — do not
+    /// constrain each other: spreading a chord is exactly what humanization is
+    /// for. Their room comes from the next *distinct* onset, so a spread chord
+    /// still cannot run into the note after it.
+    func timingRoomMicroseconds(_ notes: [RealizedNote]) -> [Int] {
+        guard !notes.isEmpty else { return [] }
+
+        let order = notes.indices.sorted {
+            notes[$0].onsetTicks == notes[$1].onsetTicks
+                ? $0 < $1
+                : notes[$0].onsetTicks < notes[$1].onsetTicks
+        }
+
+        var room = [Int](repeating: Int.max, count: notes.count)
+        var position = 0
+        var previousOnset: Int?
+
+        while position < order.count {
+            // Everything at this onset is one group.
+            let onset = notes[order[position]].onsetTicks
+            var end = position
+            while end + 1 < order.count, notes[order[end + 1]].onsetTicks == onset { end += 1 }
+            let nextOnset = end + 1 < order.count ? notes[order[end + 1]].onsetTicks : nil
+
+            let onsetMicroseconds = score.tempoMap.microseconds(atPlaybackTicks: onset)
+            var gap = Int64.max
+            if let previousOnset {
+                gap = min(
+                    gap,
+                    onsetMicroseconds - score.tempoMap.microseconds(atPlaybackTicks: previousOnset)
+                )
+            }
+            if let nextOnset {
+                gap = min(
+                    gap,
+                    score.tempoMap.microseconds(atPlaybackTicks: nextOnset) - onsetMicroseconds
+                )
+            }
+
+            let allowance = gap == Int64.max
+                ? Self.maximumTimingOffsetMicroseconds
+                : Int(max(0, gap / 3))
+            for slot in position...end { room[order[slot]] = allowance }
+
+            previousOnset = onset
+            position = end + 1
+        }
+        return room
     }
 
     /// The canonical identity of one note, for keying its variation.

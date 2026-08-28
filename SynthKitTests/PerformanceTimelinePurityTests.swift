@@ -47,7 +47,9 @@ final class PerformanceTimelinePurityTests: XCTestCase {
         "expressiveKeyboardPiece/intensity-100":
             "8a9c7f6b0faf3f22f806ded63e07dac9c4088abad0d6e4a0cc536552a874c8b3",
         "stringQuartetMovement/standard":
-            "5fe7df695f51c66db4154fbc8df2fb69db72f3645476709094cdc90bff7c53a2"
+            "5fe7df695f51c66db4154fbc8df2fb69db72f3645476709094cdc90bff7c53a2",
+        "fastOrnamentsAndGraceNotes/intensity-100":
+            "39a2c2d97dedf993b674d371c67c7835d42a2000f3ac6826978b211a2c5ff727"
     ]
 
     private static let frozenCases: [(name: String, data: Data, settings: RealizationSettings)] = [
@@ -69,7 +71,17 @@ final class PerformanceTimelinePurityTests: XCTestCase {
                 humanization: HumanizationSettings(isEnabled: true, intensity: 100)
             )
         ),
-        ("stringQuartetMovement/standard", MusicXMLScoreFixtures.stringQuartetMovement(), .standard)
+        ("stringQuartetMovement/standard", MusicXMLScoreFixtures.stringQuartetMovement(), .standard),
+        // The humanization room bound only engages where figures are tighter
+        // than the jitter range, which none of the fixtures above reach. This
+        // one does, so the bound is frozen across processes too.
+        (
+            "fastOrnamentsAndGraceNotes/intensity-100",
+            MusicXMLScoreFixtures.fastOrnamentsAndGraceNotes(),
+            RealizationSettings(
+                humanization: HumanizationSettings(isEnabled: true, intensity: 100)
+            )
+        )
     ]
 
     func testTheRealisedTimelineBytesAreFrozenAcrossProcesses() throws {

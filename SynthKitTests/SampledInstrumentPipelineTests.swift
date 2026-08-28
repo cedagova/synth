@@ -126,6 +126,37 @@ final class SampledInstrumentPipelineTests: XCTestCase {
         XCTAssertLessThan(muted.rms(), mixed.rms())
     }
 
+    /// A sampled instrument goes through the preset system's own assignment
+    /// initialiser without it changing.
+    ///
+    /// `PresetPerformance.voiceAssignment` builds exactly this — a
+    /// `[ScoreLineID: any LineVoiceProvider]` with a default-voice fallback for
+    /// lines the preset does not mention. Instruments do not live in the sound
+    /// library yet, which is INS003 (#24); what this leaf owes is that the
+    /// mechanism a preset uses to name a per-line sound accepts a sampled one
+    /// unchanged, fallback and all.
+    func testTheSameAssignmentAPresetBuildsAcceptsASampledInstrument() throws {
+        let instrument = try wideInstrument()
+        let provider = try SampledInstrumentVoiceProvider(available: instrument)
+        let timeline = try AudioRenderFixtures.timeline(AudioRenderFixtures.twoLineFixture())
+
+        // Only the first line is named, so the second exercises the fallback.
+        let assignment = LineVoiceAssignment(
+            providersByLine: [timeline.lines[0].id: provider]
+        )
+        XCTAssertEqual(assignment(timeline.lines[0].id).identifier, provider.identifier)
+        XCTAssertEqual(
+            assignment(timeline.lines[1].id).identifier,
+            SynthPatchVoiceProvider().identifier,
+            "An unnamed line still gets the default voice rather than silence."
+        )
+
+        let rendered = try PlaybackEngine.renderTimelineOffline(
+            timeline, sampleRate: 44_100, voices: assignment
+        )
+        XCTAssertGreaterThan(rendered.rms(), 0.001)
+    }
+
     /// The engine owns level: doubling a line's gain doubles what comes out.
     ///
     /// `SynthLineVoice` says a voice must not apply any level of its own, and a

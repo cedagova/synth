@@ -234,8 +234,16 @@ typedef struct SampleVoiceState SampleVoiceState;
  allocates.
 
  `instrument`, its tables, and every mapping their waveforms point at must
- outlive the voice. Returns NULL when allocation fails, which the Swift side
- turns into an unavailable instrument rather than a silent line.
+ outlive the voice.
+
+ **Returns NULL when it cannot allocate, and fills `outVoice` with a voice that
+ renders silence.** The engine is handed a vtable either way, because a line
+ whose voice failed to build must still be a line the render thread can call
+ into without checking. Silence rather than a substitute sound is deliberate:
+ INS003 (#24) requires a line to be flagged and substituted only with the
+ owner's explicit acknowledgment, and quietly playing a synthesizer where a
+ cello was assigned would reach that prohibited end state by another route. The
+ Swift side records the failure so INS003 has something to flag.
 
  `seed` makes round-robin and random region selection reproducible: the same
  seed and the same note sequence pick the same samples, on every run and on

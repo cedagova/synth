@@ -74,6 +74,12 @@ public struct SampledInstrumentVoiceProvider: LineVoiceProvider {
     /// What this instrument can actually do, measured from the files on disk.
     public var features: SampledInstrumentFeatures { instrument.features }
 
+    /// Lines whose voice could not be built and which are therefore silent.
+    ///
+    /// Zero in every normal run. INS003 reads it to flag a line that is playing
+    /// nothing, rather than the owner discovering it by listening.
+    public var unbuiltVoiceCount: Int { instrument.unbuiltVoiceCount }
+
     public var releaseTailSeconds: Double { instrument.features.releaseTailSeconds }
 
     public func makeVoice(sampleRate: Double) -> LineVoiceInstance {
@@ -83,10 +89,19 @@ public struct SampledInstrumentVoiceProvider: LineVoiceProvider {
         )
 
         guard let state else {
-            // One allocation failed. A silent line is a worse answer than a
-            // synthesized one, so fall back to the default voice rather than
-            // hand the engine a vtable with no state behind it.
-            return SynthPatchVoiceProvider().makeVoice(sampleRate: sampleRate)
+            // `sample_voice_create` has already filled `vtable` with the voice
+            // that renders silence, so the engine has something callable.
+            //
+            // **The line goes quiet rather than becoming a synthesizer.** A
+            // substitute sound would be the more pleasant failure and the wrong
+            // one: #24 requires a line to be flagged and substituted only with
+            // the owner's explicit acknowledgment, and quietly playing a patch
+            // where a cello was assigned reaches that same prohibited end state
+            // by another route. Recording it is what gives INS003 something to
+            // flag; #23's own failure behaviour for a vanished asset —
+            // "silence-with-flag, never a crash" — is the same answer.
+            instrument.recordVoiceAllocationFailure()
+            return LineVoiceInstance(vtable: vtable, release: {})
         }
 
         // The instrument is captured so the mappings the render thread reads

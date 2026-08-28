@@ -1,4 +1,5 @@
 import AVFoundation
+import Darwin
 import XCTest
 @testable import SynthKit
 
@@ -77,6 +78,111 @@ final class CuratedInstrumentAssetTests: XCTestCase {
             }
         }
         return results
+    }
+
+    // MARK: - Cold sample cache
+
+    /// Copy the installed libraries to a tree whose bytes are **not** in the
+    /// unified buffer cache, so a guardrail run against it faults from disk.
+    ///
+    /// **Why this exists.** The whole memory story of this leaf is that samples
+    /// are mapped rather than read: 2.2 GB mapped, a few hundred megabytes
+    /// resident, and the honest residual risk is a sustained note reaching a
+    /// page that is not resident. A guardrail run after the suite has already
+    /// read the same 3.2 GB measures the *favourable* case — the page cache is
+    /// warm and almost nothing faults — so it cannot establish the claim the
+    /// design makes about the adverse one.
+    ///
+    /// `purge` needs root and there is none on this machine, so the cache
+    /// cannot be emptied. What can be done instead is to give the run files
+    /// whose contents were never cached in the first place: `F_NOCACHE` on both
+    /// descriptors means the copy's bytes pass through without being retained,
+    /// so mapping the result reads from the SSD. New inodes, cold pages, same
+    /// audio.
+    ///
+    /// Opt in with `SYNTH_COLD_SAMPLE_CACHE=1`; it copies 3.2 GB and takes
+    /// about a minute.
+    private func coldCopy(of source: URL, into destination: URL) throws -> Int64 {
+        let manager = FileManager.default
+        try manager.createDirectory(at: destination, withIntermediateDirectories: true)
+
+        var copiedBytes: Int64 = 0
+        var buffer = [UInt8](repeating: 0, count: 1 << 20)
+
+        guard let walker = manager.enumerator(
+            at: source, includingPropertiesForKeys: [.isRegularFileKey]
+        ) else { return 0 }
+
+        for case let url as URL in walker {
+            let relative = url.path(percentEncoded: false)
+                .dropFirst(source.path(percentEncoded: false).count)
+                .drop(while: { $0 == "/" })
+            let target = destination.appending(path: String(relative))
+
+            var isDirectory: ObjCBool = false
+            guard manager.fileExists(atPath: url.path(percentEncoded: false),
+                                     isDirectory: &isDirectory) else { continue }
+            if isDirectory.boolValue {
+                try manager.createDirectory(at: target, withIntermediateDirectories: true)
+                continue
+            }
+            try manager.createDirectory(
+                at: target.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+
+            let input = open(url.path(percentEncoded: false), O_RDONLY)
+            guard input >= 0 else { continue }
+            defer { close(input) }
+            _ = fcntl(input, F_NOCACHE, 1)
+
+            let output = open(target.path(percentEncoded: false), O_WRONLY | O_CREAT | O_TRUNC, 0o644)
+            guard output >= 0 else { continue }
+            defer { close(output) }
+            // The destination is the one that matters: its pages are what the
+            // guardrail will map, and F_NOCACHE is what keeps them out of the
+            // cache so mapping them has to reach the disk.
+            _ = fcntl(output, F_NOCACHE, 1)
+
+            while true {
+                let taken: Int = buffer.withUnsafeMutableBytes { raw in
+                    Darwin.read(input, raw.baseAddress, raw.count)
+                }
+                if taken <= 0 { break }
+                _ = buffer.withUnsafeBytes { raw in
+                    Darwin.write(output, raw.baseAddress, taken)
+                }
+                copiedBytes += Int64(taken)
+            }
+        }
+        return copiedBytes
+    }
+
+    /// Where the guardrail should read its samples from, and what to call the
+    /// cache state in the report.
+    private func guardrailAssetRoot(
+        under root: URL, temporaries: inout [URL]
+    ) throws -> (root: URL, cacheState: String) {
+        guard ProcessInfo.processInfo.environment["SYNTH_COLD_SAMPLE_CACHE"] == "1" else {
+            return (
+                root,
+                "warm — the installed tree, read by earlier runs. Set "
+                    + "SYNTH_COLD_SAMPLE_CACHE=1 for the adverse case."
+            )
+        }
+
+        let copy = FileManager.default.temporaryDirectory
+            .appending(path: "synth-cold-assets-\(UUID().uuidString)")
+        temporaries.append(copy)
+        let started = Date()
+        let bytes = try coldCopy(of: root, into: copy)
+        return (
+            copy,
+            String(
+                format: "cold — %.1f GB copied to fresh inodes through F_NOCACHE in %.0f s, "
+                    + "so every sample page faults from disk",
+                Double(bytes) / 1e9, Date().timeIntervalSince(started)
+            )
+        )
     }
 
     // MARK: - Loading
@@ -388,10 +494,14 @@ final class CuratedInstrumentAssetTests: XCTestCase {
             "Set SYNTH_REALTIME_GUARDRAIL=1 to run the full-length real-time guardrail."
         )
 
+        var temporaries: [URL] = []
+        defer { for url in temporaries { try? FileManager.default.removeItem(at: url) } }
+        let (sampleRoot, cacheState) = try guardrailAssetRoot(under: root, temporaries: &temporaries)
+
         let timeline = try AudioRenderFixtures.timeline(
             MusicXMLScoreFixtures.orchestralExcerpt(), settings: .standard
         )
-        let available = installedInstruments(under: root)
+        let available = installedInstruments(under: sampleRoot)
         XCTAssertFalse(available.isEmpty)
 
         let container = AppContainer(rootURL: FileManager.default.temporaryDirectory
@@ -464,6 +574,7 @@ final class CuratedInstrumentAssetTests: XCTestCase {
         print("""
             Dropout guardrail — orchestral reference on sampled instruments
               lines:              \(timeline.lines.count)
+              sample cache:       \(cacheState)
               distinct instruments: \(Set(byLine.values.map(\.identifier)).count)
               libraries:          \(Set(chosen.map(\.libraryID)).sorted().joined(separator: ", "))
               events:             \(timeline.eventCount)
@@ -506,10 +617,15 @@ final class CuratedInstrumentAssetTests: XCTestCase {
             "Set SYNTH_REALTIME_GUARDRAIL=1 to run the full-length real-time guardrail."
         )
 
+        var temporaries: [URL] = []
+        defer { for url in temporaries { try? FileManager.default.removeItem(at: url) } }
+        let (sampleRoot, cacheState) = try guardrailAssetRoot(under: root, temporaries: &temporaries)
+
         let timeline = try AudioRenderFixtures.timeline(
             MusicXMLScoreFixtures.stringQuartetMovement(), settings: .standard
         )
-        let strings = installedInstruments(under: root).filter { $0.coverage.family == .strings }
+        let strings = installedInstruments(under: sampleRoot)
+            .filter { $0.coverage.family == .strings }
         XCTAssertGreaterThanOrEqual(strings.count, 4, "Expected at least four string instruments.")
 
         var byLine: [ScoreLineID: any LineVoiceProvider] = [:]
@@ -543,6 +659,7 @@ final class CuratedInstrumentAssetTests: XCTestCase {
         print("""
             Dropout guardrail — string quartet on sampled strings
               lines:            \(timeline.lines.count)
+              sample cache:     \(cacheState)
               timeline length:  \(String(format: "%.1f", expectedSeconds)) s
               rendered blocks:  \(statistics.renderedBlocks)
               overload blocks:  \(statistics.overloadBlocks)

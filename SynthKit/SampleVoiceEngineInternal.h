@@ -136,4 +136,11 @@ void sample_voice_set_sustain_pedal(void *state, int32_t isDown);
 void sample_voice_render(void *state, float *monoOut, int32_t frameCount);
 void sample_voice_reset(void *state);
 
+/// Fill `outVoice` with the stateless voice that renders silence.
+///
+/// `sample_voice_create` calls this on every path that returns NULL, so the
+/// engine is never handed a vtable of null function pointers. Declared here for
+/// the same reason the callbacks are: only the setup file may call it.
+void sample_voice_fill_silent(SynthLineVoice *outVoice);
+
 #endif /* SAMPLE_VOICE_ENGINE_INTERNAL_H */

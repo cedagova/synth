@@ -250,6 +250,34 @@ public final class SampledInstrument: @unchecked Sendable {
         waveformStorage.deallocate()
     }
 
+    /// Lines this instrument could not build a voice for, and which are
+    /// therefore rendering silence.
+    ///
+    /// **Zero in every normal run, and it has to stay readable when it is not.**
+    /// A voice is one small allocation, so this only moves under real memory
+    /// exhaustion — but when it does, the owner assigned a cello and is hearing
+    /// nothing, and the app must be able to say so. INS003 (#24) owns the flag
+    /// and the acknowledgment; this leaf owes it the fact.
+    ///
+    /// The alternative — quietly substituting a synth patch — was rejected: it
+    /// is the same prohibited end state #24 is being built to gate behind an
+    /// explicit acknowledgment, reached by another route.
+    public var unbuiltVoiceCount: Int {
+        failureLock.lock()
+        defer { failureLock.unlock() }
+        return voiceAllocationFailures
+    }
+
+    private let failureLock = NSLock()
+    private var voiceAllocationFailures = 0
+
+    /// Called by the provider when `sample_voice_create` could not allocate.
+    func recordVoiceAllocationFailure() {
+        failureLock.lock()
+        voiceAllocationFailures += 1
+        failureLock.unlock()
+    }
+
     static let keyCount = Int(SAMPLE_VOICE_KEY_COUNT)
 
     /// `path` joined to `directory`, or nil when the result leaves `boundary`.

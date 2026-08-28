@@ -22,7 +22,14 @@ SampleVoiceState *sample_voice_create(const SampleInstrumentData *instrument,
                                       SynthLineVoice *outVoice,
                                       double sampleRate,
                                       uint64_t seed) {
-    if (instrument == NULL || outVoice == NULL) { return NULL; }
+    if (outVoice == NULL) { return NULL; }
+
+    /* Every failure below leaves the caller holding a working vtable that
+       renders silence, so a line whose voice could not be built is still a line
+       the render thread can call into. Silence rather than some other sound is
+       the point: see the note on `sample_voice_create` in the header. */
+    sample_voice_fill_silent(outVoice);
+    if (instrument == NULL) { return NULL; }
 
     SampleVoiceState *state = (SampleVoiceState *)calloc(1, sizeof(SampleVoiceState));
     if (state == NULL) { return NULL; }

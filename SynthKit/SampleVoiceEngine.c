@@ -659,6 +659,53 @@ void sample_voice_render(void *opaque, float *monoOut, int32_t frameCount) {
     }
 }
 
+#pragma mark - The silent voice
+
+/*
+ The voice a line gets when its own could not be built.
+
+ Five callbacks that hold no state and write silence. It exists so
+ `sample_voice_create` can fail without leaving the engine holding a vtable of
+ null function pointers, and so the failure sounds like nothing rather than
+ like some other instrument — see the note on `sample_voice_create`.
+ */
+static void sample_silent_prepare(void *state, double sampleRate) {
+    (void)state; (void)sampleRate;
+}
+
+static void sample_silent_note(void *state, int32_t midiNoteNumber, int32_t velocity) {
+    (void)state; (void)midiNoteNumber; (void)velocity;
+}
+
+static void sample_silent_note_off(void *state, int32_t midiNoteNumber) {
+    (void)state; (void)midiNoteNumber;
+}
+
+static void sample_silent_pedal(void *state, int32_t isDown) {
+    (void)state; (void)isDown;
+}
+
+static void sample_silent_reset(void *state) {
+    (void)state;
+}
+
+static void sample_silent_render(void *state, float *monoOut, int32_t frameCount) {
+    (void)state;
+    if (monoOut == NULL) { return; }
+    for (int32_t frame = 0; frame < frameCount; frame++) { monoOut[frame] = 0.0f; }
+}
+
+void sample_voice_fill_silent(SynthLineVoice *outVoice) {
+    if (outVoice == NULL) { return; }
+    outVoice->state = NULL;
+    outVoice->prepare = sample_silent_prepare;
+    outVoice->noteOn = sample_silent_note;
+    outVoice->noteOff = sample_silent_note_off;
+    outVoice->setSustainPedal = sample_silent_pedal;
+    outVoice->render = sample_silent_render;
+    outVoice->reset = sample_silent_reset;
+}
+
 #pragma mark - Telemetry
 
 int64_t sample_voice_stolen_slots(const SampleVoiceState *state) {

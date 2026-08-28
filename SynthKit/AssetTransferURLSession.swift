@@ -264,11 +264,13 @@ private final class TransferRouter: NSObject, URLSessionDataDelegate, @unchecked
 
     /// Refuses a redirect that leaves the catalog's declared sources.
     ///
-    /// Passing `nil` to the completion handler tells `URLSession` not to follow
-    /// it: the original response is delivered instead, which then fails the
-    /// pinned length and digest checks. That is a deliberate choice over
-    /// cancelling — the transfer fails with an error about the bytes rather
-    /// than hanging, and the caller's normal failure path takes over.
+    /// `refuseRedirect` records the reason first, then passing `nil` to the
+    /// completion handler tells `URLSession` not to follow the redirect. The
+    /// caller therefore gets `redirectedOutOfScope` naming the host it was sent
+    /// to — not a length or digest failure about the bytes, which is what the
+    /// `sinkError` guard in `didReceive response` exists to prevent the 3xx
+    /// from overwriting. Refusing rather than cancelling is what keeps that
+    /// reason reaching the caller instead of a cancellation.
     func urlSession(
         _ session: URLSession,
         task: URLSessionTask,

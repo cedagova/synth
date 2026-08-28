@@ -1,5 +1,8 @@
 import XCTest
 @testable import SynthKit
+#if canImport(SynthAudioCore)
+import SynthAudioCore
+#endif
 
 /// Issue #23: "Each curated library loads and its instruments sound correct
 /// across their mapped ranges", "offline render of an instrument line is
@@ -642,6 +645,58 @@ final class SampledInstrumentRenderTests: XCTestCase {
             XCTAssertTrue(failure.description.contains("Vanishing"))
             XCTAssertTrue(failure.recoverySuggestion.contains("Re-download"))
         }
+    }
+
+    /// A voice that could not be built renders silence and is counted — it
+    /// never quietly becomes some other instrument.
+    ///
+    /// The trigger in production is allocation failure, which cannot be forced
+    /// here; the *outcome* can be, because `sample_voice_create` takes the same
+    /// silent-vtable path on every failure it has. This calls it with no
+    /// instrument, which is that path, and checks the two things that matter:
+    /// the engine gets a vtable it can call, and what comes out is silence
+    /// rather than a synthesizer.
+    func testAVoiceThatCannotBeBuiltIsSilentRatherThanSubstituted() throws {
+        var vtable = SynthLineVoice()
+        let state = sample_voice_create(nil, &vtable, 44_100, 1)
+        XCTAssertNil(state, "No instrument means no voice.")
+
+        // Every callback has to be safe to call: the engine does not check.
+        vtable.prepare(vtable.state, 44_100)
+        vtable.reset(vtable.state)
+        vtable.noteOn(vtable.state, 60, 100)
+        vtable.setSustainPedal(vtable.state, 1)
+
+        var block = [Float](repeating: 99, count: 512)
+        block.withUnsafeMutableBufferPointer { buffer in
+            vtable.render(vtable.state, buffer.baseAddress!, 512)
+        }
+        XCTAssertEqual(SampledVoiceHarness.peak(block), 0, "A voice that failed must be silent.")
+
+        vtable.noteOff(vtable.state, 60)
+        vtable.reset(vtable.state)
+    }
+
+    /// And the fact survives past `makeVoice`, so INS003 has something to flag.
+    func testAnUnbuiltVoiceIsRecordedOnTheInstrument() throws {
+        try SFZFixtures.writeWave(
+            SFZFixtures.constant(0.5), to: root.appending(path: "flat.wav")
+        )
+        let instrument = try SampledInstrument(
+            try SFZFixtures.writeInstrument(
+                "<region> sample=flat.wav lokey=60 hikey=60 pitch_keycenter=60", in: root
+            )
+        )
+        let provider = SampledInstrumentVoiceProvider(instrument: instrument)
+
+        XCTAssertEqual(provider.unbuiltVoiceCount, 0, "A healthy instrument reports none.")
+
+        instrument.recordVoiceAllocationFailure()
+        XCTAssertEqual(
+            provider.unbuiltVoiceCount, 1,
+            "A line rendering silence because its voice could not be built has to be visible; "
+                + "the owner assigned an instrument and is hearing nothing."
+        )
     }
 
     /// An SFZ that names an unsupported opcode still plays, and reports it.

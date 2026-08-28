@@ -263,4 +263,111 @@ final class RealtimePlaybackTests: XCTestCase {
         XCTAssertEqual(statistics.overloadPauses, 0)
         XCTAssertLessThan(statistics.overloadRatio, 0.001)
     }
+
+    /// **The REQ-013 budget, re-measured for the synthesizer.**
+    ///
+    /// Increment 002 established that the orchestral reference plays
+    /// dropout-free with the built-in default voice. A full synthesis voice is
+    /// far heavier — three oscillators, a four-pole filter, six live modulation
+    /// routes and four effects per line instead of three sine partials — so
+    /// SYN001 re-opens the question rather than inheriting the answer.
+    ///
+    /// Reported as counts, not as a bare pass, so the margin against the
+    /// increment-002 baseline is visible rather than implied.
+    func testOrchestralReferencePlaysWithoutDropoutsThroughSynthPatches() throws {
+        try requireOutputDevice()
+        try XCTSkipIf(
+            !fullGuardrailEnabled,
+            "Set SYNTH_REALTIME_GUARDRAIL=1 to run the full-length real-time guardrail."
+        )
+
+        let timeline = try AudioRenderFixtures.timeline(
+            MusicXMLScoreFixtures.orchestralExcerpt(),
+            settings: .standard
+        )
+        let expectedSeconds = Double(timeline.totalMicroseconds) / 1_000_000
+
+        let engine = PlaybackEngine(
+            voiceProvider: SynthPatchVoiceProvider(
+                patch: SynthEngineIntegrationTests.demandingPatch()))
+        try engine.load(timeline: timeline)
+        try engine.start()
+        engine.resetStatistics()
+        engine.play()
+        XCTAssertTrue(waitUntilPlaying(engine), "Playback never started.")
+
+        let started = Date()
+        while engine.transportState == .playing,
+              Date().timeIntervalSince(started) < expectedSeconds + 15 {
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        let elapsed = Date().timeIntervalSince(started)
+        let statistics = engine.statistics
+        let reason = engine.pauseReason
+        engine.stopEngine()
+
+        print("""
+            Dropout guardrail \u{2014} orchestral reference through synth patches
+              lines:            \(timeline.lines.count)
+              events:           \(timeline.eventCount)
+              timeline length:  \(String(format: "%.1f", expectedSeconds)) s
+              wall clock:       \(String(format: "%.1f", elapsed)) s
+              rendered blocks:  \(statistics.renderedBlocks)
+              overload blocks:  \(statistics.overloadBlocks) \
+            (\(String(format: "%.4f", statistics.overloadRatio * 100))%)
+              overload pauses:  \(statistics.overloadPauses)
+              peak level:       \(String(format: "%.3f", statistics.peakLevel))
+              ended because:    \(reason)
+            """)
+
+        XCTAssertEqual(reason, .reachedEnd, "Playback did not run to the end; it stopped for \(reason).")
+        XCTAssertEqual(statistics.overloadPauses, 0, "The engine degraded to a pause under load.")
+        XCTAssertLessThan(
+            statistics.overloadRatio, 0.001,
+            "\(statistics.overloadBlocks) of \(statistics.renderedBlocks) blocks missed their deadline."
+        )
+        XCTAssertLessThan(
+            statistics.peakLevel, 1.0,
+            "The orchestral reference clips at \(statistics.peakLevel) through synth patches."
+        )
+        XCTAssertEqual(
+            elapsed, expectedSeconds, accuracy: expectedSeconds * 0.05 + 3,
+            "Playback took \(elapsed) s for a \(expectedSeconds) s piece."
+        )
+    }
+
+    /// The short live smoke, through a synth patch rather than the default
+    /// voice, so a CI-visible machine with a device catches a synthesizer that
+    /// overloads immediately without waiting for the opt-in guardrail.
+    func testLivePlaybackThroughASynthPatchStartsCleanly() throws {
+        try requireOutputDevice()
+
+        let timeline = try AudioRenderFixtures.timeline(
+            MusicXMLScoreFixtures.orchestralExcerpt(),
+            settings: .standard
+        )
+        let engine = PlaybackEngine(
+            voiceProvider: SynthPatchVoiceProvider(
+                patch: SynthEngineIntegrationTests.demandingPatch()))
+        try engine.load(timeline: timeline)
+        try engine.start()
+        engine.resetStatistics()
+        engine.play()
+        XCTAssertTrue(waitUntilPlaying(engine), "Playback never started.")
+
+        Thread.sleep(forTimeInterval: 3)
+        let statistics = engine.statistics
+        let state = engine.transportState
+        let reason = engine.pauseReason
+        engine.stopEngine()
+
+        XCTAssertEqual(state, .playing, "Playback stopped within three seconds (\(reason)).")
+        XCTAssertEqual(statistics.overloadPauses, 0)
+        XCTAssertGreaterThan(statistics.renderedBlocks, 10)
+        XCTAssertLessThan(
+            statistics.overloadRatio, 0.02,
+            "\(statistics.overloadBlocks) of \(statistics.renderedBlocks) blocks missed their "
+                + "deadline in the first three seconds."
+        )
+    }
 }

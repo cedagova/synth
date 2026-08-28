@@ -59,27 +59,39 @@ final class RealtimeSafetyTests: XCTestCase {
         "Block_copy", "CFRetain", "CFRelease", "abort(", "exit("
     ]
 
-    /// The render core is written so that this scan is meaningful.
+    /// Every file the audio thread executes, and the setup file each is split
+    /// against.
     ///
-    /// Construction lives in `SynthAudioSetup.c`, which is allowed to allocate,
-    /// so the boundary this checks is a whole file rather than a judgement about
-    /// which function runs where.
-    func testRenderCoreContainsNoRealtimeUnsafeCall() throws {
-        let core = try Self.source(named: "SynthAudioCore.c")
+    /// The synthesizer (SYN001) follows the same split as the engine, so it is
+    /// covered by the same guard: adding a render core without adding it here
+    /// would leave the real-time claim resting on a file nobody checks.
+    private static let renderCores = ["SynthAudioCore.c", "SynthPatchEngine.c"]
 
-        XCTAssertGreaterThan(core.count, 2_000, "SynthAudioCore.c is suspiciously small; the guard may be blind.")
+    /// The render cores are written so that this scan is meaningful.
+    ///
+    /// Construction lives in `SynthAudioSetup.c` and `SynthPatchSetup.c`, which
+    /// are allowed to allocate, so the boundary this checks is a whole file
+    /// rather than a judgement about which function runs where.
+    func testRenderCoresContainNoRealtimeUnsafeCall() throws {
+        for name in Self.renderCores {
+            let core = try Self.source(named: name)
 
-        // Strip comments before scanning: the file explains what it must not do,
-        // and a guard that read its own documentation as a violation would be
-        // unusable.
-        let code = Self.strippingComments(from: core)
-
-        for symbol in Self.forbiddenInRenderCore {
-            XCTAssertFalse(
-                code.contains(symbol),
-                "SynthAudioCore.c calls \(symbol), which is not real-time safe. "
-                    + "If this belongs to setup rather than rendering, it goes in SynthAudioSetup.c."
+            XCTAssertGreaterThan(
+                core.count, 2_000, "\(name) is suspiciously small; the guard may be blind."
             )
+
+            // Strip comments before scanning: these files explain what they must
+            // not do, and a guard that read its own documentation as a violation
+            // would be unusable.
+            let code = Self.strippingComments(from: core)
+
+            for symbol in Self.forbiddenInRenderCore {
+                XCTAssertFalse(
+                    code.contains(symbol),
+                    "\(name) calls \(symbol), which is not real-time safe. If this belongs to "
+                        + "setup rather than rendering, it goes in the matching *Setup.c."
+                )
+            }
         }
     }
 
@@ -91,6 +103,65 @@ final class RealtimeSafetyTests: XCTestCase {
             setup.contains("calloc") && setup.contains("free("),
             "SynthAudioSetup.c neither allocates nor frees, so the render core's allocation-free "
                 + "claim is not being made by a real split of responsibilities."
+        )
+    }
+
+    /// The synthesizer allocates nothing at all, on either thread.
+    ///
+    /// Its voice state is one caller-owned block sized by
+    /// `synth_patch_voice_state_size`, and its wavetables are static. That is
+    /// a stronger position than the engine's — there is no allocator call to
+    /// keep on the right side of a line — so the guard for it is that neither
+    /// of its files allocates.
+    func testTheSynthesizerNeverAllocates() throws {
+        for name in ["SynthPatchEngine.c", "SynthPatchSetup.c"] {
+            let code = Self.strippingComments(from: try Self.source(named: name))
+            for symbol in ["malloc", "calloc", "realloc", "free(", "posix_memalign"] {
+                XCTAssertFalse(
+                    code.contains(symbol),
+                    "\(name) calls \(symbol). The synthesizer's storage is owned by its caller; "
+                        + "nothing here should be allocating."
+                )
+            }
+        }
+    }
+
+    /// Rendering a full synthesizer patch does not allocate per block either.
+    ///
+    /// The same dynamic check as `testRenderingDoesNotAllocatePerBlock`, run
+    /// against the heaviest patch rather than the default voice: three
+    /// oscillators, a four-pole filter, six live modulation routes and all four
+    /// effects. A source scan cannot see an allocation the compiler emitted,
+    /// and the synthesizer is where one would hurt most.
+    func testRenderingASynthPatchDoesNotAllocatePerBlock() throws {
+        let timeline = try AudioRenderFixtures.timeline(AudioRenderFixtures.twoLineFixture())
+
+        let engine = PlaybackEngine(
+            voiceProvider: SynthPatchVoiceProvider(
+                patch: SynthEngineIntegrationTests.demandingPatch()))
+        try engine.setRenderMode(.offline(sampleRate: 48_000))
+        try engine.load(timeline: timeline)
+        engine.play()
+
+        _ = try engine.renderOffline(frameCount: 48_000)
+
+        func allocationsRendering(frames: Int64) throws -> Int {
+            let before = Self.liveAllocationCount()
+            _ = try engine.renderOffline(frameCount: frames)
+            return Self.liveAllocationCount() - before
+        }
+
+        let short = try allocationsRendering(frames: 48_000)
+        let long = try allocationsRendering(frames: 480_000)
+
+        let blocksShort = 48_000 / Int(RenderProgram.maximumFrameCount)
+        let blocksLong = 480_000 / Int(RenderProgram.maximumFrameCount)
+        let perBlock = Double(long - short) / Double(blocksLong - blocksShort)
+
+        XCTAssertLessThan(
+            perBlock, 0.25,
+            "Rendering a synth patch cost \(perBlock) allocations per render block "
+                + "(\(short) for \(blocksShort) blocks, \(long) for \(blocksLong))."
         )
     }
 

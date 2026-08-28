@@ -361,6 +361,56 @@ final class PresetLibraryTests: XCTestCase {
         }
     }
 
+    /// "Auto-save failure surfaces an error without discarding in-memory
+    /// state."
+    ///
+    /// The API is value-returning, so "in-memory state is not discarded" is
+    /// literal: a throw means the caller still holds the preset it had, and the
+    /// stored one is unchanged, so retrying the same call is safe.
+    func testAFailedAutoSaveIsReportedAndChangesNothing() throws {
+        let piece = try importFugue()
+        let score = try compile(piece)
+        let preset = try store.activePreset(for: score)
+        let line = preset.lines[0].lineID
+        let bell = try XCTUnwrap(store.sounds.shippedSounds.first { $0.category == .bells })
+
+        // A trigger standing in for the real failures — a damaged database, a
+        // full disk — because a refused write is the behaviour under test, not
+        // the reason it was refused.
+        try store.database.executeScript(
+            """
+            CREATE TRIGGER refuse_updates_to_presets
+                BEFORE UPDATE ON \(PresetCatalog.tableName)
+            BEGIN
+                SELECT RAISE(ABORT, 'the disk is full');
+            END;
+            """
+        )
+
+        XCTAssertThrowsError(
+            try store.presets.assign(.library(kind: .synth, soundID: bell.id), toLine: line, in: preset)
+        ) { error in
+            guard case PresetError.storeFailed(let name, let reason) = error else {
+                return XCTFail("Expected storeFailed, got \(error)")
+            }
+            XCTAssertEqual(name, preset.name, "The failure must name the preset")
+            XCTAssertFalse(reason.isEmpty)
+        }
+
+        // The caller's value is untouched, and so is the store.
+        XCTAssertEqual(preset.line(withID: line)?.assignment, .library(kind: .synth, soundID: SynthPatch.defaultVoice.identifier))
+        let stored = try XCTUnwrap(try store.presets.activePreset(forPieceID: piece.id))
+        XCTAssertEqual(stored.content, preset.content)
+        XCTAssertEqual(stored.revision, preset.revision)
+
+        // And once the store accepts writes again the same call succeeds.
+        try store.database.executeScript("DROP TRIGGER refuse_updates_to_presets;")
+        let saved = try store.presets.assign(
+            .library(kind: .synth, soundID: bell.id), toLine: line, in: preset
+        )
+        XCTAssertEqual(saved.line(withID: line)?.assignment, .library(kind: .synth, soundID: bell.id))
+    }
+
     // MARK: Several presets, exactly one active (REQ-024)
 
     func testExactlyOnePresetPerPieceIsActive() throws {

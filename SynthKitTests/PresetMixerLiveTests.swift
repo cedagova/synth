@@ -314,6 +314,108 @@ final class PresetMixerLiveTests: XCTestCase {
         )
     }
 
+    // MARK: Editing an assigned sound while the piece plays (REQ-018)
+
+    /// **REQ-018 as the definition words it — "sounds … edited live during piece
+    /// playback", now that a piece has a sound per line.**
+    ///
+    /// Editing the sound assigned to *one* line is heard on that line, while the
+    /// music plays, and the other line carries on exactly as it was.
+    ///
+    /// The assignment built here is the one `AssignmentModel.voices(for:)`
+    /// builds: one `SynthPatchLiveVoices` per *sound*, so publishing into a
+    /// channel reaches the voices that are already rendering rather than
+    /// requiring the program to be rebuilt. That is what makes the edit
+    /// gapless; `setVoices` would stop the graph.
+    func testEditingTheSoundOnOneLineIsHeardOnThatLineOnlyWhilePlaying() throws {
+        let (score, _) = try twoLinePieceOnly()
+        let inventory = try store.lineInventory(for: score)
+        let upper = inventory.entries[0].id
+        let lower = inventory.entries[1].id
+
+        // One channel per sound, exactly as the panel does it.
+        let brightChannel = SynthPatchLiveVoices(patch: brightPatch(cutoff: 16_000))
+        let steadyChannel = SynthPatchLiveVoices(patch: brightPatch(cutoff: 16_000))
+        let engine = PlaybackEngine(voices: LineVoiceAssignment(providersByLine: [
+            upper: SynthPatchVoiceProvider(live: brightChannel),
+            lower: SynthPatchVoiceProvider(live: steadyChannel)
+        ]))
+        try engine.setRenderMode(.offline(sampleRate: Self.sampleRate))
+        try engine.load(timeline: PerformanceRealizer().realize(score, settings: .literal))
+        engine.play()
+
+        let before = try engine.renderOffline(frameCount: Self.stretchFrames)
+        let positionBefore = engine.playbackPositionFrame
+
+        // The knob move: only the upper line's sound is edited.
+        let result = brightChannel.apply(brightPatch(cutoff: 200))
+        XCTAssertTrue(result.reachedAnyVoice, "The edit reached no voice at all.")
+
+        let after = try engine.renderOffline(frameCount: Self.stretchFrames)
+        assertPlaybackContinued(engine, from: positionBefore, before: before, after: after)
+
+        // Heard: the upper line's upper harmonics are gone.
+        let upperThird = Self.upperHertz * 3
+        XCTAssertGreaterThan(energy(before, upperThird), 1e-5, "The upper line was never bright.")
+        XCTAssertGreaterThan(
+            AudioRenderFixtures.decibels(
+                energy(before, upperThird) / max(energy(settled(after), upperThird), 1e-12)
+            ), 12,
+            "Closing the filter on the upper line's sound was not audible on it."
+        )
+
+        // …and heard on that line only: the lower line's own harmonics are
+        // where they were, because its sound was not the one edited.
+        let lowerThird = Self.lowerHertz * 3
+        XCTAssertEqual(
+            energy(settled(after), lowerThird), energy(before, lowerThird),
+            accuracy: energy(before, lowerThird) * 0.35,
+            "Editing the upper line's sound changed the lower line as well."
+        )
+    }
+
+    /// The live-backed assignment the panel builds renders **bit-for-bit** what
+    /// `PresetPerformance.voiceAssignment`'s frozen patches render, until
+    /// something is published into it.
+    ///
+    /// This is the safety net under the substitution above: the panel replaces
+    /// ASN001's voice half with its own, and ASN001's whole render suite is
+    /// written against the frozen form. If the two ever diverged, every one of
+    /// those proofs would stop being about what the app plays.
+    func testALiveBackedAssignmentRendersExactlyAsTheFrozenOneDoes() throws {
+        let (score, _) = try twoLinePieceOnly()
+        let bright = try store.sounds.create(patch: brightPatch(), named: "Bright", in: .leads)
+        let inventory = try store.lineInventory(for: score)
+        let preset = try store.activePreset(for: score)
+        _ = try store.presets.assign(
+            .library(kind: .synth, soundID: bright.id),
+            toLine: inventory.entries[0].id,
+            in: preset
+        )
+        let performance = try store.openActivePreset(for: score)
+        let timeline = PerformanceRealizer().realize(score, settings: .literal)
+
+        let frozen = try PlaybackEngine.renderTimelineOffline(
+            timeline, voices: performance.voiceAssignment
+        ) { performance.applyMixer(to: $0) }
+
+        var byLine: [ScoreLineID: any LineVoiceProvider] = [:]
+        for line in performance.lines {
+            byLine[line.lineID] = SynthPatchVoiceProvider(
+                live: SynthPatchLiveVoices(patch: line.patch)
+            )
+        }
+        let live = try PlaybackEngine.renderTimelineOffline(
+            timeline, voices: LineVoiceAssignment(providersByLine: byLine)
+        ) { performance.applyMixer(to: $0) }
+
+        XCTAssertEqual(
+            frozen.canonicalData(), live.canonicalData(),
+            "Putting each line's sound on its own live channel changed what the piece plays."
+        )
+        XCTAssertGreaterThan(live.peak(), 0.001, "…and it is not silence.")
+    }
+
     /// The panel writes the strip first and the store second, and the two agree
     /// afterwards: what the engine is playing is what a relaunch would restore.
     func testWhatTheStripIsSetToIsWhatThePresetEndsUpHolding() throws {
@@ -360,9 +462,15 @@ final class PresetMixerLiveTests: XCTestCase {
     }
 
     private func playingTwoLinePiece() throws -> (CompiledScore, PlaybackEngine) {
-        let piece = try importScore(AudioRenderFixtures.twoLineFixture(), named: "twolines.musicxml")
-        let score = try compile(piece)
+        let (score, _) = try twoLinePieceOnly()
         return (score, try playingEngine(for: score))
+    }
+
+    /// The imported two-line piece, without an engine — for the tests that
+    /// build their own.
+    private func twoLinePieceOnly() throws -> (CompiledScore, PieceRecord) {
+        let piece = try importScore(AudioRenderFixtures.twoLineFixture(), named: "twolines.musicxml")
+        return (try compile(piece), piece)
     }
 
     /// An engine loaded with the piece's active preset and already rolling —
@@ -398,7 +506,7 @@ final class PresetMixerLiveTests: XCTestCase {
         _ = try store.presets.setMixer(state, forLine: lineID, in: preset)
     }
 
-    private func brightPatch() -> SynthPatch {
+    private func brightPatch(cutoff: Double = 16_000) -> SynthPatch {
         SynthPatch(
             identifier: "ignored.by.the.library",
             name: "Ignored By The Library",
@@ -407,7 +515,7 @@ final class PresetMixerLiveTests: XCTestCase {
                 .init(level: 0),
                 .init(level: 0)
             ],
-            filter: .init(isEnabled: true, type: .lowpass, poles: 2, cutoffHertz: 16_000),
+            filter: .init(isEnabled: true, type: .lowpass, poles: 4, cutoffHertz: cutoff),
             outputLevel: 0.25
         )
     }

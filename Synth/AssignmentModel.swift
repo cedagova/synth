@@ -163,21 +163,28 @@ final class AssignmentModel {
     /// Re-read the store because something outside this screen may have changed
     /// it — a sound created, edited or deleted in the studio.
     ///
-    /// Only touches the engine when the *sounds* actually moved. A rebuild is a
-    /// brief stop and start of the graph, and coming back from the studio
-    /// having changed nothing must not cost the owner one.
+    /// **Rebuilds only when a line's *sound* changed, never when its patch did.**
+    /// A rebuild is a brief stop and start of the graph; a patch reaches the
+    /// running voices through the line's channel and needs none. So coming back
+    /// from the studio having edited a sound the piece uses costs the music
+    /// nothing at all, and coming back having changed nothing costs it nothing
+    /// either.
     func refreshFromStore() {
         guard score != nil else { return }
-        let before = lines.map { LineSound(lineID: $0.lineID, patch: $0.patch) }
+        let before = lines.map { LineSound(lineID: $0.lineID, key: channelKey(for: $0)) }
         load(applyingToEngine: false, because: nil)
-        let after = lines.map { LineSound(lineID: $0.lineID, patch: $0.patch) }
-        guard before != after else { return }
-        applyToEngine()
+        let after = lines.map { LineSound(lineID: $0.lineID, key: channelKey(for: $0)) }
+
+        guard before == after else { return applyToEngine() }
+        // Same sounds on the same lines: only their patches can have moved, and
+        // `voices(for:)` republishes each channel from what the store now says.
+        guard !isSuspendedByPlayThrough else { return }
+        _ = voices(for: lines)
     }
 
     private struct LineSound: Equatable {
         let lineID: ScoreLineID
-        let patch: SynthPatch
+        let key: String
     }
 
     private func load(applyingToEngine: Bool, because verb: String?) {
@@ -211,7 +218,13 @@ final class AssignmentModel {
         guard !isSuspendedByPlayThrough else { return }
         guard let resolved = performance ?? currentPerformance() else { return }
         do {
-            try resolved.apply(to: engine)
+            // `PresetPerformance.apply(to:)` in two halves. The mixer half is
+            // ASN001's, verbatim. The voice half is replaced by `voices(for:)`
+            // below, which builds the same program out of live channels instead
+            // of frozen patches so that editing an assigned sound is heard on
+            // that line while the piece plays (REQ-018).
+            try engine.setVoices(voices(for: resolved.lines))
+            resolved.applyMixer(to: engine)
         } catch {
             alert = AssignmentAlert(title: "Could not put this preset on the audio engine", error)
         }
@@ -220,6 +233,76 @@ final class AssignmentModel {
     private func currentPerformance() -> PresetPerformance? {
         guard let activePreset else { return nil }
         return PresetPerformance(preset: activePreset, lines: lines)
+    }
+
+    // MARK: Live sounds (REQ-018)
+
+    /// One publication channel per *sound*, not per line.
+    ///
+    /// **This is what makes REQ-018 true of an assigned line.**
+    /// `PresetPerformance.voiceAssignment` hands the engine a frozen
+    /// `SynthPatch`, which is right for an offline render and wrong for a piece
+    /// that is playing while its sound is being designed: an edit would not be
+    /// heard until the program was rebuilt, and rebuilding stops the graph.
+    /// A `SynthPatchLiveVoices` renders whatever it currently holds, so
+    /// publishing into it reaches the voices that are already sounding —
+    /// SYN003's mechanism, per sound rather than for the whole piece.
+    ///
+    /// Keyed by sound, so two lines sharing a sound move together (which is
+    /// what "the preset holds a live reference to that sound" means), and an
+    /// embedded copy or a missing reference gets a private channel of its own,
+    /// because neither can ever be edited again.
+    private var channels: [String: SynthPatchLiveVoices] = [:]
+
+    private func channelKey(for line: ResolvedLine) -> String {
+        if case .library(let soundID, _) = line.source { return "sound:\(soundID)" }
+        return "line:\(line.lineID.rawValue)"
+    }
+
+    /// The engine's voices for these lines, each on its sound's live channel.
+    ///
+    /// Channels are created on demand and refreshed here, so the program a
+    /// rebuild produces always starts from what the store says — an unsaved
+    /// edit published into a channel does not survive a rebuild, which is the
+    /// right answer: the preset references the *library* sound.
+    private func voices(for lines: [ResolvedLine]) -> LineVoiceAssignment {
+        var byLine: [ScoreLineID: any LineVoiceProvider] = [:]
+        var kept: [String: SynthPatchLiveVoices] = [:]
+        for line in lines {
+            let key = channelKey(for: line)
+            let channel = channels[key] ?? SynthPatchLiveVoices(patch: line.patch)
+            channel.apply(line.patch)
+            kept[key] = channel
+            byLine[line.lineID] = SynthPatchVoiceProvider(live: channel)
+        }
+        // Only the channels this preset still uses; a sound that is no longer
+        // assigned anywhere should not keep a channel alive.
+        channels = kept
+        return LineVoiceAssignment(providersByLine: byLine)
+    }
+
+    /// The sound studio moved a knob on `soundID`. Every line that plays it
+    /// hears the change on the next block, and no other line does.
+    ///
+    /// No rebuild, so the music does not stop — which is the whole of REQ-018's
+    /// "edited live during piece playback" now that a piece has more than one
+    /// sound in it.
+    func publishEditedSound(id soundID: String, patch: SynthPatch) {
+        guard !isSuspendedByPlayThrough,
+              let channel = channels["sound:\(soundID)"] else { return }
+        let result = channel.apply(patch)
+        guard result.reachedAnyVoice else { return }
+        // Kept in step so a later refresh can tell a patch edit (no rebuild
+        // needed) from a change of which sound a line plays (rebuild needed).
+        for index in lines.indices where channelKey(for: lines[index]) == "sound:\(soundID)" {
+            lines[index] = ResolvedLine(
+                lineID: lines[index].lineID,
+                name: lines[index].name,
+                source: lines[index].source,
+                patch: patch,
+                mixer: lines[index].mixer
+            )
+        }
     }
 
     private func keepSelectionValid() {

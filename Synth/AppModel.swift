@@ -143,6 +143,12 @@ final class AppModel {
             editor.onPlayThroughChanged = { [weak self] isPlayingThrough in
                 self?.playback?.setPlayingThroughEditedSound(isPlayingThrough)
             }
+            // REQ-018 on an assigned line: an edit reaches every line of the
+            // open piece that plays this sound, while it plays, and nothing
+            // else.
+            editor.onPatchEdited = { [weak self] soundID, patch in
+                self?.playback?.assignment.publishEditedSound(id: soundID, patch: patch)
+            }
             studio = SoundStudioModel(store: store, editor: editor)
         }
         isStudioShowing = true

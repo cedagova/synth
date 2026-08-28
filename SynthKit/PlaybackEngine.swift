@@ -60,7 +60,10 @@ public final class PlaybackEngine: @unchecked Sendable {
     // MARK: Stored state
 
     private let avEngine = AVAudioEngine()
-    private let voiceProvider: LineVoiceProvider
+
+    /// Which sound each line renders with. Replaceable, because REQ-006 lets
+    /// the owner change a line's sound while the piece is open.
+    private var voices: LineVoiceAssignment
 
     private var sourceNode: AVAudioSourceNode?
     private var program: RenderProgram?
@@ -88,8 +91,14 @@ public final class PlaybackEngine: @unchecked Sendable {
         case lostWithNoFallback(previousDeviceName: String)
     }
 
-    public init(voiceProvider: LineVoiceProvider = SynthPatchVoiceProvider()) {
-        self.voiceProvider = voiceProvider
+    /// Every line through one sound. The signature increments 002 and 003 used.
+    public convenience init(voiceProvider: LineVoiceProvider = SynthPatchVoiceProvider()) {
+        self.init(voices: .uniform(voiceProvider))
+    }
+
+    /// Each line through the sound `voices` names for it (REQ-006).
+    public init(voices: LineVoiceAssignment) {
+        self.voices = voices
     }
 
     deinit {
@@ -113,6 +122,31 @@ public final class PlaybackEngine: @unchecked Sendable {
         avEngine.stop()
 
         self.timeline = timeline
+        try rebuildProgramAndGraph()
+
+        if wasRunning, case .realtime = mode {
+            try startAVEngine()
+        }
+    }
+
+    /// Change which sound each line plays (REQ-006).
+    ///
+    /// Rebuilds the program, because a voice is allocated once per line when
+    /// the program is built and the render thread only ever sees the resulting
+    /// C vtable. Stopping the graph first is the synchronisation edge that
+    /// publishes the new voices, exactly as `load(timeline:)` does; the
+    /// playhead is carried across, so changing a line's sound mid-piece
+    /// resumes where it was rather than restarting.
+    ///
+    /// This is the *assignment* path. Editing the patch of a sound already
+    /// assigned goes through `SynthPatchLiveVoices` instead and needs no
+    /// rebuild — which is why REQ-018's live editing stays audible while the
+    /// piece plays.
+    public func setVoices(_ newVoices: LineVoiceAssignment) throws {
+        let wasRunning = avEngine.isRunning
+        avEngine.stop()
+
+        voices = newVoices
         try rebuildProgramAndGraph()
 
         if wasRunning, case .realtime = mode {
@@ -171,7 +205,7 @@ public final class PlaybackEngine: @unchecked Sendable {
             program = try RenderProgram(
                 timeline: timeline,
                 sampleRate: rate,
-                voiceProvider: voiceProvider
+                voices: voices
             )
         } else {
             program = nil
@@ -681,7 +715,22 @@ public final class PlaybackEngine: @unchecked Sendable {
         voiceProvider: LineVoiceProvider = SynthPatchVoiceProvider(),
         configure: (PlaybackEngine) -> Void = { _ in }
     ) throws -> RenderedAudio {
-        let engine = PlaybackEngine(voiceProvider: voiceProvider)
+        try renderTimelineOffline(
+            timeline,
+            sampleRate: sampleRate,
+            voices: .uniform(voiceProvider),
+            configure: configure
+        )
+    }
+
+    /// The same, with each line through the sound `voices` names for it.
+    public static func renderTimelineOffline(
+        _ timeline: PerformanceTimeline,
+        sampleRate: Double = 48_000,
+        voices: LineVoiceAssignment,
+        configure: (PlaybackEngine) -> Void = { _ in }
+    ) throws -> RenderedAudio {
+        let engine = PlaybackEngine(voices: voices)
         try engine.setRenderMode(.offline(sampleRate: sampleRate))
         try engine.load(timeline: timeline)
         configure(engine)

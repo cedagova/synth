@@ -20,10 +20,11 @@ final class NotationReportTests: XCTestCase {
 
     func testEachFamilyOfUnhonouredNotationIsNamedSpecifically() throws {
         let cases: [(notation: String, kind: String)] = [
-            ("<ornaments><trill-mark/></ornaments>", "ornament: trill-mark"),
-            ("<articulations><staccato/></articulations>", "articulation: staccato"),
+            ("<ornaments><schleifer/></ornaments>", "ornament: schleifer"),
+            ("<ornaments><haydn/></ornaments>", "ornament: haydn"),
+            ("<articulations><doit/></articulations>", "articulation: doit"),
+            ("<articulations><caesura/></articulations>", "articulation: caesura"),
             ("<technical><up-bow/></technical>", "technique: up-bow"),
-            ("<dynamics><sf/></dynamics>", "dynamic: sf"),
             ("<arpeggiate/>", "notation: arpeggiate"),
             ("<glissando type=\"start\"/>", "notation: glissando")
         ]
@@ -34,6 +35,74 @@ final class NotationReportTests: XCTestCase {
                 "expected \(testCase.kind), got \(score.report.entries.map(\.kind))"
             )
         }
+    }
+
+    /// The other half of REQ-014's honesty, and the half that is easy to
+    /// break: once PLY002 sounds a marking, the report must stop naming it.
+    /// A report that lists notation the app *does* honour teaches the owner to
+    /// distrust it, which is worse than no report.
+    func testNotationPLY002RealisesIsNoLongerReported() throws {
+        let honoured = [
+            "<ornaments><trill-mark/></ornaments>",
+            "<ornaments><mordent/></ornaments>",
+            "<ornaments><inverted-mordent/></ornaments>",
+            "<ornaments><turn/></ornaments>",
+            "<ornaments><inverted-turn/></ornaments>",
+            "<ornaments><delayed-turn/></ornaments>",
+            "<articulations><staccato/></articulations>",
+            "<articulations><staccatissimo/></articulations>",
+            "<articulations><accent/></articulations>",
+            "<articulations><strong-accent/></articulations>",
+            "<articulations><tenuto/></articulations>",
+            "<articulations><detached-legato/></articulations>",
+            "<dynamics><sf/></dynamics>",
+            "<dynamics><fp/></dynamics>",
+            #"<slur type="start" number="1"/>"#
+        ]
+        for notation in honoured {
+            let score = try scoreWithNotation(notation)
+            XCTAssertTrue(
+                score.report.isEmpty,
+                "\(notation) is realised and must not be reported, "
+                    + "got \(score.report.entries.map(\.kind))"
+            )
+        }
+    }
+
+    func testDynamicsHairpinsAndPedalDirectionsAreCapturedRatherThanReported() throws {
+        let measure = ScoreXML.Measure(
+            number: "1",
+            items: [
+                .attributes(ScoreXML.Attributes(divisions: 4, fifths: 0, time: (4, 4))),
+                .direction(.dynamic("mf")),
+                .direction(.wedge("crescendo")),
+                .direction(.pedal("start")),
+                .note(ScoreXML.Note(pitch: "C4", duration: 16, type: "whole")),
+                .direction(.wedge("stop")),
+                .direction(.pedal("stop"))
+            ]
+        )
+        let score = try compile(
+            ScoreXML.Score(parts: [ScoreXML.Part(id: "P1", name: "Piano", measures: [measure])]).data()
+        )
+
+        XCTAssertTrue(score.report.isEmpty, "got \(score.report.entries.map(\.kind))")
+        XCTAssertEqual(
+            score.expressionEvents.map(\.kind),
+            [.dynamic, .pedalDown, .wedgeStart, .pedalUp, .wedgeStop],
+            "captured in canonical order, which sorts by tick then by kind"
+        )
+        XCTAssertEqual(score.expressionEvents.first?.dynamic, .mf)
+    }
+
+    /// A marking whose *family* is honoured but whose specific value is not
+    /// still has to be named, or the report would silently swallow it.
+    func testAnUnknownMemberOfAnHonouredFamilyIsStillReported() throws {
+        let score = try scoreWithNotation("<dynamics><other-dynamics>zz</other-dynamics></dynamics>")
+        XCTAssertTrue(
+            score.report.mentions(kind: "dynamic: other-dynamics"),
+            "got \(score.report.entries.map(\.kind))"
+        )
     }
 
     func testNotationThatOnlyRendersSomethingAlreadyHonouredIsNotReported() throws {

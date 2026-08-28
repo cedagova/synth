@@ -167,21 +167,36 @@ final class ScoreCompilerTests: XCTestCase {
     func testAnUnsupportedMarkingIsReportedByNameAndLocation() throws {
         let score = try compile(MusicXMLScoreFixtures.unsupportedMarking())
 
-        let entry = try XCTUnwrap(score.report.entries.first { $0.kind == "ornament: mordent" })
+        let entry = try XCTUnwrap(score.report.entries.first { $0.kind == "ornament: schleifer" })
         XCTAssertEqual(entry.category, .notHonored)
         XCTAssertEqual(entry.firstLocation.measureNumber, "2")
         XCTAssertEqual(entry.firstLocation.partName, "Recorder")
         XCTAssertEqual(entry.occurrenceCount, 1)
-        XCTAssertEqual(entry.displayText, "ornament: mordent at Recorder, measure 2")
+        XCTAssertEqual(entry.displayText, "ornament: schleifer at Recorder, measure 2")
     }
 
     func testRepeatedUnsupportedMarkingsAggregateIntoOneEntryWithACount() throws {
-        let score = try compile(MusicXMLScoreFixtures.stringQuartetMovement())
-        let slurs = score.report.entries.filter { $0.kind == "notation: slur" }
+        let score = try compile(MusicXMLScoreFixtures.repeatedUnsupportedMarkingAcrossParts())
+        let bowings = score.report.entries.filter { $0.kind == "technique: up-bow" }
 
-        XCTAssertEqual(slurs.count, 4, "one entry per part, not one per slur")
-        XCTAssertTrue(slurs.allSatisfy { $0.occurrenceCount == 32 })
-        XCTAssertEqual(Set(slurs.map(\.firstLocation.partName)).count, 4)
+        XCTAssertEqual(bowings.count, 4, "one entry per part, not one per marking")
+        XCTAssertTrue(bowings.allSatisfy { $0.occurrenceCount == 8 })
+        XCTAssertEqual(Set(bowings.map(\.firstLocation.partName)).count, 4)
+    }
+
+    /// The quartet's slurs are realised now, so the reference set's most
+    /// heavily marked score reports nothing at all. That is the point: the
+    /// report is a list of what the owner is *missing*.
+    func testTheQuartetsSlursAreRealisedAndThereforeUnreported() throws {
+        let score = try compile(MusicXMLScoreFixtures.stringQuartetMovement())
+        XCTAssertTrue(
+            score.report.isEmpty,
+            "unexpected report entries: \(score.report.entries.map(\.kind))"
+        )
+        XCTAssertTrue(
+            score.lines.allSatisfy { line in line.notes.contains { $0.slurStartCount > 0 } },
+            "every part carries slurs and every part must have captured them"
+        )
     }
 
     func testAnOrdinaryScoreWithNoExoticNotationReportsNothing() throws {
@@ -193,7 +208,8 @@ final class ScoreCompilerTests: XCTestCase {
     }
 
     func testReportOrderIsCanonicalRatherThanDictionaryOrder() throws {
-        let score = try compile(MusicXMLScoreFixtures.stringQuartetMovement())
+        let score = try compile(MusicXMLScoreFixtures.repeatedUnsupportedMarkingAcrossParts())
+        XCTAssertFalse(score.report.entries.isEmpty, "the ordering claim needs entries to order")
         let keys = score.report.entries.map { "\($0.category.rawValue)|\($0.kind)" }
         XCTAssertEqual(keys, keys.sorted(), "entries must be emitted in canonical order")
     }
@@ -511,12 +527,12 @@ final class ScoreCompilerTests: XCTestCase {
         }
     }
 
-    func testGraceAndCueNotesAreReportedRatherThanSilentlyDropped() throws {
+    func testAGraceNoteIsAttachedToItsPrincipalAndACueNoteIsReported() throws {
         let measure = ScoreXML.Measure(
             number: "1",
             items: [
                 .attributes(ScoreXML.Attributes(divisions: 4, fifths: 0, time: (4, 4))),
-                .note(ScoreXML.Note(pitch: "B3", duration: 0, extraChildren: ["<grace/>"])),
+                .note(ScoreXML.graceNote(pitch: "B3", type: "16th", slashed: true)),
                 .note(ScoreXML.Note(pitch: "C4", duration: 16, type: "whole")),
                 .backup(16),
                 .note(ScoreXML.Note(pitch: "E5", duration: 16, voice: "3", extraChildren: ["<cue/>"]))
@@ -526,7 +542,14 @@ final class ScoreCompilerTests: XCTestCase {
             ScoreXML.Score(parts: [ScoreXML.Part(id: "P1", name: "Piano", measures: [measure])]).data()
         )
 
-        XCTAssertTrue(score.report.mentions(kind: "grace note"))
+        // PLY002 sounds grace notes, so a grace note is captured on the note
+        // it ornaments rather than reported as lost.
+        XCTAssertFalse(score.report.mentions(kind: "grace note"))
+        let principal = try XCTUnwrap(score.lines.first?.notes.first)
+        XCTAssertEqual(principal.graceNotes.count, 1)
+        XCTAssertEqual(principal.graceNotes.first?.pitch.step, "B")
+        XCTAssertEqual(principal.graceNotes.first?.isAcciaccatura, true)
+
         XCTAssertTrue(score.report.mentions(kind: "cue note"))
         XCTAssertEqual(score.lines.count, 1, "neither becomes a line of its own")
     }

@@ -34,10 +34,15 @@ final class ScoreCompilerPurityTests: XCTestCase {
     ///
     /// Tell them apart by running the suite twice in two processes: a
     /// deliberate change gives the same wrong digest twice.
+    ///
+    /// Re-recorded once, by PLY002: the model gained the expressive fields the
+    /// realizer reads (articulations, ornaments, grace notes, slur counts and
+    /// the score-wide expression events). That is the first of the two reasons
+    /// above, and the four processes these were taken from agreed.
     private static let frozenModelDigests: [String: String] = [
-        "repeatsVoltasAndDaCapo": "1e183de8f7940725b5fbdb6d791c0450aeed99f39d16282cb0f90bbbf368b266",
-        "keyboardFugueExposition": "a2d5cef0a066a541e4213204f282942254a5d45cdfd7995d97928364159f73ce",
-        "tempoChangesAndFermata": "bc3ca2f1b71cd8d1bdaeb7a1d5cdc761209722845608891d00cf580b5cac6145"
+        "repeatsVoltasAndDaCapo": "21d119726e0e3c578d92e2a5b5316a9bb3f6f4214f4fc5bb701c19ca6ebc9b85",
+        "keyboardFugueExposition": "253bf14e02e27bcc42c595c0f7392f286d3d12fe844ca0927801a9968f450f3a",
+        "tempoChangesAndFermata": "b050bf37e681be4c14ff75633a62d1aefe7720a8155ec7ecce3b73001f62c596"
     ]
 
     func testTheCompiledModelBytesAreFrozenAcrossProcesses() throws {
@@ -66,6 +71,7 @@ final class ScoreCompilerPurityTests: XCTestCase {
     private static let compilerSourceFiles = [
         "MusicXMLDocument.swift",
         "ScoreModel.swift",
+        "ScoreExpression.swift",
         "ScoreStructure.swift",
         "ScoreCompiler.swift",
         "TempoMap.swift",

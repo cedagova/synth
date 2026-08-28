@@ -47,11 +47,18 @@ public enum ScoreCompilationError: Error, Equatable, LocalizedError {
 ///   the export-equals-playback promise (REQ-026) checkable rather than
 ///   hopeful.
 ///
-/// Compilation covers the structural tier (AD4/D4): pitches, rhythms, key and
-/// time, tempo and its changes, repeats, endings, `D.C.`/`D.S.`/coda/`Fine`,
-/// and fermatas. Expressive notation — dynamics, articulations, ornaments,
-/// slurs — is PLY002's, and every instance of it is written into the report
-/// rather than dropped.
+/// Compilation covers the structural tier (AD4/D4) and the *capture* of the
+/// expressive tier. Structure — pitches, rhythms, key and time, tempo and its
+/// changes, repeats, endings, `D.C.`/`D.S.`/coda/`Fine`, fermatas — is turned
+/// into the playback timeline here. Expressive notation — dynamics, hairpins,
+/// articulations, slurs, pedal, grace notes and ornaments — is read into the
+/// model for `PerformanceRealizer` to sound; only what neither stage can turn
+/// into audible behaviour is written into the report.
+///
+/// The report is honest in both directions: a marking the realizer honours is
+/// deliberately absent from it, and a marking neither stage understands is
+/// always present. Capture and reporting are decided in the same place so the
+/// two can never drift apart.
 public struct ScoreCompiler: Sendable {
     /// Finest tick grid the compiler will use. Reached only by a score whose
     /// `divisions` values have a wildly composite least common multiple; the
@@ -232,6 +239,14 @@ private struct Compilation {
     /// Fermata spans, per source measure.
     var fermataSpans: [FermataSpan] = []
 
+    /// Dynamics, hairpins and pedal markings, in the order they were met.
+    /// Sorted into a canonical order before they reach the model.
+    var expressionEvents: [ScoreExpressionEvent] = []
+
+    /// Grace notes read but not yet attached to the principal note they
+    /// precede, per line.
+    var pendingGraceNotes: [LineKey: PendingGrace] = [:]
+
     var partNames: [String: String] = [:]
 
     /// Part identifiers already claimed, so no two parts can mint the same
@@ -254,6 +269,12 @@ private struct Compilation {
         let measureIndex: Int
         let startTicks: Int
         let durationTicks: Int
+    }
+
+    /// Grace notes waiting for the note they ornament.
+    struct PendingGrace {
+        var notes: [ScoreGraceNote]
+        var location: ScoreLocation
     }
 
     mutating func run() throws -> CompiledScore {
@@ -298,6 +319,7 @@ private struct Compilation {
             sourceMeasures: sourceMeasures,
             playbackMeasures: playbackMeasures,
             tempoMap: tempoMap,
+            expressionEvents: expressionEvents.sorted(),
             report: report.finish()
         )
     }
@@ -379,6 +401,7 @@ private struct Compilation {
                 state: &state
             )
         }
+        flushPendingGraceNotes()
     }
 
     /// The identifier this part's lines are derived from, guaranteed unique
@@ -468,7 +491,14 @@ private struct Compilation {
                 furthest = max(furthest, cursor)
 
             case "direction":
-                readDirection(element, measureIndex: measureIndex, cursor: cursor, at: location)
+                readDirection(
+                    element,
+                    measureIndex: measureIndex,
+                    partID: partID,
+                    cursor: cursor,
+                    state: state,
+                    at: location
+                )
 
             case "sound":
                 readSound(element, measureIndex: measureIndex, cursor: cursor)
@@ -597,13 +627,17 @@ private struct Compilation {
         lastOnset: inout Int,
         at location: ScoreLocation
     ) {
-        if note.child("grace") != nil {
-            report.record(
-                .notHonored,
-                kind: "grace note",
-                at: location,
-                detail: "ornamental notes are realised in a later stage"
-            )
+        let staffOfNote = note.childInt("staff") ?? 1
+        let voiceOfNote = note.childText("voice") ?? "1"
+        let lineKey = LineKey(
+            partIndex: partIndex,
+            partID: partID,
+            staff: staffOfNote,
+            voice: voiceOfNote
+        )
+
+        if let grace = note.child("grace") {
+            readGraceNote(note, grace: grace, key: lineKey, state: state, at: location)
             return
         }
         if note.child("cue") != nil {
@@ -618,9 +652,7 @@ private struct Compilation {
 
         let isChord = note.child("chord") != nil
         let duration = ticks(note.childInt("duration") ?? 0, state: state, at: location)
-        let staff = note.childInt("staff") ?? 1
-        let voice = note.childText("voice") ?? "1"
-        let key = LineKey(partIndex: partIndex, partID: partID, staff: staff, voice: voice)
+        let key = lineKey
 
         // A chord member sounds with the note before it. Only the first note
         // of the chord moved the cursor, so the others must not move it again.
@@ -660,12 +692,21 @@ private struct Compilation {
             pitch = nil
         }
 
-        var fermata = false
-        if let notations = note.child("notations") {
-            fermata = readNotations(notations, at: location)
+        var notations = NoteNotations()
+        for element in note.childrenNamed("notations") {
+            readNotations(element, into: &notations, at: location)
         }
         for child in note.children where !Self.knownNoteChildren.contains(child.name) {
             report.record(.notHonored, kind: "unrecognised element: \(child.name)", at: location)
+        }
+        let fermata = notations.fermata
+
+        // Grace notes belong to the principal note they precede. A chord's
+        // grace notes are printed once, before its first note, so only that
+        // note takes them.
+        var graceNotes: [ScoreGraceNote] = []
+        if !isChord, let pending = pendingGraceNotes.removeValue(forKey: key) {
+            graceNotes = pending.notes
         }
 
         notesByLine[key, default: []].append(
@@ -677,7 +718,13 @@ private struct Compilation {
                 isChordMember: isChord,
                 tiesForward: note.childrenNamed("tie").contains { $0.attribute("type") == "start" },
                 tiesBackward: note.childrenNamed("tie").contains { $0.attribute("type") == "stop" },
-                hasFermata: fermata
+                hasFermata: fermata,
+                articulations: notations.articulations.sorted(),
+                ornaments: notations.ornaments,
+                graceNotes: graceNotes,
+                slurStartCount: notations.slurStartCount,
+                slurStopCount: notations.slurStopCount,
+                dynamics: notations.dynamics.sorted()
             )
         )
         if notesByLine[key]?.count == 1 { lineOrder.append(key) }
@@ -701,44 +748,262 @@ private struct Compilation {
         "play", "listen", "instrument", "footnote", "level"
     ]
 
-    /// Reads `<notations>`, returning whether a fermata is attached.
+    /// Everything one note's `<notations>` elements say about how it sounds.
+    struct NoteNotations {
+        var fermata = false
+        var articulations: [ScoreArticulation] = []
+        var ornaments: [ScoreOrnament] = []
+        var slurStartCount = 0
+        var slurStopCount = 0
+        var dynamics: [ScoreDynamic] = []
+    }
+
+    /// Reads `<notations>` into `result`, reporting only what the realizer
+    /// cannot sound.
     private mutating func readNotations(
         _ notations: MusicXMLElement,
+        into result: inout NoteNotations,
         at location: ScoreLocation
-    ) -> Bool {
-        var fermata = false
+    ) {
         for element in notations.children {
             switch element.name {
             case "fermata":
-                fermata = true
+                result.fermata = true
 
             case "tied", "tuplet", "footnote", "level", "accidental-mark":
                 continue // rendering of something already honoured
 
-            case "ornaments", "articulations", "technical", "dynamics":
-                let label = Self.notationLabel(element.name)
+            case "slur":
+                switch element.attribute("type") {
+                case "start": result.slurStartCount += 1
+                case "stop": result.slurStopCount += 1
+                case "continue", .none: continue
+                case .some(let type):
+                    report.record(.notHonored, kind: "slur type: \(type)", at: location)
+                }
+
+            case "ornaments":
+                readOrnaments(element, into: &result, at: location)
+
+            case "articulations":
                 if element.children.isEmpty {
-                    report.record(.notHonored, kind: label, at: location)
+                    report.record(.notHonored, kind: "articulation", at: location)
+                }
+                for child in element.children {
+                    if let articulation = ScoreArticulation.byElementName[child.name] {
+                        if !result.articulations.contains(articulation) {
+                            result.articulations.append(articulation)
+                        }
+                    } else {
+                        report.record(.notHonored, kind: "articulation: \(child.name)", at: location)
+                    }
+                }
+
+            case "dynamics":
+                if element.children.isEmpty {
+                    report.record(.notHonored, kind: "dynamic", at: location)
+                }
+                for child in element.children {
+                    if let dynamic = ScoreDynamic.byElementName[child.name] {
+                        if !result.dynamics.contains(dynamic) { result.dynamics.append(dynamic) }
+                    } else {
+                        report.record(.notHonored, kind: "dynamic: \(child.name)", at: location)
+                    }
+                }
+
+            case "technical":
+                if element.children.isEmpty {
+                    report.record(.notHonored, kind: "technique", at: location)
                 }
                 for child in element.children where child.name != "accidental-mark" {
-                    report.record(.notHonored, kind: "\(label): \(child.name)", at: location)
+                    report.record(.notHonored, kind: "technique: \(child.name)", at: location)
                 }
 
             default:
                 report.record(.notHonored, kind: "notation: \(element.name)", at: location)
             }
         }
-        return fermata
     }
 
-    private static func notationLabel(_ name: String) -> String {
-        switch name {
-        case "ornaments": return "ornament"
-        case "articulations": return "articulation"
-        case "technical": return "technique"
-        case "dynamics": return "dynamic"
-        default: return name
+    /// Reads `<ornaments>`, pairing each ornament with the accidental marks
+    /// printed against it.
+    ///
+    /// In MusicXML the accidental marks *follow* the ornament they alter, and
+    /// their `placement` says which auxiliary note they belong to. Scanning
+    /// forward from each ornament is therefore the only reading that gets a
+    /// trill with a printed sharp over it right.
+    private mutating func readOrnaments(
+        _ ornaments: MusicXMLElement,
+        into result: inout NoteNotations,
+        at location: ScoreLocation
+    ) {
+        let children = ornaments.children
+        if children.isEmpty {
+            report.record(.notHonored, kind: "ornament", at: location)
+            return
         }
+
+        // A wavy line draws the trill a `<trill-mark>` already states. Alone
+        // it is an unlabelled squiggle, and guessing at one would invent an
+        // ornament the engraver did not write.
+        let hasTrillMark = children.contains {
+            ScoreOrnamentKind.byElementName[$0.name] == .trill
+        }
+
+        for (index, child) in children.enumerated() {
+            if child.name == "accidental-mark" { continue }
+            if child.name == "wavy-line" {
+                if !hasTrillMark {
+                    report.record(.notHonored, kind: "ornament: wavy-line", at: location)
+                }
+                continue
+            }
+            guard let kind = ScoreOrnamentKind.byElementName[child.name] else {
+                report.record(.notHonored, kind: "ornament: \(child.name)", at: location)
+                continue
+            }
+
+            var upper: Int?
+            var lower: Int?
+            var scan = index + 1
+            while scan < children.count, children[scan].name == "accidental-mark" {
+                let mark = children[scan]
+                if let alter = Self.accidentalAlteration(mark.text) {
+                    if mark.attribute("placement") == "below" { lower = alter } else { upper = alter }
+                } else {
+                    report.record(
+                        .notHonored,
+                        kind: "ornament accidental: \(mark.text)",
+                        at: location,
+                        detail: "the auxiliary note takes the key signature instead"
+                    )
+                }
+                scan += 1
+            }
+
+            result.ornaments.append(
+                ScoreOrnament(kind: kind, upperAlter: upper, lowerAlter: lower)
+            )
+        }
+    }
+
+    /// `<accidental-mark>` text to a semitone alteration.
+    static func accidentalAlteration(_ text: String) -> Int? {
+        switch text {
+        case "natural": return 0
+        case "sharp": return 1
+        case "flat": return -1
+        case "double-sharp", "sharp-sharp": return 2
+        case "flat-flat", "double-flat": return -2
+        default: return nil
+        }
+    }
+
+    /// Reads one `<note>` carrying `<grace>` and holds it for the principal
+    /// note it precedes.
+    private mutating func readGraceNote(
+        _ note: MusicXMLElement,
+        grace: MusicXMLElement,
+        key: LineKey,
+        state: PartState,
+        at location: ScoreLocation
+    ) {
+        guard let element = note.child("pitch") else {
+            // A grace rest is not a thing a player can sound; a grace note
+            // with no pitch at all is a damaged file.
+            report.record(
+                .notHonored,
+                kind: "grace note without a pitch",
+                at: location,
+                detail: "there is nothing for it to sound"
+            )
+            return
+        }
+        let reading = Self.pitch(from: element, transposeSemitones: state.transposeSemitones)
+        guard let pitch = reading.pitch else {
+            report.record(
+                .notHonored,
+                kind: "grace note without a pitch",
+                at: location,
+                detail: "there is nothing for it to sound"
+            )
+            return
+        }
+        if reading.isMicrotonal {
+            report.record(
+                .notHonored,
+                kind: "microtonal alteration",
+                at: location,
+                detail: "rounded to the nearest semitone"
+            )
+        }
+
+        var notations = NoteNotations()
+        for element in note.childrenNamed("notations") {
+            readNotations(element, into: &notations, at: location)
+        }
+
+        let graceNote = ScoreGraceNote(
+            pitch: pitch,
+            isAcciaccatura: grace.attributeIsYes("slash"),
+            notatedTicks: Self.notatedTicks(
+                ofType: note.childText("type"),
+                dots: note.childrenNamed("dot").count,
+                ticksPerQuarter: ticksPerQuarter
+            ),
+            stealTimeFollowingPercent: Self.percentage(grace.attribute("steal-time-following")),
+            stealTimePreviousPercent: Self.percentage(grace.attribute("steal-time-previous")),
+            isChordMember: note.child("chord") != nil
+        )
+
+        pendingGraceNotes[key, default: PendingGrace(notes: [], location: location)]
+            .notes.append(graceNote)
+    }
+
+    /// A whole-number percentage in 0…100, or nil.
+    static func percentage(_ text: String?) -> Int? {
+        guard let value = text.flatMap({ Double($0) }), value.isFinite, value >= 0, value <= 100
+        else { return nil }
+        return Int(value.rounded())
+    }
+
+    /// Ticks for a printed `<type>` with `dots` augmentation dots.
+    static func notatedTicks(ofType type: String?, dots: Int, ticksPerQuarter: Int) -> Int {
+        guard let type, let ratio = noteTypeInQuarters[type] else { return 0 }
+        var value = ticksPerQuarter * ratio.numerator / ratio.denominator
+        var addition = value / 2
+        for _ in 0..<min(dots, 4) {
+            value += addition
+            addition /= 2
+        }
+        return max(0, value)
+    }
+
+    /// Printed note values as an exact fraction of a quarter note. Integral so
+    /// nothing on this path rounds twice.
+    static let noteTypeInQuarters: [String: (numerator: Int, denominator: Int)] = [
+        "breve": (8, 1), "whole": (4, 1), "half": (2, 1), "quarter": (1, 1),
+        "eighth": (1, 2), "16th": (1, 4), "32nd": (1, 8), "64th": (1, 16),
+        "128th": (1, 32), "256th": (1, 64)
+    ]
+
+    /// Reports grace notes at the end of a part that never found a principal
+    /// note to ornament.
+    private mutating func flushPendingGraceNotes() {
+        for (_, pending) in pendingGraceNotes.sorted(by: { left, right in
+            (left.key.partIndex, left.key.staff, left.key.voice)
+                < (right.key.partIndex, right.key.staff, right.key.voice)
+        }) {
+            for _ in pending.notes {
+                report.record(
+                    .notHonored,
+                    kind: "grace note with no note to ornament",
+                    at: pending.location,
+                    detail: "no note follows it in this voice"
+                )
+            }
+        }
+        pendingGraceNotes.removeAll()
     }
 
     /// Builds a sounding pitch, applying the part's transposition, and says
@@ -789,10 +1054,41 @@ private struct Compilation {
     private mutating func readDirection(
         _ direction: MusicXMLElement,
         measureIndex: Int,
+        partID: String,
         cursor: Int,
+        state: PartState,
         at location: ScoreLocation
     ) {
         var words: [String] = []
+
+        // `<offset>` moves a direction away from where it is anchored, in the
+        // part's own divisions. Ignoring it would put a hairpin's end on the
+        // wrong beat in every file an engraver nudged by hand.
+        let offset = direction.childInt("offset").map {
+            $0 >= 0
+                ? ticks($0, state: state, at: location)
+                : -ticks(-$0, state: state, at: location)
+        } ?? 0
+        let tick = max(0, cursor + offset)
+        let staff = direction.childInt("staff") ?? ScoreExpressionEvent.allStaves
+
+        func record(
+            _ kind: ScoreExpressionKind,
+            dynamic: ScoreDynamic? = nil,
+            wedge: ScoreWedgeType? = nil
+        ) {
+            expressionEvents.append(
+                ScoreExpressionEvent(
+                    sourceMeasureIndex: measureIndex,
+                    startTicks: tick,
+                    partID: partID,
+                    staff: staff,
+                    kind: kind,
+                    dynamic: dynamic,
+                    wedge: wedge
+                )
+            )
+        }
 
         for type in direction.childrenNamed("direction-type") {
             for element in type.children {
@@ -814,22 +1110,38 @@ private struct Compilation {
                     }
 
                 case "dynamics":
-                    let mark = element.children.first?.name ?? "dynamic"
-                    report.record(.notHonored, kind: "dynamic: \(mark)", at: location)
+                    if element.children.isEmpty {
+                        report.record(.notHonored, kind: "dynamic", at: location)
+                    }
+                    for child in element.children {
+                        if let dynamic = ScoreDynamic.byElementName[child.name] {
+                            record(.dynamic, dynamic: dynamic)
+                        } else {
+                            report.record(.notHonored, kind: "dynamic: \(child.name)", at: location)
+                        }
+                    }
 
                 case "wedge":
-                    report.record(
-                        .notHonored,
-                        kind: "hairpin (\(element.attribute("type") ?? "wedge"))",
-                        at: location
-                    )
+                    switch element.attribute("type") {
+                    case "crescendo": record(.wedgeStart, wedge: .crescendo)
+                    case "diminuendo": record(.wedgeStart, wedge: .diminuendo)
+                    case "stop": record(.wedgeStop)
+                    case "continue", .none: continue
+                    case .some(let type):
+                        report.record(.notHonored, kind: "hairpin (\(type))", at: location)
+                    }
 
                 case "pedal":
-                    report.record(
-                        .notHonored,
-                        kind: "pedal (\(element.attribute("type") ?? "pedal"))",
-                        at: location
-                    )
+                    // `sostenuto` holds only the notes already down, which
+                    // needs a second pedal state the engine does not have.
+                    switch element.attribute("type") {
+                    case "start": record(.pedalDown)
+                    case "stop", "discontinue": record(.pedalUp)
+                    case "change": record(.pedalChange)
+                    case "continue", "resume", .none: continue
+                    case .some(let type):
+                        report.record(.notHonored, kind: "pedal (\(type))", at: location)
+                    }
 
                 case "octave-shift":
                     report.record(

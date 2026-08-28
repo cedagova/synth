@@ -88,6 +88,81 @@ enum ScoreXML {
         }
     }
 
+    // MARK: Notation shorthands
+
+    /// Raw XML for the expressive `<notations>` children PLY002 realizes.
+    ///
+    /// Written as small builders rather than literals in each test because the
+    /// same handful of markings appears in every expressive fixture, and one
+    /// mistyped element name would silently turn a golden test into a test of
+    /// the report instead.
+    enum Notation {
+        /// `<ornaments><trill-mark/></ornaments>`, optionally with a printed
+        /// accidental over the sign.
+        static func ornament(
+            _ name: String,
+            accidental: String? = nil,
+            placement: String = "above"
+        ) -> String {
+            var body = "<\(name)/>"
+            if let accidental {
+                body += #"<accidental-mark placement="\#(placement)">\#(accidental)</accidental-mark>"#
+            }
+            return "<ornaments>\(body)</ornaments>"
+        }
+
+        /// `<articulations><staccato/><accent/></articulations>`.
+        static func articulations(_ names: [String]) -> String {
+            "<articulations>\(names.map { "<\($0)/>" }.joined())</articulations>"
+        }
+
+        /// `<dynamics><sf/></dynamics>` attached to a note.
+        static func dynamics(_ name: String) -> String {
+            "<dynamics><\(name)/></dynamics>"
+        }
+
+        static func slurStart(_ number: Int = 1) -> String {
+            #"<slur type="start" number="\#(number)"/>"#
+        }
+
+        static func slurStop(_ number: Int = 1) -> String {
+            #"<slur type="stop" number="\#(number)"/>"#
+        }
+    }
+
+    /// A `<note>` carrying `<grace>`.
+    ///
+    /// Grace notes have no `<duration>` in MusicXML — they take their time
+    /// from the notes around them — so this writes none.
+    static func graceNote(
+        pitch: String,
+        type: String = "eighth",
+        slashed: Bool = false,
+        voice: String = "1",
+        staff: Int? = nil,
+        isChord: Bool = false,
+        stealTimeFollowing: Int? = nil,
+        stealTimePrevious: Int? = nil
+    ) -> Note {
+        var attributes = ""
+        if slashed { attributes += #" slash="yes""# }
+        if let stealTimeFollowing {
+            attributes += #" steal-time-following="\#(stealTimeFollowing)""#
+        }
+        if let stealTimePrevious {
+            attributes += #" steal-time-previous="\#(stealTimePrevious)""#
+        }
+        return Note(
+            pitch: pitch,
+            duration: 0,
+            type: type,
+            voice: voice,
+            staff: staff,
+            isChord: isChord,
+            extraChildren: ["<grace\(attributes)/>"]
+        )
+    }
+
     /// `C4`, `F#5`, `Eb3` → step, alter, octave.
     static func parsePitch(_ text: String) -> (step: String, alter: Int, octave: Int)? {
         var characters = Array(text)
@@ -143,6 +218,12 @@ enum ScoreXML {
         var segno = false
         var coda = false
 
+        /// `<staff>`: the one staff of the part this direction governs.
+        var staff: Int?
+
+        /// `<offset>`, in the part's own divisions.
+        var offset: Int?
+
         /// Attributes for a `<sound>` element, e.g. `["tempo": "96"]`.
         var sound: [String: String] = [:]
 
@@ -163,6 +244,8 @@ enum ScoreXML {
             types.append(contentsOf: raw)
 
             var body = types.map { "<direction-type>\($0)</direction-type>" }.joined()
+            if let offset { body += "<offset>\(offset)</offset>" }
+            if let staff { body += "<staff>\(staff)</staff>" }
             if !sound.isEmpty {
                 let attributes = sound.keys.sorted()
                     .map { #"\#($0)="\#(ScoreXML.escape(sound[$0] ?? ""))""# }
@@ -170,6 +253,23 @@ enum ScoreXML {
                 body += "<sound \(attributes)/>"
             }
             return body.isEmpty ? "" : #"<direction placement="above">\#(body)</direction>"#
+        }
+
+        // MARK: Expressive shorthands
+
+        /// `<dynamics><p/></dynamics>` and friends.
+        static func dynamic(_ mark: String, staff: Int? = nil) -> Direction {
+            Direction(staff: staff, raw: ["<dynamics><\(mark)/></dynamics>"])
+        }
+
+        /// `<wedge type="crescendo"/>` and friends.
+        static func wedge(_ type: String, staff: Int? = nil, offset: Int? = nil) -> Direction {
+            Direction(staff: staff, offset: offset, raw: [#"<wedge type="\#(type)"/>"#])
+        }
+
+        /// `<pedal type="start"/>` and friends.
+        static func pedal(_ type: String, staff: Int? = nil) -> Direction {
+            Direction(staff: staff, raw: [#"<pedal type="\#(type)" line="yes"/>"#])
         }
     }
 
@@ -436,8 +536,8 @@ enum MusicXMLScoreFixtures {
     }
 
     /// A four-part string quartet movement: one part per instrument, with the
-    /// slurs and articulations a real edition carries — which this build does
-    /// not honour and therefore reports.
+    /// phrase slurs a real edition carries. PLY002 realizes those as legato,
+    /// so the reference set exercises the slur path at four-part density.
     static func stringQuartetMovement() -> Data {
         let instruments: [(id: String, name: String, abbreviation: String, register: [String])] = [
             ("P1", "Violin I", "Vln. I", ["D5", "F#5", "A5", "D6", "A5", "F#5"]),
@@ -755,10 +855,12 @@ enum MusicXMLScoreFixtures {
     /// A score whose only unusual feature is one unsupported marking, so a
     /// test can assert on exactly that entry.
     ///
-    /// - Parameter marking: raw XML for a `<notations>` child, defaulting to a
-    ///   mordent in measure 2.
+    /// - Parameter marking: raw XML for a `<notations>` child. The default is
+    ///   a `schleifer` — a slide ornament this build genuinely does not
+    ///   realize. It used to be a mordent; PLY002 sounds mordents now, and a
+    ///   fixture named "unsupported" must keep naming something that is.
     static func unsupportedMarking(
-        _ marking: String = "<ornaments><mordent/></ornaments>",
+        _ marking: String = "<ornaments><schleifer/></ornaments>",
         inMeasure markedMeasure: Int = 2
     ) -> Data {
         let measures = (1...3).map { number -> ScoreXML.Measure in
@@ -823,6 +925,541 @@ enum MusicXMLScoreFixtures {
             workTitle: "Contradictory Structure Study",
             composer: "Fixture",
             parts: [ScoreXML.Part(id: "P1", name: "Keyboard", measures: measures)]
+        ).data()
+    }
+
+    /// Several parts carrying the same unsupported marking many times, for the
+    /// report's aggregation rule.
+    ///
+    /// The string quartet used to serve this, on its slurs. PLY002 realizes
+    /// slurs, so proving aggregation now needs a fixture whose marking is
+    /// genuinely beyond this build — otherwise the test would quietly stop
+    /// testing anything.
+    static func repeatedUnsupportedMarkingAcrossParts(
+        partCount: Int = 4,
+        markingsPerPart: Int = 8
+    ) -> Data {
+        let parts = (0..<partCount).map { partIndex -> ScoreXML.Part in
+            let measures = (0..<markingsPerPart).map { measureIndex -> ScoreXML.Measure in
+                var items: [ScoreXML.Item] = []
+                if measureIndex == 0 {
+                    items.append(
+                        .attributes(
+                            ScoreXML.Attributes(
+                                divisions: divisions,
+                                fifths: 0,
+                                time: (4, 4),
+                                clefs: [("G", 2)]
+                            )
+                        )
+                    )
+                }
+                items.append(
+                    .note(
+                        ScoreXML.Note(
+                            pitch: "C4",
+                            duration: whole,
+                            type: "whole",
+                            notations: ["<technical><up-bow/></technical>"]
+                        )
+                    )
+                )
+                return ScoreXML.Measure(number: String(measureIndex + 1), items: items)
+            }
+            return ScoreXML.Part(
+                id: "P\(partIndex + 1)",
+                name: "Instrument \(partIndex + 1)",
+                measures: measures
+            )
+        }
+
+        return ScoreXML.Score(
+            workTitle: "Aggregation Study",
+            composer: "Fixture",
+            parts: parts
+        ).data()
+    }
+
+    // MARK: Expressive criterion fixtures (PLY002)
+
+    /// Divisions for the expressive fixtures: 24 to the quarter, so a
+    /// thirty-second note — the grid an ornament is realized on — is a whole
+    /// number of ticks and a failing assertion reads as music.
+    static let fineDivisions = 24
+    static let fineQuarter = 24
+    static let fineEighth = 12
+    static let fineHalf = 48
+    static let fineWhole = 96
+
+    /// One half note per ornament sign, in C major so every auxiliary note is
+    /// a white key and the expected figure is obvious by eye.
+    ///
+    /// | measure | sign | expected figure from C5 |
+    /// | --- | --- | --- |
+    /// | 1 | `trill-mark` | C5 D5 C5 D5 … ending on C5 |
+    /// | 2 | `mordent` | C5 B4 C5 |
+    /// | 3 | `inverted-mordent` | C5 D5 C5 |
+    /// | 4 | `turn` | D5 C5 B4 C5 |
+    /// | 5 | `inverted-turn` | B4 C5 D5 C5 |
+    static func ornamentStudy() -> Data {
+        let signs = ["trill-mark", "mordent", "inverted-mordent", "turn", "inverted-turn"]
+
+        let measures = signs.enumerated().map { index, sign -> ScoreXML.Measure in
+            var items: [ScoreXML.Item] = []
+            if index == 0 {
+                items.append(
+                    .attributes(
+                        ScoreXML.Attributes(
+                            divisions: fineDivisions,
+                            fifths: 0,
+                            time: (4, 4),
+                            clefs: [("G", 2)]
+                        )
+                    )
+                )
+                items.append(.direction(ScoreXML.Direction(sound: ["tempo": "60"])))
+            }
+            items.append(
+                .note(
+                    ScoreXML.Note(
+                        pitch: "C5",
+                        duration: fineHalf,
+                        type: "half",
+                        notations: [ScoreXML.Notation.ornament(sign)]
+                    )
+                )
+            )
+            items.append(.note(ScoreXML.Note(pitch: "G4", duration: fineHalf, type: "half")))
+            return ScoreXML.Measure(number: String(index + 1), items: items)
+        }
+
+        return ScoreXML.Score(
+            workTitle: "Ornament Study",
+            composer: "Fixture",
+            parts: [ScoreXML.Part(id: "P1", name: "Flute", measures: measures)]
+        ).data()
+    }
+
+    /// A crescendo written the way an engraver writes one: `p`, a hairpin over
+    /// two measures, and the `f` it arrives at printed on the downbeat after
+    /// the hairpin closes.
+    ///
+    /// Sixteen eighth notes fall inside the span, which is enough for the
+    /// loudness to be measurably rising note by note rather than in two steps.
+    /// - Parameter diminuendo: writes the mirror image — `f`, a diminuendo,
+    ///   `p` — so the same fixture proves the downward direction too.
+    static func hairpinSpan(diminuendo: Bool = false) -> Data {
+        let opening = diminuendo ? "f" : "p"
+        let closing = diminuendo ? "p" : "f"
+        let wedge = diminuendo ? "diminuendo" : "crescendo"
+        let pitches = ["C4", "D4", "E4", "F4", "G4", "A4", "B4", "C5"]
+
+        var measures: [ScoreXML.Measure] = []
+        for measureIndex in 0..<3 {
+            var items: [ScoreXML.Item] = []
+            if measureIndex == 0 {
+                items.append(
+                    .attributes(
+                        ScoreXML.Attributes(
+                            divisions: fineDivisions,
+                            fifths: 0,
+                            time: (4, 4),
+                            clefs: [("G", 2)]
+                        )
+                    )
+                )
+                items.append(.direction(ScoreXML.Direction(sound: ["tempo": "90"])))
+                items.append(.direction(.dynamic(opening)))
+                items.append(.direction(.wedge(wedge)))
+            }
+            if measureIndex == 2 {
+                items.append(.direction(.wedge("stop")))
+                items.append(.direction(.dynamic(closing)))
+            }
+            for step in 0..<8 {
+                items.append(
+                    .note(
+                        ScoreXML.Note(
+                            pitch: pitches[(measureIndex * 8 + step) % pitches.count],
+                            duration: fineEighth,
+                            type: "eighth"
+                        )
+                    )
+                )
+            }
+            measures.append(ScoreXML.Measure(number: String(measureIndex + 1), items: items))
+        }
+
+        return ScoreXML.Score(
+            workTitle: "Hairpin Study",
+            composer: "Fixture",
+            parts: [ScoreXML.Part(id: "P1", name: "Clarinet", measures: measures)]
+        ).data()
+    }
+
+    /// One measure of plain quarters, one of staccato quarters, one slurred
+    /// four-note phrase, and one measure of accents — so each shaping rule can
+    /// be measured against the plain reading of the same rhythm.
+    static func articulationAndSlurStudy() -> Data {
+        let pitches = ["C4", "D4", "E4", "F4"]
+        let markings: [[String]] = [[], ["staccato"], [], ["accent"], ["tenuto"]]
+
+        var measures: [ScoreXML.Measure] = []
+        for (measureIndex, marks) in markings.enumerated() {
+            var items: [ScoreXML.Item] = []
+            if measureIndex == 0 {
+                items.append(
+                    .attributes(
+                        ScoreXML.Attributes(
+                            divisions: fineDivisions,
+                            fifths: 0,
+                            time: (4, 4),
+                            clefs: [("G", 2)]
+                        )
+                    )
+                )
+                items.append(.direction(ScoreXML.Direction(sound: ["tempo": "60"])))
+            }
+            let isSlurred = measureIndex == 2
+            for beat in 0..<4 {
+                var notations = marks.isEmpty ? [] : [ScoreXML.Notation.articulations(marks)]
+                if isSlurred, beat == 0 { notations.append(ScoreXML.Notation.slurStart()) }
+                if isSlurred, beat == 3 { notations.append(ScoreXML.Notation.slurStop()) }
+                items.append(
+                    .note(
+                        ScoreXML.Note(
+                            pitch: pitches[beat],
+                            duration: fineQuarter,
+                            type: "quarter",
+                            notations: notations
+                        )
+                    )
+                )
+            }
+            measures.append(ScoreXML.Measure(number: String(measureIndex + 1), items: items))
+        }
+
+        return ScoreXML.Score(
+            workTitle: "Articulation and Slur Study",
+            composer: "Fixture",
+            parts: [ScoreXML.Part(id: "P1", name: "Oboe", measures: measures)]
+        ).data()
+    }
+
+    /// Pedal down on the first measure, changed on the second, released on the
+    /// third — the three markings a pianist's part actually carries.
+    static func pedalStudy() -> Data {
+        var measures: [ScoreXML.Measure] = []
+        for measureIndex in 0..<4 {
+            var items: [ScoreXML.Item] = []
+            if measureIndex == 0 {
+                items.append(
+                    .attributes(
+                        ScoreXML.Attributes(
+                            divisions: fineDivisions,
+                            fifths: 0,
+                            time: (4, 4),
+                            clefs: [("G", 2)]
+                        )
+                    )
+                )
+                items.append(.direction(ScoreXML.Direction(sound: ["tempo": "60"])))
+                items.append(.direction(.pedal("start")))
+            }
+            if measureIndex == 1 { items.append(.direction(.pedal("change"))) }
+            if measureIndex == 2 { items.append(.direction(.pedal("stop"))) }
+            items.append(
+                .note(ScoreXML.Note(pitch: "C4", duration: fineWhole, type: "whole"))
+            )
+            measures.append(ScoreXML.Measure(number: String(measureIndex + 1), items: items))
+        }
+
+        return ScoreXML.Score(
+            workTitle: "Pedal Study",
+            composer: "Fixture",
+            parts: [ScoreXML.Part(id: "P1", name: "Piano", measures: measures)]
+        ).data()
+    }
+
+    /// An acciaccatura, an appoggiatura, and a two-note grace group, each
+    /// before a plain half note.
+    static func graceNoteStudy() -> Data {
+        var measures: [ScoreXML.Measure] = []
+        for measureIndex in 0..<3 {
+            var items: [ScoreXML.Item] = []
+            if measureIndex == 0 {
+                items.append(
+                    .attributes(
+                        ScoreXML.Attributes(
+                            divisions: fineDivisions,
+                            fifths: 0,
+                            time: (4, 4),
+                            clefs: [("G", 2)]
+                        )
+                    )
+                )
+                items.append(.direction(ScoreXML.Direction(sound: ["tempo": "60"])))
+            }
+            switch measureIndex {
+            case 0:
+                items.append(.note(ScoreXML.graceNote(pitch: "B4", type: "16th", slashed: true)))
+            case 1:
+                items.append(.note(ScoreXML.graceNote(pitch: "D5", type: "quarter")))
+            default:
+                items.append(.note(ScoreXML.graceNote(pitch: "A4", type: "16th", slashed: true)))
+                items.append(.note(ScoreXML.graceNote(pitch: "B4", type: "16th", slashed: true)))
+            }
+            items.append(.note(ScoreXML.Note(pitch: "C5", duration: fineHalf, type: "half")))
+            items.append(.note(ScoreXML.Note(pitch: "G4", duration: fineHalf, type: "half")))
+            measures.append(ScoreXML.Measure(number: String(measureIndex + 1), items: items))
+        }
+
+        return ScoreXML.Score(
+            workTitle: "Grace Note Study",
+            composer: "Fixture",
+            parts: [ScoreXML.Part(id: "P1", name: "Violin", measures: measures)]
+        ).data()
+    }
+
+    /// Ornaments and grace groups at a tempo fast enough that their notes are
+    /// only milliseconds apart, for the humanization ordering guard.
+    ///
+    /// The point of the fixture is the *spacing*: a trill's notes sit a
+    /// thirty-second apart and a crushed grace group can collapse to a tick or
+    /// two, so an absolute timing jitter reorders them long before it does
+    /// anything to a whole note. At ♩=200 a thirty-second is 37.5 ms, well
+    /// inside the humanization range — which is exactly the case the ordinary
+    /// fixtures at ♩=60–90 never reach.
+    ///
+    /// - Parameter beatsPerMinute: the quicker this is, the tighter the figures
+    ///   and the harder the guard is pressed.
+    static func fastOrnamentsAndGraceNotes(beatsPerMinute: Int = 200) -> Data {
+        var measures: [ScoreXML.Measure] = []
+        for measureIndex in 0..<4 {
+            var items: [ScoreXML.Item] = []
+            if measureIndex == 0 {
+                items.append(
+                    .attributes(
+                        ScoreXML.Attributes(
+                            divisions: fineDivisions,
+                            fifths: 0,
+                            time: (4, 4),
+                            clefs: [("G", 2)]
+                        )
+                    )
+                )
+                items.append(
+                    .direction(
+                        ScoreXML.Direction(
+                            metronome: ("quarter", beatsPerMinute),
+                            sound: ["tempo": String(beatsPerMinute)]
+                        )
+                    )
+                )
+            }
+
+            // A trilled quarter; a three-note crushed grace group before an
+            // eighth; a turned quarter; and then the pathological case — a
+            // grace group before a thirty-second, where the "three quarters of
+            // the principal" cap collapses the group to one tick a note.
+            items.append(
+                .note(
+                    ScoreXML.Note(
+                        pitch: "C5",
+                        duration: fineQuarter,
+                        type: "quarter",
+                        notations: [ScoreXML.Notation.ornament("trill-mark")]
+                    )
+                )
+            )
+            items.append(.note(ScoreXML.graceNote(pitch: "F4", type: "32nd", slashed: true)))
+            items.append(.note(ScoreXML.graceNote(pitch: "G4", type: "32nd", slashed: true)))
+            items.append(.note(ScoreXML.graceNote(pitch: "A4", type: "32nd", slashed: true)))
+            items.append(
+                .note(ScoreXML.Note(pitch: "B4", duration: fineEighth, type: "eighth"))
+            )
+            items.append(
+                .note(
+                    ScoreXML.Note(
+                        pitch: "D5",
+                        duration: fineQuarter,
+                        type: "quarter",
+                        notations: [ScoreXML.Notation.ornament("turn")]
+                    )
+                )
+            )
+            items.append(.note(ScoreXML.graceNote(pitch: "C5", type: "32nd", slashed: true)))
+            items.append(.note(ScoreXML.graceNote(pitch: "D5", type: "32nd", slashed: true)))
+            items.append(
+                .note(ScoreXML.Note(pitch: "F5", duration: fineQuarter / 8, type: "32nd"))
+            )
+            items.append(
+                .note(ScoreXML.Note(pitch: "E5", duration: fineQuarter / 8, type: "32nd"))
+            )
+            items.append(.note(ScoreXML.Note(pitch: "G5", duration: fineQuarter, type: "quarter")))
+            items.append(
+                .note(ScoreXML.Note(pitch: "A5", duration: fineQuarter / 4, type: "16th"))
+            )
+            measures.append(ScoreXML.Measure(number: String(measureIndex + 1), items: items))
+        }
+
+        return ScoreXML.Score(
+            workTitle: "Fast Ornament Study",
+            composer: "Fixture",
+            parts: [ScoreXML.Part(id: "P1", name: "Piccolo", measures: measures)]
+        ).data()
+    }
+
+    /// The increment's expressive reference piece: one keyboard part, two
+    /// staves, two voices per staff, at the density of a real edition.
+    ///
+    /// Everything REQ-011 names is present and everything is present more than
+    /// once, so a realization bug shows up as a pattern rather than as one odd
+    /// event: dynamics and hairpins on both staves, pedal across the whole
+    /// piece, slurred phrases in the right hand, articulations in the left,
+    /// ornaments at four places, and grace notes at two.
+    ///
+    /// - Parameter measureCount: how far the piece runs. The reference length
+    ///   is 16 measures; PLY003 can turn it up for a load test.
+    static func expressiveKeyboardPiece(measureCount: Int = 16) -> Data {
+        precondition(measureCount >= 8)
+
+        let treble = ["C5", "D5", "E5", "F5", "G5", "A5", "B5", "C6"]
+        let trebleInner = ["E4", "F4", "G4", "A4", "B4", "C5", "D5", "E5"]
+        let bass = ["C3", "G3", "E3", "G3", "F3", "A3", "D3", "G3"]
+        let ornamentSigns = ["trill-mark", "mordent", "turn", "inverted-mordent"]
+
+        var measures: [ScoreXML.Measure] = []
+        for measureIndex in 0..<measureCount {
+            var items: [ScoreXML.Item] = []
+
+            if measureIndex == 0 {
+                items.append(
+                    .attributes(
+                        ScoreXML.Attributes(
+                            divisions: fineDivisions,
+                            fifths: -3,
+                            time: (4, 4),
+                            staves: 2,
+                            clefs: [("G", 2), ("F", 4)]
+                        )
+                    )
+                )
+                items.append(
+                    .direction(
+                        ScoreXML.Direction(
+                            words: "Andante",
+                            metronome: ("quarter", 76),
+                            sound: ["tempo": "76"]
+                        )
+                    )
+                )
+                items.append(.direction(.dynamic("mp", staff: 1)))
+                items.append(.direction(.dynamic("p", staff: 2)))
+                items.append(.direction(.pedal("start", staff: 2)))
+            }
+            // A hairpin every four measures, with its target printed where it
+            // closes — the shape a real edition has.
+            if measureIndex % 4 == 1 { items.append(.direction(.wedge("crescendo", staff: 1))) }
+            if measureIndex % 4 == 3 {
+                items.append(.direction(.wedge("stop", staff: 1)))
+                items.append(.direction(.dynamic(measureIndex % 8 == 3 ? "f" : "mp", staff: 1)))
+            }
+            if measureIndex % 4 == 2 { items.append(.direction(.pedal("change", staff: 2))) }
+            if measureIndex == measureCount - 1 {
+                items.append(.direction(.pedal("stop", staff: 2)))
+            }
+
+            // Right hand, voice 1: a slurred four-note phrase, ornamented
+            // every fourth measure.
+            for beat in 0..<4 {
+                var notations: [String] = []
+                if beat == 0 { notations.append(ScoreXML.Notation.slurStart()) }
+                if beat == 3 { notations.append(ScoreXML.Notation.slurStop()) }
+                // Ornaments sit inside the hairpin, not beside it: a trill in
+                // the middle of a crescendo is where realization and dynamics
+                // have to agree, and a fixture that kept them apart would
+                // never ask them to.
+                if beat == 0, measureIndex % 4 == 2 {
+                    notations.append(
+                        ScoreXML.Notation.ornament(
+                            ornamentSigns[(measureIndex / 4) % ornamentSigns.count]
+                        )
+                    )
+                }
+                if beat == 0, measureIndex % 8 == 5 {
+                    items.append(
+                        .note(
+                            ScoreXML.graceNote(
+                                pitch: treble[(measureIndex + 7) % treble.count],
+                                type: "16th",
+                                slashed: true,
+                                voice: "1",
+                                staff: 1
+                            )
+                        )
+                    )
+                }
+                items.append(
+                    .note(
+                        ScoreXML.Note(
+                            pitch: treble[(measureIndex + beat) % treble.count],
+                            duration: fineQuarter,
+                            type: "quarter",
+                            voice: "1",
+                            staff: 1,
+                            notations: notations
+                        )
+                    )
+                )
+            }
+
+            // Right hand, voice 2: sustained inner harmony, tied across the
+            // bar so the tie path is exercised at density. A tied pair holds
+            // one pitch for two measures — a tie between two different notes
+            // is not a tie, and a fixture that wrote one would prove nothing.
+            items.append(.backup(fineWhole))
+            items.append(
+                .note(
+                    ScoreXML.Note(
+                        pitch: trebleInner[(measureIndex / 2) % trebleInner.count],
+                        duration: fineWhole,
+                        type: "whole",
+                        voice: "2",
+                        staff: 1,
+                        tieStart: measureIndex.isMultiple(of: 2),
+                        tieStop: !measureIndex.isMultiple(of: 2)
+                    )
+                )
+            )
+
+            // Left hand: staccato and accented quarters under the pedal.
+            items.append(.backup(fineWhole))
+            for beat in 0..<4 {
+                let marks = beat.isMultiple(of: 2) ? ["staccato"] : (beat == 1 ? ["accent"] : [])
+                items.append(
+                    .note(
+                        ScoreXML.Note(
+                            pitch: bass[(measureIndex * 2 + beat) % bass.count],
+                            duration: fineQuarter,
+                            type: "quarter",
+                            voice: "5",
+                            staff: 2,
+                            notations: marks.isEmpty
+                                ? []
+                                : [ScoreXML.Notation.articulations(marks)]
+                        )
+                    )
+                )
+            }
+
+            measures.append(ScoreXML.Measure(number: String(measureIndex + 1), items: items))
+        }
+
+        return ScoreXML.Score(
+            workTitle: "Expressive Keyboard Piece",
+            composer: "Fixture",
+            parts: [ScoreXML.Part(id: "P1", name: "Piano", measures: measures)]
         ).data()
     }
 }

@@ -44,20 +44,26 @@ struct PlaybackCommands: Commands {
             }
             .keyboardShortcut(".", modifiers: .command)
 
+            // Arrow keys with Command and Option. Two things ruled out the
+            // obvious alternatives, both observed in the built app's own menu
+            // bar rather than guessed: `.keyboardShortcut("[", …)` is stored as
+            // `{`, so Command-bracket never matches it; and a plain Command
+            // arrow would be taken from the seek fields, where it means
+            // beginning and end of line.
             Button("Go to Start") {
                 model.playback?.goToStart()
             }
-            .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+            .keyboardShortcut(.upArrow, modifiers: [.command, .option])
 
             Button("Skip Back 5 Seconds") {
                 model.playback?.skip(byMicroseconds: -PlaybackModel.skipMicroseconds)
             }
-            .keyboardShortcut("[", modifiers: .command)
+            .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
 
             Button("Skip Forward 5 Seconds") {
                 model.playback?.skip(byMicroseconds: PlaybackModel.skipMicroseconds)
             }
-            .keyboardShortcut("]", modifiers: .command)
+            .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
 
             Divider()
 
@@ -69,10 +75,15 @@ struct PlaybackCommands: Commands {
             }
             .keyboardShortcut("g", modifiers: .command)
 
+            // A different letter, not Shift-Command-G. Two menu items whose
+            // shortcuts differ only by Shift are matched ambiguously: driving
+            // the built app, Shift-Command-G either activated Go to Measure or
+            // matched nothing at all, depending on which character the event
+            // carried. Command-T is unused here and unambiguous.
             Button("Go to Time…") {
                 model.playback?.requestTimeFocus()
             }
-            .keyboardShortcut("g", modifiers: [.command, .shift])
+            .keyboardShortcut("t", modifiers: .command)
 
             Button("Toggle Loop") {
                 model.playback?.toggleLoop()
@@ -85,7 +96,12 @@ struct PlaybackCommands: Commands {
                 guard let playback = model.playback else { return }
                 Task { await playback.setHumanizationEnabled(!playback.humanization.isEnabled) }
             }
-            .keyboardShortcut("h", modifiers: [.command, .option])
+            // Not any flavour of Command-H. Option-Command-H is the standard
+            // Hide Others item and AppKit silently dropped this item's key
+            // equivalent altogether when it collided; Shift-Command-H still
+            // reached Hide in the running app, which hid the window mid-run.
+            // Both were observed by driving the built app, not reasoned about.
+            .keyboardShortcut("u", modifiers: .command)
 
             Button("Show Notation Report") {
                 model.playback?.isReportShown.toggle()

@@ -491,13 +491,17 @@ final class PlaybackModel {
         intensityDraft = Double(settings.intensity)
 
         // The choice is the owner's and outlives this piece, so it is written
-        // before anything else can fail.
-        let preferences = store.preferences
-        await Task.detached(priority: .utility) {
-            try? preferences.setHumanization(settings)
-        }.value
+        // before anything else can fail — and a write that fails is reported,
+        // not discarded. The setting still applies to this session, which is
+        // right; what the owner must not be told is that it was saved when it
+        // was not, only to find humanization back on at the next launch with
+        // nothing having said why.
+        let saveFailure = await Self.persist(settings, to: store.preferences)
 
-        guard let compiledScore else { return }
+        guard let compiledScore else {
+            statusMessage = Self.humanizationMessage(settings, saveFailure: saveFailure)
+            return
+        }
 
         let wasPlaying = transportState == .playing
         let resumeAt = positionMicroseconds
@@ -512,13 +516,40 @@ final class PlaybackModel {
                 try engine.start()
                 engine.play()
             }
-            statusMessage = settings.isLiteral
-                ? "Humanization off — playing exactly as written."
-                : "Humanization on at \(settings.intensity)%."
+            statusMessage = Self.humanizationMessage(settings, saveFailure: saveFailure)
             refreshTransport()
         } catch {
             statusMessage = "Could not apply the humanization change: \(error)"
         }
+    }
+
+    /// Writes the choice off the main actor, returning the reason it could not
+    /// be written, or nil.
+    private static func persist(
+        _ settings: HumanizationSettings,
+        to preferences: PreferenceStore
+    ) async -> String? {
+        await Task.detached(priority: .utility) { () -> String? in
+            do {
+                try preferences.setHumanization(settings)
+                return nil
+            } catch {
+                return (error as? LocalizedError)?.errorDescription
+                    ?? (error as NSError).localizedDescription
+            }
+        }.value
+    }
+
+    private static func humanizationMessage(
+        _ settings: HumanizationSettings,
+        saveFailure: String?
+    ) -> String {
+        let state = settings.isLiteral
+            ? "Humanization off — playing exactly as written"
+            : "Humanization on at \(settings.intensity)%"
+        guard let saveFailure else { return "\(state)." }
+        return "\(state) for this session only — the setting could not be saved, so it will be "
+            + "back to its last saved value next launch. \(saveFailure)"
     }
 
     // MARK: The ticker

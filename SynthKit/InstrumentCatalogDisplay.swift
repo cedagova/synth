@@ -142,18 +142,35 @@ public enum InstrumentCatalogDisplay {
     // MARK: Coverage
 
     /// What the owner can and cannot play, for the catalog's summary line.
+    ///
+    /// **Two different kinds of "missing", and the line has to keep them
+    /// apart.** A family with nothing downloaded is the owner's to fix by
+    /// pressing Download. An instrument this build cannot supply at all is not:
+    /// no amount of downloading produces a harpsichord, because no
+    /// clean-licence source ships one. Reporting "every instrument family is
+    /// downloaded" over that hole would be the app telling the owner coverage
+    /// is complete when it is not, which is the one thing the rest of this
+    /// catalog goes out of its way not to do.
     public static func coverageSummary(
-        installedFamilies: Set<InstrumentCoverage.Family>
+        installedFamilies: Set<InstrumentCoverage.Family>,
+        uncoveredInstruments: [String] = InstrumentCatalog.knownUncoveredInstruments
     ) -> String {
         let missing = InstrumentCoverage.Family.allCases.filter { !installedFamilies.contains($0) }
+        let shortfall = uncoveredInstruments.isEmpty
+            ? ""
+            : " No \(list(uncoveredInstruments)) is available from any openly licensed "
+                + "source yet, so this version cannot offer one."
+
         if installedFamilies.isEmpty {
             return "No instruments are downloaded yet — pieces play through synth sounds only."
+                + shortfall
         }
         if missing.isEmpty {
-            return "Every instrument family is downloaded."
+            return "Everything this version can download is here." + shortfall
         }
         let names = list(missing.map(\.displayName).map { $0.lowercased() })
         return "Downloaded, apart from \(names). Lines needing those play a synth sound instead."
+            + shortfall
     }
 
     // MARK: First-run offer

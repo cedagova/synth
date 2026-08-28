@@ -425,9 +425,10 @@ final class InstrumentAssetStoreTests: XCTestCase {
         )
         XCTAssertEqual(
             InstrumentCatalogDisplay.coverageSummary(
-                installedFamilies: Set(InstrumentCoverage.Family.allCases)
+                installedFamilies: Set(InstrumentCoverage.Family.allCases),
+                uncoveredInstruments: []
             ),
-            "Every instrument family is downloaded."
+            "Everything this version can download is here."
         )
         let partial = InstrumentCatalogDisplay.coverageSummary(
             installedFamilies: Set(InstrumentCoverage.Family.allCases).subtracting([.harp, .brass])

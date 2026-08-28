@@ -320,8 +320,15 @@ private struct LicenceSheet: View {
                 Text(InstrumentCatalogDisplay.licence(library))
                     .font(.subheadline)
                     .fixedSize(horizontal: false, vertical: true)
-                Link(library.licence.textURL, destination: URL(string: library.licence.textURL)!)
-                    .font(.caption)
+                // No force-unwrap over catalog data: the asset URLs get an
+                // HTTPS validation pass and these two do not, so a typo in a
+                // future catalog entry should leave the sheet readable rather
+                // than crash it.
+                if let url = URL(string: library.licence.textURL) {
+                    Link(library.licence.textURL, destination: url).font(.caption)
+                } else {
+                    Text(library.licence.textURL).font(.caption).textSelection(.enabled)
+                }
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel(
@@ -347,8 +354,9 @@ private struct LicenceSheet: View {
                 .accessibilityIdentifier("instrument-licence-attribution")
             }
 
-            Link("About this library", destination: URL(string: library.homepageURL)!)
-                .font(.caption)
+            if let url = URL(string: library.homepageURL) {
+                Link("About this library", destination: url).font(.caption)
+            }
 
             HStack {
                 Spacer()

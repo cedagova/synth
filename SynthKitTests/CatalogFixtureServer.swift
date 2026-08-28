@@ -43,6 +43,9 @@ final class CatalogFixtureServer: @unchecked Sendable {
         /// Serve bytes that are the right length but the wrong content.
         case serveCorruptedBytes
 
+        /// Answer `302` pointing somewhere else entirely.
+        case redirect(to: String)
+
         /// Serve normally, but slowly: `chunkByteCount` at a time with
         /// `delayMilliseconds` between chunks, so a transfer is still running
         /// when the test wants to pause it.
@@ -155,6 +158,17 @@ final class CatalogFixtureServer: @unchecked Sendable {
 
         guard let body else {
             send(status: 404, reason: "Not Found", headers: [:], body: Data(), on: connection)
+            return
+        }
+
+        if case .redirect(let location) = currentBehavior {
+            // One-shot: the next request is served normally, so a redirect whose
+            // target is in scope can actually be followed to something.
+            setBehavior(.serve)
+            send(
+                status: 302, reason: "Found", headers: ["Location": location],
+                body: Data(), on: connection
+            )
             return
         }
 
@@ -339,9 +353,15 @@ final class CatalogFixtureServer: @unchecked Sendable {
 /// through the `internal` initialiser that exists for exactly this and that the
 /// app target cannot reach. So what the download tests exercise is the code that
 /// ships, not a stand-in for it.
-func makeFixtureTransfer(stallTimeout: TimeInterval = 10) -> AssetTransferring {
+func makeFixtureTransfer(
+    stallTimeout: TimeInterval = 10,
+    permittedHosts: Set<String> = ["127.0.0.1"]
+) -> AssetTransferring {
     AssetTransferURLSession(
-        permittedScheme: "http", stallTimeout: stallTimeout, resourceTimeout: 120,
+        permittedScheme: "http",
+        permittedHosts: permittedHosts,
+        stallTimeout: stallTimeout,
+        resourceTimeout: 120,
         maximumConnectionsPerHost: 6
     )
 }

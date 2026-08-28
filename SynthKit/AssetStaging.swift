@@ -238,7 +238,7 @@ public struct AssetStagingArea: @unchecked Sendable {
         assetsRootURL.appending(path: Self.directoryName).appending(path: libraryID)
     }
 
-    /// Where one asset's partial bytes live.
+    /// Where one asset's *in-flight* bytes live.
     ///
     /// Named by a hash of the asset identifier rather than by the identifier
     /// itself, because an identifier is allowed to be a repository path with
@@ -248,18 +248,76 @@ public struct AssetStagingArea: @unchecked Sendable {
             .appending(path: Self.stagingFileName(forAssetID: assetID))
     }
 
-    /// The `.part` file name for an asset identifier.
-    public static func stagingFileName(forAssetID assetID: String) -> String {
-        SHA256Digest.hexString(Data(assetID.utf8)) + ".part"
+    /// Where an asset's bytes live **once their digest has passed**.
+    ///
+    /// Two names rather than one, and this is the whole of why: a resumed run
+    /// has to decide whether a staged file is finished, and *"it is the right
+    /// length"* is not the same claim as *"it is the right bytes"*. A part file
+    /// can reach full length and never be checked — the process can die between
+    /// the last write and the digest comparison — and a mismatched part can
+    /// survive a discard that itself failed. Under a single name either of those
+    /// is silently installed by the next run, which would make a checksum
+    /// mismatch **not** fail closed across a relaunch.
+    ///
+    /// So the rename to this name happens only after the digest matches, and
+    /// only a file with this name counts as complete. "Complete" then means
+    /// "verified" by construction rather than by a comment claiming it.
+    public func verifiedURL(forLibraryID libraryID: String, assetID: String) -> URL {
+        stagingURL(forLibraryID: libraryID)
+            .appending(path: Self.verifiedFileName(forAssetID: assetID))
     }
 
-    /// How many bytes of `assetID` are already on disk. 0 when none are.
+    /// The in-flight file name for an asset identifier.
+    public static func stagingFileName(forAssetID assetID: String) -> String {
+        digestName(forAssetID: assetID) + ".part"
+    }
+
+    /// The verified file name for an asset identifier.
+    public static func verifiedFileName(forAssetID assetID: String) -> String {
+        digestName(forAssetID: assetID) + ".verified"
+    }
+
+    static func digestName(forAssetID assetID: String) -> String {
+        SHA256Digest.hexString(Data(assetID.utf8))
+    }
+
+    /// Promotes a part file to its verified name. Called only once the pinned
+    /// digest has matched.
+    public func markVerified(forLibraryID libraryID: String, assetID: String) throws {
+        let source = partURL(forLibraryID: libraryID, assetID: assetID)
+        let destination = verifiedURL(forLibraryID: libraryID, assetID: assetID)
+        do {
+            if fileManager.fileExists(atPath: destination.path(percentEncoded: false)) {
+                try fileManager.removeItem(at: destination)
+            }
+            try fileManager.moveItem(at: source, to: destination)
+        } catch {
+            throw InstrumentInstallError.stagingWriteFailed(
+                path: destination.path(percentEncoded: false),
+                reason: (error as NSError).localizedDescription
+            )
+        }
+    }
+
+    /// What is on disk for `assetID`, and whether it has been proved.
     ///
     /// This is the whole of resume state. It is read from the filesystem rather
     /// than remembered anywhere, so it cannot disagree with reality after a
     /// crash, a manual deletion, or a copy of the container onto another Mac.
+    public func stagedState(forLibraryID libraryID: String, assetID: String)
+        -> (byteCount: Int64, isVerified: Bool)
+    {
+        let verified = byteCount(of: verifiedURL(forLibraryID: libraryID, assetID: assetID))
+        if verified > 0 { return (verified, true) }
+        return (byteCount(of: partURL(forLibraryID: libraryID, assetID: assetID)), false)
+    }
+
+    /// Bytes on disk for `assetID`, proved or not. For progress only.
     public func stagedByteCount(forLibraryID libraryID: String, assetID: String) -> Int64 {
-        let url = partURL(forLibraryID: libraryID, assetID: assetID)
+        stagedState(forLibraryID: libraryID, assetID: assetID).byteCount
+    }
+
+    private func byteCount(of url: URL) -> Int64 {
         guard let values = try? url.resourceValues(forKeys: [.fileSizeKey]),
               let size = values.fileSize
         else { return 0 }
@@ -284,12 +342,19 @@ public struct AssetStagingArea: @unchecked Sendable {
         try opener.openForAppending(at: partURL(forLibraryID: libraryID, assetID: assetID))
     }
 
-    /// Throws away one asset's partial bytes, so the next attempt starts clean.
+    /// Throws away one asset's staged bytes, verified or not, so the next
+    /// attempt starts clean.
     ///
     /// Used when a digest fails and when a server ignores a range request: in
     /// both cases what is on disk is not a prefix of what we want.
+    ///
+    /// Best-effort, and that is now safe: a failed removal leaves a `.part`
+    /// file, which the next run resumes rather than trusts. Before the
+    /// verified/unverified split, a failed removal here left a full-length file
+    /// that the next run would have installed unchecked.
     public func discardPart(forLibraryID libraryID: String, assetID: String) {
         removeBestEffort(partURL(forLibraryID: libraryID, assetID: assetID))
+        removeBestEffort(verifiedURL(forLibraryID: libraryID, assetID: assetID))
     }
 
     /// Throws away everything staged for a library.

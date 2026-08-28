@@ -97,7 +97,24 @@ enum ArchiveUnpacking {
         }
 
         func seek(to offset: UInt64) throws { try handle.seek(toOffset: offset) }
-        func readExactly(_ count: Int) throws -> Data { try handle.read(upToCount: count) ?? Data() }
+
+        /// Reads exactly `count` bytes, or as many as remain.
+        ///
+        /// `read(upToCount:)` is allowed to return fewer bytes than asked for
+        /// without being at the end of the file, and a single call was enough to
+        /// write a truncated *stored* zip member — the digest makes that
+        /// unreachable today, and looping keeps it unreachable if it ever stops
+        /// being.
+        func readExactly(_ count: Int) throws -> Data {
+            var collected = Data()
+            while collected.count < count {
+                guard let chunk = try handle.read(upToCount: count - collected.count),
+                      !chunk.isEmpty
+                else { break }
+                collected.append(chunk)
+            }
+            return collected
+        }
         func close() { try? handle.close() }
     }
 
@@ -399,21 +416,35 @@ enum ArchiveUnpacking {
             }
 
             let file = try destination.beginFile(relative)
+            var written: Int64 = 0
             do {
                 if entry.compressionMethod == 0 {
                     while true {
                         let chunk = try readChunk()
                         if chunk.isEmpty { break }
                         try file.append(chunk)
+                        written += Int64(chunk.count)
                     }
                 } else {
-                    try StreamingInflate.decode(
+                    written = try StreamingInflate.decode(
                         format: .rawDeflate,
                         read: readChunk,
                         write: { try file.append($0) }
                     )
                 }
                 try file.close()
+
+                // The index says how big this member should expand to, so use
+                // it: a second bound on decompression that is independent of the
+                // archive's own digest, and the thing that would catch a
+                // decompression bomb before it filled the disk.
+                guard written == entry.uncompressedSize else {
+                    throw InstrumentInstallError.archiveRejected(
+                        libraryID: libraryID, assetID: assetID,
+                        reason: "\(entry.name) expanded to \(written) bytes, but its index "
+                            + "says \(entry.uncompressedSize)."
+                    )
+                }
             } catch {
                 try? file.close()
                 throw error

@@ -56,6 +56,13 @@ public enum AssetTransferError: Error, Equatable, Sendable {
     /// transient one.
     case unexpectedByteCount(expected: Int64, received: Int64)
 
+    /// The server redirected to somewhere the catalog never declared.
+    ///
+    /// Refused rather than followed: REQ-028 scopes the app's network access to
+    /// the catalog's own sources, and a redirect is exactly how that scope would
+    /// otherwise be left without anything noticing.
+    case redirectedOutOfScope(from: String, to: String, statusCode: Int)
+
     /// The transfer was cancelled — the owner paused it, or the app is
     /// quitting. Not a failure; whatever arrived stays on disk for the resume.
     case cancelled
@@ -75,6 +82,12 @@ extension AssetTransferError: LocalizedError {
                 The download was \(received) bytes, but this version of Synth expects \
                 \(expected). The source has changed since this build pinned it.
                 """
+        case .redirectedOutOfScope(let from, let to, let statusCode):
+            return """
+                \(from) redirected the download to \(to) (HTTP \(statusCode)), which \
+                is not one of the sources this version of Synth downloads from. \
+                Synth refused to follow it.
+                """
         case .cancelled:
             return "The download was paused."
         }
@@ -88,6 +101,12 @@ extension AssetTransferError: LocalizedError {
             return "Try again later. If it keeps happening, the source may have moved and Synth needs an update."
         case .unexpectedByteCount:
             return "Update Synth to a version whose catalog matches what the source now publishes."
+        case .redirectedOutOfScope:
+            return """
+                Nothing was downloaded from the other host. If the source has \
+                genuinely moved, Synth needs an update whose catalog points at \
+                its new home.
+                """
         case .cancelled:
             return "Press Resume to carry on from where it stopped."
         }
@@ -108,7 +127,9 @@ extension AssetTransferError: LocalizedError {
             return statusCode >= 500 || statusCode == 429
         case .notAnHTTPResponse:
             return true
-        case .unexpectedByteCount:
+        case .unexpectedByteCount, .redirectedOutOfScope:
+            // Neither is a bad day: both mean this build's catalog and the
+            // world have diverged, and retrying reproduces it exactly.
             return false
         }
     }
@@ -121,6 +142,7 @@ extension AssetTransferError: LocalizedError {
 /// Implementations must:
 ///
 /// * refuse any URL that is not `https`;
+/// * refuse to follow a redirect that leaves the catalog's declared sources;
 /// * send `Range: bytes=<offset>-` when `startingAtByteOffset > 0`, and report
 ///   truthfully through `AssetTransferResponse.isResumedRange` whether the
 ///   server honoured it;

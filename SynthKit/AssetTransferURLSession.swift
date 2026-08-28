@@ -61,6 +61,19 @@ public final class AssetTransferURLSession: NSObject, AssetTransferring, @unchec
     /// How many connections to open to one host at a time.
     private let maximumConnectionsPerHost: Int
 
+    /// The hosts this transfer will accept bytes from, lower-cased.
+    ///
+    /// The scheme guard in `fetch` runs once, against the URL the catalog
+    /// supplies — so on its own it says nothing about where a redirect leads.
+    /// `URLSession` follows redirects by itself, to any host, and the guard
+    /// never sees the redirected request. That would leave REQ-028's scoping —
+    /// "only catalog asset downloads use the network", to the catalog's declared
+    /// sources — enforced on the first hop and nowhere after it.
+    ///
+    /// So the router below refuses any redirect whose scheme or host is not in
+    /// this set, and the set comes from the catalog rather than from a constant.
+    private let permittedHosts: Set<String>
+
     /// One session for the whole run, and one router demultiplexing its
     /// callbacks by task.
     ///
@@ -87,16 +100,18 @@ public final class AssetTransferURLSession: NSObject, AssetTransferring, @unchec
     private let router: TransferRouter
 
     public convenience override init() {
-        self.init(permittedScheme: "https")
+        self.init(permittedScheme: "https", permittedHosts: InstrumentCatalog.sourceHosts())
     }
 
     public convenience init(
-        stallTimeout: TimeInterval,
+        permittedHosts: Set<String>,
+        stallTimeout: TimeInterval = 45,
         resourceTimeout: TimeInterval = 6 * 60 * 60,
         maximumConnectionsPerHost: Int = 6
     ) {
         self.init(
             permittedScheme: "https",
+            permittedHosts: permittedHosts,
             stallTimeout: stallTimeout,
             resourceTimeout: resourceTimeout,
             maximumConnectionsPerHost: maximumConnectionsPerHost
@@ -107,6 +122,7 @@ public final class AssetTransferURLSession: NSObject, AssetTransferring, @unchec
     /// the app unable to ask for anything but HTTPS — see the property above.
     init(
         permittedScheme: String,
+        permittedHosts: Set<String>,
         stallTimeout: TimeInterval = 45,
         resourceTimeout: TimeInterval = 6 * 60 * 60,
         maximumConnectionsPerHost: Int = 6
@@ -115,8 +131,12 @@ public final class AssetTransferURLSession: NSObject, AssetTransferring, @unchec
         self.resourceTimeout = resourceTimeout
         self.maximumConnectionsPerHost = maximumConnectionsPerHost
         self.permittedScheme = permittedScheme
+        self.permittedHosts = Set(permittedHosts.map { $0.lowercased() })
 
-        let router = TransferRouter()
+        let router = TransferRouter(
+            permittedScheme: permittedScheme,
+            permittedHosts: Set(permittedHosts.map { $0.lowercased() })
+        )
         self.router = router
 
         let configuration = URLSessionConfiguration.ephemeral
@@ -198,6 +218,15 @@ private final class TransferRouter: NSObject, URLSessionDataDelegate, @unchecked
     private let lock = NSLock()
     private var sinks: [Int: TransferSink] = [:]
 
+    private let permittedScheme: String
+    private let permittedHosts: Set<String>
+
+    init(permittedScheme: String, permittedHosts: Set<String>) {
+        self.permittedScheme = permittedScheme
+        self.permittedHosts = permittedHosts
+        super.init()
+    }
+
     func register(_ sink: TransferSink, for taskIdentifier: Int) {
         lock.lock(); sinks[taskIdentifier] = sink; lock.unlock()
     }
@@ -231,6 +260,35 @@ private final class TransferRouter: NSObject, URLSessionDataDelegate, @unchecked
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         remove(task)?.completed(with: error)
+    }
+
+    /// Refuses a redirect that leaves the catalog's declared sources.
+    ///
+    /// Passing `nil` to the completion handler tells `URLSession` not to follow
+    /// it: the original response is delivered instead, which then fails the
+    /// pinned length and digest checks. That is a deliberate choice over
+    /// cancelling — the transfer fails with an error about the bytes rather
+    /// than hanging, and the caller's normal failure path takes over.
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        guard let url = request.url,
+              url.scheme?.lowercased() == permittedScheme,
+              let host = url.host()?.lowercased(),
+              permittedHosts.contains(host)
+        else {
+            let destination = request.url?.host() ?? request.url?.absoluteString ?? "an unnamed host"
+            sink(for: task)?.refuseRedirect(
+                to: destination, statusCode: response.statusCode
+            )
+            completionHandler(nil)
+            return
+        }
+        completionHandler(request)
     }
 }
 
@@ -284,6 +342,14 @@ private final class TransferSink: @unchecked Sendable {
         _ response: URLResponse,
         completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
     ) {
+        // A refused redirect has already recorded why this transfer is over.
+        // The 3xx response then arrives here, and reporting it as an ordinary
+        // refusal would replace the real reason with a status code.
+        guard sinkError == nil else {
+            completionHandler(.cancel)
+            return
+        }
+
         guard let http = response as? HTTPURLResponse else {
             sinkError = AssetTransferError.notAnHTTPResponse(host: host)
             completionHandler(.cancel)
@@ -319,6 +385,15 @@ private final class TransferSink: @unchecked Sendable {
         }
 
         completionHandler(.allow)
+    }
+
+    /// The router refused a redirect. Recorded here so the error the caller
+    /// sees names the host that was refused rather than a length mismatch.
+    func refuseRedirect(to destination: String, statusCode: Int) {
+        guard sinkError == nil else { return }
+        sinkError = AssetTransferError.redirectedOutOfScope(
+            from: host, to: destination, statusCode: statusCode
+        )
     }
 
     func received(_ data: Data, task: URLSessionDataTask) {

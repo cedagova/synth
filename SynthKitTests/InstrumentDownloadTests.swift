@@ -579,6 +579,138 @@ final class InstrumentDownloadTests: XCTestCase {
         }
     }
 
+    // MARK: Redirects out of scope
+
+    func testARedirectToAHostTheCatalogNeverNamedIsRefused() async throws {
+        let (library, _) = makeLibrary(assetCount: 1)
+        let (store, database, assetsURL) = try makeStore(catalog: [library])
+        defer { database.close() }
+
+        let manager = InstrumentDownloadManager(
+            store: store, transfer: makeFixtureTransfer(), concurrentTransferLimit: 1
+        )
+
+        // `localhost` resolves to the same machine but is a different *host*
+        // string, which is the point: the check is on what the catalog declared,
+        // not on where the packets end up.
+        server.setBehavior(.redirect(to: "http://localhost:1/elsewhere.wav"))
+
+        var thrown: AssetTransferError?
+        do {
+            try await manager.install(library)
+            XCTFail("A redirect off the catalog's sources must not be followed.")
+        } catch let error as AssetTransferError {
+            thrown = error
+        }
+
+        guard case .redirectedOutOfScope(_, let destination, let statusCode) =
+            try XCTUnwrap(thrown)
+        else { return XCTFail("The failure was not reported as an out-of-scope redirect.") }
+        XCTAssertEqual(destination, "localhost")
+        XCTAssertEqual(statusCode, 302)
+        XCTAssertFalse(
+            try XCTUnwrap(thrown).isRetryable,
+            "Retrying reproduces the same redirect; offering it is a button that cannot work."
+        )
+
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: assetsURL.appending(path: library.identifier).path(percentEncoded: false)
+            ),
+            "A refused redirect left something installed."
+        )
+    }
+
+    func testARedirectThatStaysOnADeclaredHostIsFollowed() async throws {
+        let (library, payloads) = makeLibrary(assetCount: 1)
+        let (store, database, assetsURL) = try makeStore(catalog: [library])
+        defer { database.close() }
+
+        // The same host under a different path: in scope, so it is followed and
+        // the download completes.
+        server.serve(try XCTUnwrap(payloads["asset0.wav"]), at: "moved.wav")
+        server.setBehavior(.redirect(to: server.url(for: "moved.wav").absoluteString))
+
+        let manager = InstrumentDownloadManager(
+            store: store, transfer: makeFixtureTransfer(), concurrentTransferLimit: 1
+        )
+        try await manager.install(library)
+
+        guard case .installed = try store.state(of: library) else {
+            return XCTFail("An in-scope redirect was not followed.")
+        }
+        XCTAssertEqual(
+            try Data(
+                contentsOf: assetsURL.appending(path: library.identifier)
+                    .appending(path: "Samples").appending(path: "asset0.wav")
+            ),
+            payloads["asset0.wav"]
+        )
+    }
+
+    // MARK: A full-length part is not a verified one
+
+    func testAFullLengthButUnverifiedPartIsNotTrustedOnTheNextRun() async throws {
+        let (library, payloads) = makeLibrary(assetCount: 1, byteCountEach: 30_000)
+        let (store, database, assetsURL) = try makeStore(catalog: [library])
+        defer { database.close() }
+        let staging = store.stagingArea
+
+        // Exactly the state a process killed between the last write and the
+        // digest comparison leaves behind — and exactly what a checksum
+        // mismatch leaves if the discard afterwards fails: a `.part` file of
+        // the pinned length holding the wrong bytes.
+        try staging.prepareStaging(forLibraryID: library.identifier)
+        let wrongBytes = Data(repeating: 0x5A, count: 30_000)
+        try wrongBytes.write(
+            to: staging.partURL(
+                forLibraryID: library.identifier, assetID: "Samples/asset0.wav"
+            )
+        )
+        XCTAssertEqual(store.stagedByteCount(for: library), 30_000)
+
+        let manager = InstrumentDownloadManager(
+            store: store, transfer: makeFixtureTransfer(), concurrentTransferLimit: 1
+        )
+        try await manager.install(library)
+
+        let installed = try Data(
+            contentsOf: assetsURL.appending(path: library.identifier)
+                .appending(path: "Samples").appending(path: "asset0.wav")
+        )
+        XCTAssertEqual(
+            installed, payloads["asset0.wav"],
+            """
+            A full-length part file that nothing ever verified was installed             unchecked. Length is not proof; only the rename to the verified name             is, and only a verified file may be treated as complete.
+            """
+        )
+        XCTAssertNotEqual(installed, wrongBytes)
+    }
+
+    func testAVerifiedPartIsNotRefetchedOnASecondRun() async throws {
+        let (library, _) = makeLibrary(assetCount: 2, byteCountEach: 20_000)
+        let (store, database, _) = try makeStore(catalog: [library])
+        defer { database.close() }
+
+        let manager = InstrumentDownloadManager(
+            store: store, transfer: makeFixtureTransfer(), concurrentTransferLimit: 1
+        )
+        try await manager.install(library)
+        try manager.remove(library)
+
+        // Removing takes the staged tree with it, so the second install is a
+        // fresh one — the point here is the *first* one left nothing unverified
+        // behind, which `install` would otherwise have had to re-hash.
+        XCTAssertEqual(store.stagedByteCount(for: library), 0)
+
+        let requestsBefore = server.requests.count
+        try await manager.install(library)
+        XCTAssertEqual(
+            server.requests.count - requestsBefore, library.assets.count,
+            "The second install should fetch each asset exactly once."
+        )
+    }
+
     // MARK: Pause
 
     func testCancellingPausesAndKeepsWhatArrived() async throws {

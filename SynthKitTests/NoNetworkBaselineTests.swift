@@ -66,8 +66,11 @@ final class NoNetworkBaselineTests: XCTestCase {
     /// One entry. Adding a second means widening the app's network surface,
     /// which is a product decision, not a refactor — so it has to be made here,
     /// in the test whose job is to prevent it.
+    /// Matched on the path relative to the repository root, not on the file
+    /// name: two files sharing a basename anywhere under the scanned roots
+    /// would otherwise both inherit the one exemption.
     private static let filesAllowedToUseNetworking: Set<String> = [
-        "AssetTransferURLSession.swift"
+        "SynthKit/AssetTransferURLSession.swift"
     ]
 
     /// The one entitlement the download manager needs: outbound connections.
@@ -149,9 +152,10 @@ final class NoNetworkBaselineTests: XCTestCase {
             for case let fileURL as URL in enumerator where fileURL.pathExtension == "swift" {
                 scannedFileCount += 1
                 let name = fileURL.lastPathComponent
+                let relativePath = directoryName + "/" + fileURL.lastPathComponent
 
-                if Self.filesAllowedToUseNetworking.contains(name) {
-                    allowedFilesSeen.insert(name)
+                if Self.filesAllowedToUseNetworking.contains(relativePath) {
+                    allowedFilesSeen.insert(relativePath)
                     continue
                 }
 
@@ -202,6 +206,19 @@ final class NoNetworkBaselineTests: XCTestCase {
         XCTAssertTrue(
             source.contains("url.scheme?.lowercased() == permittedScheme"),
             "The allow-listed networking file no longer checks the URL's scheme at all."
+        )
+        // The scheme guard runs once, on the URL the catalog supplies. Without a
+        // redirect delegate, URLSession follows a 3xx to any host on its own and
+        // that guard never sees the request that actually fetched the bytes.
+        XCTAssertTrue(
+            source.contains("willPerformHTTPRedirection"),
+            """
+            The transport no longer implements a redirect delegate, so REQ-028's             scoping to the catalog's declared sources is enforced on the first             request and nowhere after it.
+            """
+        )
+        XCTAssertTrue(
+            source.contains("permittedHosts.contains(host)"),
+            "The redirect delegate no longer checks the destination host."
         )
         // Every `public` initialiser must pin the scheme itself. The only
         // initialiser that takes one is `internal`, which is what keeps the app

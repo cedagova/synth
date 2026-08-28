@@ -137,27 +137,49 @@ public final class InstrumentDownloadManager: @unchecked Sendable {
             report: progress
         )
 
-        // Assets already verified in a previous run are the ones whose part
-        // file is exactly the pinned length. Re-hashing them would mean reading
-        // 2.5 GB off the disk to learn what the previous run already proved, so
-        // a complete part file is taken at its length and the final digest of
-        // the *library* is the whole-install proof. A truncated one is resumed;
-        // an over-long one is discarded, because it cannot be a prefix.
+        // An asset counts as done only when a previous run **proved** it: the
+        // staging area renames a part file to its verified name after, and only
+        // after, its digest matched. Length alone is not the test, and this is
+        // not a nicety — a part file can reach full length and never be checked
+        // if the process dies between the last write and the comparison, and a
+        // mismatched part can outlive a discard that failed. Trusting length
+        // would install either of those unchecked on the next run, which would
+        // make a checksum mismatch stop failing closed across a relaunch.
+        //
+        // So: verified and the right length ⇒ done, and not re-hashed, because
+        // it was hashed when it was written. Anything else is a prefix to resume
+        // from, or — if it is somehow longer than the asset — discarded, since
+        // it cannot be a prefix of anything.
         var pending: [CatalogAsset] = []
         for asset in library.assets {
-            let staged = staging.stagedByteCount(
+            let staged = staging.stagedState(
                 forLibraryID: library.identifier, assetID: asset.identifier
             )
-            if staged == asset.byteCount {
+            if staged.isVerified, staged.byteCount == asset.byteCount {
                 tally.assetAlreadyComplete(byteCount: asset.byteCount)
-            } else {
-                if staged > asset.byteCount {
-                    staging.discardPart(forLibraryID: library.identifier, assetID: asset.identifier)
-                } else if staged > 0 {
-                    tally.addResumedBytes(staged)
-                }
-                pending.append(asset)
+                continue
             }
+
+            // A part that is already the pinned length but was never verified is
+            // the killed-just-before-the-comparison case. Re-hashing it costs
+            // one local read and saves re-fetching an asset that is probably
+            // fine; if it is not fine it is discarded, so the wrong bytes are
+            // never installed either way.
+            if !staged.isVerified, staged.byteCount == asset.byteCount,
+               (try? verifyStagedPart(asset, of: library)) == true {
+                tally.assetAlreadyComplete(byteCount: asset.byteCount)
+                continue
+            }
+
+            if staged.isVerified || staged.byteCount >= asset.byteCount {
+                // A verified file of the wrong length, an over-long part, or a
+                // full-length part that just failed re-hashing: none of them can
+                // be a prefix of what is wanted.
+                staging.discardPart(forLibraryID: library.identifier, assetID: asset.identifier)
+            } else if staged.byteCount > 0 {
+                tally.addResumedBytes(staged.byteCount)
+            }
+            pending.append(asset)
         }
 
         tally.report(phase: .downloading)
@@ -221,9 +243,9 @@ public final class InstrumentDownloadManager: @unchecked Sendable {
         let partURL = staging.partURL(
             forLibraryID: library.identifier, assetID: asset.identifier
         )
-        let startOffset = staging.stagedByteCount(
+        let startOffset = staging.stagedState(
             forLibraryID: library.identifier, assetID: asset.identifier
-        )
+        ).byteCount
 
         // A digest over the whole asset, so a resumed transfer has to rehash
         // the part already on disk. That is a local read at disk speed against
@@ -295,7 +317,29 @@ public final class InstrumentDownloadManager: @unchecked Sendable {
             )
         }
 
+        try staging.markVerified(forLibraryID: library.identifier, assetID: asset.identifier)
         tally.assetFinished()
+    }
+
+    /// Hashes a full-length part file and promotes it if it matches.
+    ///
+    /// Returns false when it does not, leaving the file for the caller to
+    /// discard.
+    private func verifyStagedPart(_ asset: CatalogAsset, of library: CatalogLibrary) throws -> Bool {
+        var digest = StreamingAssetDigest(
+            algorithm: asset.digest.algorithm, totalByteCount: asset.byteCount
+        )
+        try hashExistingPart(
+            at: store.stagingArea.partURL(
+                forLibraryID: library.identifier, assetID: asset.identifier
+            ),
+            into: &digest
+        )
+        guard digest.finalizeHexString() == asset.digest.hexValue else { return false }
+        try store.stagingArea.markVerified(
+            forLibraryID: library.identifier, assetID: asset.identifier
+        )
+        return true
     }
 
     /// Rehashes an existing partial file so a resumed transfer's digest covers
@@ -327,7 +371,9 @@ public final class InstrumentDownloadManager: @unchecked Sendable {
 
         for asset in library.assets {
             guard case .file(let path) = asset.payload else { continue }
-            let source = staging.partURL(forLibraryID: library.identifier, assetID: asset.identifier)
+            let source = staging.verifiedURL(
+                forLibraryID: library.identifier, assetID: asset.identifier
+            )
             let destination = root.appending(path: path)
 
             // Already in place from an install that failed after this point.
@@ -361,7 +407,7 @@ public final class InstrumentDownloadManager: @unchecked Sendable {
         let destination = ArchiveUnpacking.DirectoryDestination(rootURL: root)
 
         for asset in library.assets {
-            let partURL = staging.partURL(
+            let archiveURL = staging.verifiedURL(
                 forLibraryID: library.identifier, assetID: asset.identifier
             )
             switch asset.payload {
@@ -369,12 +415,12 @@ public final class InstrumentDownloadManager: @unchecked Sendable {
                 continue
             case .tarXZArchive(let strip):
                 try ArchiveUnpacking.unpackTarXZ(
-                    at: partURL, into: destination, strippingComponents: strip,
+                    at: archiveURL, into: destination, strippingComponents: strip,
                     libraryID: library.identifier, assetID: asset.identifier
                 )
             case .zipArchive(let strip):
                 try ArchiveUnpacking.unpackZip(
-                    at: partURL, into: destination, strippingComponents: strip,
+                    at: archiveURL, into: destination, strippingComponents: strip,
                     libraryID: library.identifier, assetID: asset.identifier
                 )
             }

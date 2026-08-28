@@ -176,6 +176,67 @@ final class InstrumentCatalogTests: XCTestCase {
             this test and tell the owner the REQ-020 gap is closed.
             """
         )
+        XCTAssertEqual(
+            InstrumentCatalog.knownUncoveredInstruments, ["harpsichord"],
+            "The declared shortfall must be exactly what the catalog is missing."
+        )
+    }
+
+    /// The declared shortfall has to stay true in both directions: an
+    /// instrument named here must genuinely be absent, or the app is apologising
+    /// for something it actually has.
+    func testEveryDeclaredShortfallIsGenuinelyAbsentFromTheCatalog() {
+        let names = InstrumentCatalog.libraries.flatMap(\.coverage).map { $0.name.lowercased() }
+        for missing in InstrumentCatalog.knownUncoveredInstruments {
+            XCTAssertFalse(
+                names.contains { $0.contains(missing.lowercased()) },
+                "\(missing) is declared uncovered but the catalog provides one."
+            )
+        }
+    }
+
+    func testTheAppNeverClaimsCompleteCoverageWhileSomethingIsKnownMissing() {
+        let everything = Set(InstrumentCoverage.Family.allCases)
+        let line = InstrumentCatalogDisplay.coverageSummary(installedFamilies: everything)
+        XCTAssertTrue(
+            line.contains("harpsichord"),
+            """
+            With every family installed the app says coverage is complete, while \
+            a REQ-020 instrument is missing from inside one of them. It has to \
+            say what is genuinely unavailable: \(line)
+            """
+        )
+        XCTAssertFalse(
+            line.contains("Every instrument family is downloaded."),
+            "The old unqualified claim is back."
+        )
+
+        // With nothing declared missing, the line stays clean.
+        XCTAssertEqual(
+            InstrumentCatalogDisplay.coverageSummary(
+                installedFamilies: everything, uncoveredInstruments: []
+            ),
+            "Everything this version can download is here."
+        )
+    }
+
+    func testTheAllowedHostSetIsExactlyWhatTheCatalogDeclares() {
+        let hosts = InstrumentCatalog.sourceHosts()
+        XCTAssertEqual(
+            hosts,
+            ["raw.githubusercontent.com", "freepats.zenvoid.org", "versilian-studios.com"],
+            """
+            The transport refuses redirects to anything outside this set, so it             has to be exactly the hosts the catalog fetches from — no more, and             certainly no fewer.
+            """
+        )
+        for library in InstrumentCatalog.libraries {
+            for asset in library.assets {
+                XCTAssertTrue(
+                    hosts.contains(try! XCTUnwrap(asset.httpsURL?.host()?.lowercased())),
+                    "\(asset.identifier)'s host is not in the permitted set."
+                )
+            }
+        }
     }
 
     // MARK: Honesty

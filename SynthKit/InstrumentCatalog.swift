@@ -408,6 +408,28 @@ public enum InstrumentCatalog {
         defaultSelection.reduce(0) { $0 + $1.downloadByteCount }
     }
 
+    /// Every host this build is allowed to fetch bytes from, lower-cased.
+    ///
+    /// Derived from the catalog rather than written out, so it cannot drift
+    /// from what the catalog actually names. The transport refuses a redirect to
+    /// anywhere else: without that, the scheme-and-source scoping REQ-028 turns
+    /// on would be enforced only on the first request, and a `302` could stream
+    /// hundreds of megabytes from a host nothing in this build ever declared.
+    public static func sourceHosts(
+        in libraries: [CatalogLibrary] = InstrumentCatalog.libraries
+    ) -> Set<String> {
+        Set(libraries.flatMap(\.assets).compactMap { $0.httpsURL?.host()?.lowercased() })
+    }
+
+    /// The instruments REQ-020 names that this build genuinely cannot supply.
+    ///
+    /// **Not a placeholder and not a TODO — a stated shortfall.** The catalog
+    /// says out loud what it does not have, so the app can say it too rather
+    /// than reporting complete coverage over a hole. `InstrumentCatalogTests`
+    /// pins this against what the catalog actually covers, so an entry that
+    /// stops being true fails the suite.
+    public static let knownUncoveredInstruments: [String] = ["harpsichord"]
+
     /// Every structural rule the catalog data must satisfy.
     ///
     /// A pure function returning problems rather than a set of assertions, so

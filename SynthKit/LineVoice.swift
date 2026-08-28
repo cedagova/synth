@@ -5,11 +5,12 @@ import SynthAudioCore
 
 /// A sound that can render one line of a performance.
 ///
-/// **This is the surface increment 003's synthesizer and increment 005's
-/// sampled instruments implement.** Increment 002 ships one implementation,
-/// `DefaultSynthVoiceProvider`, so playback is audible before the real synth
-/// exists (AD7). Nothing else in the engine changes when that voice is
-/// replaced.
+/// **This is the surface the synthesizer implements, and increment 005's
+/// sampled instruments will implement next.** Increment 002 shipped a fixed
+/// built-in voice here so playback was audible before the synth existed; AD7
+/// says increment 003 replaces it, and `SynthPatchVoiceProvider` is that
+/// replacement. Nothing else in the engine changed when it did — which was the
+/// point of drawing the boundary here.
 ///
 /// The split is deliberate. A provider is an ordinary Swift value used on the
 /// control thread: it decides what a sound *is*, and allocates whatever that
@@ -49,44 +50,5 @@ public struct LineVoiceInstance: @unchecked Sendable {
     public init(vtable: SynthLineVoice, release: @escaping @Sendable () -> Void) {
         self.vtable = vtable
         self.release = release
-    }
-}
-
-/// The built-in fixed voice (AD7).
-///
-/// Three sine partials through a linear ADSR, with the sustain pedal holding
-/// released notes. It is intentionally not configurable: it exists so that this
-/// increment can prove the engine plays a score, and increment 003 deletes it
-/// from the default path by supplying a real synthesizer through the same
-/// interface.
-public struct DefaultSynthVoiceProvider: LineVoiceProvider {
-    public init() {}
-
-    public var identifier: String { "builtin.default-synth" }
-    public var displayName: String { "Built-in Voice" }
-
-    public func makeVoice(sampleRate: Double) -> LineVoiceInstance {
-        // Sized by the C core so the layout stays private to it.
-        let byteCount = synth_default_voice_state_size()
-        let raw = UnsafeMutableRawPointer.allocate(
-            byteCount: byteCount,
-            alignment: MemoryLayout<Int64>.alignment
-        )
-        raw.initializeMemory(as: UInt8.self, repeating: 0, count: byteCount)
-
-        // `SynthDefaultVoiceState` is incomplete in the public header on
-        // purpose — its layout is the render core's business — so it crosses
-        // into Swift as an opaque pointer.
-        var vtable = SynthLineVoice()
-        synth_default_voice_init(OpaquePointer(raw), &vtable, sampleRate)
-
-        // The pointer crosses into the teardown closure as an integer because a
-        // raw pointer is not `Sendable`. Ownership is unambiguous — this voice
-        // is the only thing that ever holds it, and `release` runs exactly once
-        // after the engine using it has been destroyed.
-        let address = UInt(bitPattern: raw)
-        return LineVoiceInstance(vtable: vtable, release: {
-            UnsafeMutableRawPointer(bitPattern: address)?.deallocate()
-        })
     }
 }

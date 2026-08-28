@@ -71,7 +71,7 @@ public final class RenderProgram: @unchecked Sendable {
     public init(
         timeline: PerformanceTimeline,
         sampleRate: Double,
-        voiceProvider: LineVoiceProvider = DefaultSynthVoiceProvider()
+        voiceProvider: LineVoiceProvider = SynthPatchVoiceProvider()
     ) throws {
         self.sampleRate = sampleRate
         self.lineCount = timeline.lines.count

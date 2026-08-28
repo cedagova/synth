@@ -142,10 +142,19 @@ final class PlaybackModel {
     private var queuedSeekMicroseconds: Int64?
     private var queuedMeasureSeek: (number: String, beat: Double)?
 
-    init(piece: PieceRecord, store: LibraryStore) {
+    /// `voiceProvider` is how increment 003's editor reaches this engine's
+    /// voices: a provider built on a `SynthPatchLiveVoices` channel renders
+    /// whatever the channel currently holds, and an edit published to that
+    /// channel lands in the voices that are already playing. The default is the
+    /// fixed default voice, which is the sound the app has always made.
+    init(
+        piece: PieceRecord,
+        store: LibraryStore,
+        voiceProvider: LineVoiceProvider = SynthPatchVoiceProvider()
+    ) {
         self.piece = piece
         self.store = store
-        self.engine = PlaybackEngine()
+        self.engine = PlaybackEngine(voiceProvider: voiceProvider)
         let stored = store.preferences.humanization()
         self.humanization = stored
         self.intensityDraft = Double(stored.intensity)
@@ -213,6 +222,19 @@ final class PlaybackModel {
     /// and responsive from the first frame — which is what "long pieces must
     /// not block" means in practice.
     func prepare() async {
+        // **Preparing twice would stop the music.**
+        //
+        // This runs from the transport screen's `.task`, and that screen is now
+        // re-created every time the sound studio is opened over the piece and
+        // closed again. Compiling and realizing a second time is wasted work;
+        // handing the result to `PlaybackEngine.load` is worse than wasted,
+        // because loading a program stops the graph and rewinds. A piece that
+        // is already prepared is already prepared.
+        if case .ready = loadState {
+            startTicking()
+            return
+        }
+
         loadState = .preparing(.compiling)
         startTicking()
 

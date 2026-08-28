@@ -396,4 +396,141 @@ final class RealtimePlaybackTests: XCTestCase {
             "Three seconds of wall clock advanced the playhead by only \(advanced) µs."
         )
     }
+
+    /// **The REQ-013 budget again, with SYN003's live-edit path engaged.**
+    ///
+    /// SYN001 re-opened the question for the synthesizer and answered it: the
+    /// orchestral reference plays dropout-free through a demanding patch. This
+    /// leaf adds two things to the render thread that were not there when that
+    /// was measured — the check for a published patch at the top of every
+    /// block, and the installation of one when there is — so it re-opens it
+    /// again rather than inheriting the answer a second time.
+    ///
+    /// The load is deliberately the worst case the app can produce. Every one
+    /// of the eighteen lines renders the sound being edited, which is what the
+    /// play-through binding does; a knob is swept for the whole fifty-three
+    /// seconds at about sixty edits a second, which is a mouse drag that never
+    /// stops; and the edits are published from a **separate thread** from the
+    /// one the transport runs on, which is the crossing the triple buffer
+    /// exists for.
+    func testTheOrchestralReferenceSurvivesAKnobBeingSweptForItsWholeLength() throws {
+        try requireOutputDevice()
+        try XCTSkipIf(
+            !fullGuardrailEnabled,
+            "Set SYNTH_REALTIME_GUARDRAIL=1 to run the full-length real-time guardrail."
+        )
+
+        let timeline = try AudioRenderFixtures.timeline(
+            MusicXMLScoreFixtures.orchestralExcerpt(),
+            settings: .standard
+        )
+        let expectedSeconds = Double(timeline.totalMicroseconds) / 1_000_000
+
+        var patch = SynthEngineIntegrationTests.demandingPatch()
+        patch.filter.isEnabled = true
+        let live = SynthPatchLiveVoices(patch: patch)
+
+        let engine = PlaybackEngine(voiceProvider: SynthPatchVoiceProvider(live: live))
+        try engine.load(timeline: timeline)
+        try engine.start()
+        engine.resetStatistics()
+        engine.play()
+        XCTAssertTrue(waitUntilPlaying(engine), "Playback never started.")
+
+        // One producer, on its own thread, sweeping the cutoff up and down for
+        // as long as the piece lasts.
+        let sweeping = SweepCounter()
+        let sweeper = Thread {
+            var step = 0
+            while !sweeping.isFinished {
+                let position = (sin(Double(step) * 0.02) + 1) / 2
+                var edited = patch
+                edited.filter.cutoffHertz = 200 * pow(20_000.0 / 200.0, position)
+                live.apply(edited)
+                sweeping.count(1)
+                step += 1
+                Thread.sleep(forTimeInterval: 1.0 / 60.0)
+            }
+        }
+        sweeper.start()
+
+        let started = Date()
+        while engine.transportState == .playing,
+              Date().timeIntervalSince(started) < expectedSeconds + 15 {
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        let elapsed = Date().timeIntervalSince(started)
+        sweeping.finish()
+        let statistics = engine.statistics
+        let reason = engine.pauseReason
+        let adopted = live.adoptionsTakenUp
+        let published = sweeping.published
+        engine.stopEngine()
+
+        print("""
+            REQ-013 with live editing \u{2014} orchestral reference, knob swept throughout
+              lines:            \(timeline.lines.count)
+              events:           \(timeline.eventCount)
+              timeline length:  \(String(format: "%.1f", expectedSeconds)) s
+              wall clock:       \(String(format: "%.1f", elapsed)) s
+              patches published:\(published) (from a separate thread)
+              patches adopted:  \(adopted) (per voice, minimum across all 18)
+              rendered blocks:  \(statistics.renderedBlocks)
+              overload blocks:  \(statistics.overloadBlocks) \
+            (\(String(format: "%.4f", statistics.overloadRatio * 100))%)
+              overload pauses:  \(statistics.overloadPauses)
+              peak level:       \(String(format: "%.3f", statistics.peakLevel))
+              ended because:    \(reason)
+            """)
+
+        XCTAssertEqual(reason, .reachedEnd, "Playback did not run to the end; it stopped for \(reason).")
+        XCTAssertEqual(statistics.overloadPauses, 0, "The engine degraded to a pause under load.")
+        XCTAssertLessThan(
+            statistics.overloadRatio, 0.001,
+            "\(statistics.overloadBlocks) of \(statistics.renderedBlocks) blocks missed their deadline."
+        )
+        XCTAssertLessThan(
+            statistics.peakLevel, 1.0,
+            "The orchestral reference clips at \(statistics.peakLevel) while being edited."
+        )
+        XCTAssertGreaterThan(published, 100, "The sweep barely ran; this proved nothing.")
+        XCTAssertGreaterThan(adopted, 100, "The edits never reached the audio.")
+        XCTAssertEqual(
+            elapsed, expectedSeconds, accuracy: expectedSeconds * 0.05 + 3,
+            "Playback took \(elapsed) s for a \(expectedSeconds) s piece."
+        )
+    }
+
+}
+
+/// Counter shared between the sweeping thread and the test's own.
+///
+/// A tiny lock rather than an actor, because the sweeping side is a plain
+/// `Thread` — the point of that test is that the edits come from somewhere
+/// other than the transport's thread, and a `Task` would be free to be
+/// scheduled onto it.
+final class SweepCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var finished = false
+    private var total = 0
+
+    var isFinished: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return finished
+    }
+
+    var published: Int {
+        lock.lock(); defer { lock.unlock() }
+        return total
+    }
+
+    func finish() {
+        lock.lock(); defer { lock.unlock() }
+        finished = true
+    }
+
+    func count(_ amount: Int) {
+        lock.lock(); defer { lock.unlock() }
+        total += amount
+    }
 }

@@ -14,6 +14,7 @@ struct SynthApp: App {
         .commands {
             LibraryCommands(model: model)
             PlaybackCommands(model: model)
+            SoundCommands(model: model)
         }
     }
 }

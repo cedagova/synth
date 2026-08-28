@@ -875,3 +875,56 @@ final class SoundLibraryTests: XCTestCase {
         XCTAssertEqual(try database.scalarInt("SELECT count(*) FROM \(SoundCatalog.tableName);"), 1)
     }
 }
+
+/// Issue #19, REQ-027: what VoiceOver says a row in the sound list is.
+///
+/// Asserted here rather than read off the running app's accessibility tree,
+/// because an `AXOutline` does not vend its rows to a walk from inside the same
+/// process — the gap PLY004 recorded for the piece list. The sentence is
+/// therefore proved at the layer that can prove it.
+final class SoundEntryAccessibilityTests: XCTestCase {
+    private func entry(
+        name: String,
+        category: SoundCategory,
+        origin: SoundOrigin
+    ) -> SoundEntry {
+        SoundEntry(
+            id: origin == .shipped ? "builtin.\(name)" : "user.\(name)",
+            name: name,
+            category: category,
+            origin: origin,
+            documentVersion: SynthPatch.currentVersion,
+            revision: origin == .shipped ? 0 : 1,
+            createdAt: origin == .shipped ? "" : "2026-08-28T00:00:00Z",
+            updatedAt: origin == .shipped ? "" : "2026-08-28T00:00:00Z",
+            patch: .defaultVoice
+        )
+    }
+
+    func testAShippedSoundSpeaksAsOneSentenceAndSaysItIsReadOnly() {
+        XCTAssertEqual(
+            entry(name: "Warm Analog Pad", category: .pads, origin: .shipped)
+                .accessibilityDescription,
+            "Warm Analog Pad, Pads, one of Synth's own sounds, read-only"
+        )
+    }
+
+    func testTheOwnersSoundSpeaksAsOneSentenceAndSaysItIsTheirs() {
+        XCTAssertEqual(
+            entry(name: "Evening Bells", category: .bells, origin: .user)
+                .accessibilityDescription,
+            "Evening Bells, Bells, your sound"
+        )
+    }
+
+    /// Every shipped sound has one, and no two of them read the same — a list
+    /// where two rows speak identically is a list VoiceOver cannot navigate.
+    func testEveryShippedSoundHasADistinctSpokenForm() {
+        let spoken = ShippedSoundCollection.standard.sounds.map(\.accessibilityDescription)
+        XCTAssertEqual(spoken.count, 13)
+        XCTAssertEqual(Set(spoken).count, spoken.count, "Two shipped sounds read the same: \(spoken)")
+        for sentence in spoken {
+            XCTAssertTrue(sentence.hasSuffix("one of Synth's own sounds, read-only"), sentence)
+        }
+    }
+}

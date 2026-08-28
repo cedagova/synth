@@ -31,9 +31,29 @@ final class SynthVoiceHarness {
     /// independent of how a buffer is chopped.
     private let blockFrames = 500
 
+    /// The channel this harness's voice follows, when it was built with one.
+    /// Publishing here is what a knob move does.
+    let live: SynthPatchLiveVoices?
+
     init(patch: SynthPatch, sampleRate: Double = 48_000) {
         self.sampleRate = sampleRate
+        self.live = nil
         self.instance = SynthPatchVoiceProvider(patch: patch).makeVoice(sampleRate: sampleRate)
+        self.vtable = instance.vtable
+        vtable.prepare(vtable.state, sampleRate)
+        vtable.reset(vtable.state)
+    }
+
+    /// A voice that follows a live channel, for the SYN003 editing claims.
+    ///
+    /// `prepare` and `reset` are called exactly as above, so the only
+    /// difference between this and the plain harness is where the patch comes
+    /// from — which is the point: an edit has to reach the same shipping render
+    /// path, not a second one built for the test.
+    init(live: SynthPatchLiveVoices, sampleRate: Double = 48_000) {
+        self.sampleRate = sampleRate
+        self.live = live
+        self.instance = SynthPatchVoiceProvider(live: live).makeVoice(sampleRate: sampleRate)
         self.vtable = instance.vtable
         vtable.prepare(vtable.state, sampleRate)
         vtable.reset(vtable.state)

@@ -395,6 +395,85 @@ void synth_patch_voice_init(SynthPatchVoiceState *state,
 /// from rendering.
 void synth_patch_prepare_tables(void);
 
+#pragma mark - Live editing (control thread, safe while rendering)
+
+/*
+ SYN003's editor changes a sound the owner is currently listening to, and the
+ acceptance criterion is that playback does not stop to let it. These three
+ calls are the only way a patch or a note reaches a voice that is already
+ rendering; nothing else in this header is safe while `render` is running.
+
+ All three are **single-producer**: one control thread at a time per voice. The
+ Swift side (`SynthPatchLiveVoices`) is what enforces that, and it also
+ serialises them against a voice being released.
+
+ They are also **exclusive of `prepare`**. Re-preparing a voice at a new sample
+ rate rewrites its whole parameter state and discards anything staged for the
+ old rate; a publish crossing it would be racing that rewrite. Every path in
+ this app satisfies this by construction — a voice is prepared while the graph
+ is being built, on the same main thread that later publishes — but a caller
+ that moves engine construction off the main thread must say so out loud rather
+ than discover it.
+*/
+
+/// Publish a complete replacement patch to a voice that may be rendering.
+///
+/// The patch is sanitised and fully worked out here, on the calling thread; the
+/// render thread's share is a copy into place at its next block boundary, so an
+/// edit is audible within one buffer and the audio never stops. Effect
+/// histories, oscillator phases and sounding notes all survive it — this
+/// changes what the voice is, not where it is.
+///
+/// Returns 1 when the patch was staged. Returns 0 when `sampleRate` is not the
+/// rate this voice was prepared at, which means the caller is holding a voice
+/// from a graph that has since been rebuilt and must build a new one; the
+/// voice is left exactly as it was.
+int32_t synth_patch_voice_publish(SynthPatchVoiceState *state,
+                                  const SynthPatchConfig *config,
+                                  double sampleRate);
+
+/// How many published patches this voice has actually taken up.
+///
+/// The render thread writes it. A caller reads it to know that an edit reached
+/// the audio rather than merely reaching the queue — the difference between a
+/// test that proves live editing and one that proves a function was called.
+int64_t synth_patch_voice_adoptions(const SynthPatchVoiceState *state);
+
+/// Play, release, pedal or silence a note on a voice that may be rendering —
+/// the editor's test notes, which have no timeline behind them.
+///
+/// `kind` is one of the `SynthLiveEvent*` constants. Events are taken up at the
+/// start of the next render block, so a note sounds within one buffer of the
+/// key going down. Returns 0 only when the queue is full, which the caller
+/// should report rather than ignore: a dropped note-off is a stuck note.
+int32_t synth_patch_voice_post_event(SynthPatchVoiceState *state,
+                                     int32_t kind,
+                                     int32_t midiNoteNumber,
+                                     int32_t velocity);
+
+/// `SynthLiveEvent*`, as ordinary `Int32`s on the Swift side.
+int32_t synth_patch_live_event_note_on(void);
+int32_t synth_patch_live_event_note_off(void);
+int32_t synth_patch_live_event_pedal(void);
+int32_t synth_patch_live_event_all_off(void);
+
+#pragma mark - Auditioning one voice on its own (render thread)
+
+/*
+ Render one patch straight into a stereo buffer list, with no engine, no
+ timeline and no mixer.
+
+ The editor auditions a sound before it belongs to any piece, so there is
+ nothing for `synth_audio_core_render` to render: no program, no lines, no
+ events. This is the whole audio path for that case. It exists in C for the
+ same reason everything else the audio thread runs does — the alternative is a
+ Swift loop copying mono into two channels, on the render thread.
+*/
+int32_t synth_patch_voice_render_stereo(SynthPatchVoiceState *state,
+                                        AudioBufferList *bufferList,
+                                        int32_t frameCount,
+                                        int32_t *isSilence);
+
 #ifdef __cplusplus
 }
 #endif

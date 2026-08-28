@@ -527,9 +527,22 @@ static const int32_t synth_reverb_allpass_tuning[SYNTH_REVERB_ALLPASS_COUNT] = {
     556, 441, 341, 225
 };
 
-void synth_patch_voice_update_rate(SynthPatchVoiceState *state, double sampleRate) {
+/// The five coefficients of a designed biquad, without its history.
+static void synth_patch_biquad_coefficients(const SynthBiquad *biquad, float out[5]) {
+    out[0] = biquad->b0;
+    out[1] = biquad->b1;
+    out[2] = biquad->b2;
+    out[3] = biquad->a1;
+    out[4] = biquad->a2;
+}
+
+void synth_patch_derive(SynthPatchDerived *derived,
+                        const SynthPatchConfig *config,
+                        double sampleRate) {
     if (!(sampleRate > 0.0)) { sampleRate = 48000.0; }
-    state->sampleRate = sampleRate;
+
+    derived->config = *config;
+    derived->sampleRate = sampleRate;
 
     /*
      Two rates, on purpose.
@@ -552,52 +565,60 @@ void synth_patch_voice_update_rate(SynthPatchVoiceState *state, double sampleRat
 
     /* A patch's cutoff may be 20 kHz, which is above Nyquist at 44.1 kHz and
        would make the state-variable filter's tan() blow up. */
-    state->filterCutoffCeiling = (float)(sampleRate * 0.45);
+    derived->filterCutoffCeiling = (float)(sampleRate * 0.45);
 
     const double controlRate = sampleRate / (double)SYNTH_CONTROL_BLOCK_FRAMES;
 
-    state->amplitudeRate[0] = (float)(1.0 / (state->config.amplitudeEnvelope.attackSeconds * controlRate));
-    state->amplitudeRate[1] = (float)(1.0 / (state->config.amplitudeEnvelope.decaySeconds * controlRate));
-    state->amplitudeRate[2] = (float)(1.0 / (state->config.amplitudeEnvelope.releaseSeconds * controlRate));
+    derived->amplitudeRate[0] = (float)(1.0 / (config->amplitudeEnvelope.attackSeconds * controlRate));
+    derived->amplitudeRate[1] = (float)(1.0 / (config->amplitudeEnvelope.decaySeconds * controlRate));
+    derived->amplitudeRate[2] = (float)(1.0 / (config->amplitudeEnvelope.releaseSeconds * controlRate));
 
-    state->modulationRate[0] = (float)(1.0 / (state->config.modulationEnvelope.attackSeconds * controlRate));
-    state->modulationRate[1] = (float)(1.0 / (state->config.modulationEnvelope.decaySeconds * controlRate));
-    state->modulationRate[2] = (float)(1.0 / (state->config.modulationEnvelope.releaseSeconds * controlRate));
+    derived->modulationRate[0] = (float)(1.0 / (config->modulationEnvelope.attackSeconds * controlRate));
+    derived->modulationRate[1] = (float)(1.0 / (config->modulationEnvelope.decaySeconds * controlRate));
+    derived->modulationRate[2] = (float)(1.0 / (config->modulationEnvelope.releaseSeconds * controlRate));
 
     for (int32_t index = 0; index < SYNTH_PATCH_LFO_COUNT; index++) {
-        state->lfoIncrement[index] = (double)state->config.lfos[index].rateHertz / controlRate;
+        derived->lfoIncrement[index] = (double)config->lfos[index].rateHertz / controlRate;
     }
 
-    state->activeVoiceLimit = state->config.maximumVoices;
+    derived->activeVoiceLimit = config->maximumVoices;
 
-    /* Equaliser. */
-    if (state->config.equalizer.isEnabled) {
-        const double nyquist = sampleRate * 0.5;
-        double lowHertz  = state->config.equalizer.lowHertz;
-        double midHertz  = state->config.equalizer.midHertz;
-        double highHertz = state->config.equalizer.highHertz;
-        if (lowHertz  > nyquist * 0.9) { lowHertz  = nyquist * 0.9; }
-        if (midHertz  > nyquist * 0.9) { midHertz  = nyquist * 0.9; }
-        if (highHertz > nyquist * 0.9) { highHertz = nyquist * 0.9; }
-        synth_patch_low_shelf(&state->equalizer.low, lowHertz,
-                              state->config.equalizer.lowGainDecibels, sampleRate);
-        synth_patch_peaking(&state->equalizer.mid, midHertz,
-                            state->config.equalizer.midGainDecibels,
-                            state->config.equalizer.midQ, sampleRate);
-        synth_patch_high_shelf(&state->equalizer.high, highHertz,
-                               state->config.equalizer.highGainDecibels, sampleRate);
-    } else {
-        synth_patch_biquad_bypass(&state->equalizer.low);
-        synth_patch_biquad_bypass(&state->equalizer.mid);
-        synth_patch_biquad_bypass(&state->equalizer.high);
+    /* Equaliser. Designed into a scratch biquad and taken as coefficients: a
+       snapshot must not carry a history, because installing one must not clear
+       the history the voice already has. */
+    {
+        SynthBiquad low, mid, high;
+        if (config->equalizer.isEnabled) {
+            const double nyquist = sampleRate * 0.5;
+            double lowHertz  = config->equalizer.lowHertz;
+            double midHertz  = config->equalizer.midHertz;
+            double highHertz = config->equalizer.highHertz;
+            if (lowHertz  > nyquist * 0.9) { lowHertz  = nyquist * 0.9; }
+            if (midHertz  > nyquist * 0.9) { midHertz  = nyquist * 0.9; }
+            if (highHertz > nyquist * 0.9) { highHertz = nyquist * 0.9; }
+            synth_patch_low_shelf(&low, lowHertz,
+                                  config->equalizer.lowGainDecibels, sampleRate);
+            synth_patch_peaking(&mid, midHertz,
+                                config->equalizer.midGainDecibels,
+                                config->equalizer.midQ, sampleRate);
+            synth_patch_high_shelf(&high, highHertz,
+                                   config->equalizer.highGainDecibels, sampleRate);
+        } else {
+            synth_patch_biquad_bypass(&low);
+            synth_patch_biquad_bypass(&mid);
+            synth_patch_biquad_bypass(&high);
+        }
+        synth_patch_biquad_coefficients(&low, derived->equalizerLow);
+        synth_patch_biquad_coefficients(&mid, derived->equalizerMid);
+        synth_patch_biquad_coefficients(&high, derived->equalizerHigh);
     }
 
     /* Chorus. */
     {
         const double limit = (double)(SYNTH_CHORUS_MAX_FRAMES - 4);
-        double centre = state->config.chorus.centreMilliseconds * 0.001 * effectiveRate;
+        double centre = config->chorus.centreMilliseconds * 0.001 * effectiveRate;
         if (centre > limit) { centre = limit; }
-        double depth = state->config.chorus.depthMilliseconds * 0.001 * effectiveRate;
+        double depth = config->chorus.depthMilliseconds * 0.001 * effectiveRate;
 
         /* The swept tap must stay inside the buffer at its far extreme and
            strictly behind the write head at its near one. Clamping the centre
@@ -609,46 +630,147 @@ void synth_patch_voice_update_rate(SynthPatchVoiceState *state, double sampleRat
         if (depth > centre - 2.0) { depth = centre - 2.0; }
         if (depth < 0.0) { depth = 0.0; }
 
-        state->chorus.centreFrames = (float)centre;
-        state->chorus.depthFrames  = (float)depth;
-        state->chorus.mix          = state->config.chorus.mix;
-        state->chorus.feedback     = state->config.chorus.feedback;
-        state->chorus.lfoIncrement = (double)state->config.chorus.rateHertz / sampleRate;
+        derived->chorusCentreFrames = (float)centre;
+        derived->chorusDepthFrames  = (float)depth;
+        derived->chorusMix          = config->chorus.mix;
+        derived->chorusFeedback     = config->chorus.feedback;
+        derived->chorusLFOIncrement = (double)config->chorus.rateHertz / sampleRate;
     }
 
     /* Delay. */
     {
-        int32_t length = (int32_t)(state->config.delay.timeSeconds * effectiveRate);
-        state->delay.lengthFrames = synth_patch_clampi(length, 1, SYNTH_DELAY_MAX_FRAMES - 1);
-        state->delay.feedback = state->config.delay.feedback;
-        state->delay.mix      = state->config.delay.mix;
+        int32_t length = (int32_t)(config->delay.timeSeconds * effectiveRate);
+        derived->delayLengthFrames = synth_patch_clampi(length, 1, SYNTH_DELAY_MAX_FRAMES - 1);
+        derived->delayFeedback = config->delay.feedback;
+        derived->delayMix      = config->delay.mix;
         /* One-pole low pass in the feedback path. Even at zero dampening a
            little is kept, so a long feedback tail always loses energy. */
-        state->delay.dampingCoefficient = 0.05f + 0.85f * state->config.delay.dampening;
+        derived->delayDampingCoefficient = 0.05f + 0.85f * config->delay.dampening;
     }
 
     /* Reverb. */
     {
         const double scale = effectiveRate / 44100.0;
         for (int32_t index = 0; index < SYNTH_REVERB_COMB_COUNT; index++) {
-            state->reverb.combLength[index] = synth_patch_clampi(
+            derived->reverbCombLength[index] = synth_patch_clampi(
                 (int32_t)((double)synth_reverb_comb_tuning[index] * scale),
                 1, SYNTH_REVERB_COMB_MAX_FRAMES);
         }
         for (int32_t index = 0; index < SYNTH_REVERB_ALLPASS_COUNT; index++) {
-            state->reverb.allpassLength[index] = synth_patch_clampi(
+            derived->reverbAllpassLength[index] = synth_patch_clampi(
                 (int32_t)((double)synth_reverb_allpass_tuning[index] * scale),
                 1, SYNTH_REVERB_ALLPASS_MAX_FRAMES);
         }
-        state->reverb.preDelayLength = synth_patch_clampi(
-            (int32_t)(state->config.reverb.preDelaySeconds * effectiveRate),
+        derived->reverbPreDelayLength = synth_patch_clampi(
+            (int32_t)(config->reverb.preDelaySeconds * effectiveRate),
             1, SYNTH_REVERB_PREDELAY_MAX_FRAMES - 1);
         /* 0.70…0.98 comb feedback. Never 1: the tail must always end. */
-        state->reverb.feedback = 0.70f + 0.28f * state->config.reverb.roomSize;
-        state->reverb.damping  = 0.10f + 0.60f * state->config.reverb.dampening;
-        state->reverb.mix      = state->config.reverb.mix;
+        derived->reverbFeedback = 0.70f + 0.28f * config->reverb.roomSize;
+        derived->reverbDamping  = 0.10f + 0.60f * config->reverb.dampening;
+        derived->reverbMix      = config->reverb.mix;
     }
 }
+
+/*
+ The whole voice, re-derived at a new rate.
+
+ Now a thin wrapper: derive the snapshot, install it, and clear the three
+ equaliser histories that the previous coefficients belonged to. The clear is
+ right here and not in `synth_patch_voice_install` on purpose — a rate change
+ always ends in `synth_patch_voice_clear` and starts from silence anyway, while
+ a live parameter edit must leave the filter's memory exactly where it is.
+*/
+void synth_patch_voice_update_rate(SynthPatchVoiceState *state, double sampleRate) {
+    SynthPatchDerived derived;
+    synth_patch_derive(&derived, &state->config, sampleRate);
+
+    /* The rate is set here, on the control thread, and nowhere else.
+       `synth_patch_voice_install` deliberately does not write it: install also
+       runs on the render thread when a published patch is taken up, and a plain
+       `double` written there and read by `synth_patch_voice_publish` here would
+       be a data race — a value-benign one, since publish only proceeds when the
+       two are already equal, but a race all the same and one a sanitiser would
+       be right to flag. Keeping the write on one thread removes it rather than
+       explaining it. */
+    state->sampleRate = derived.sampleRate;
+    synth_patch_voice_install(state, &derived);
+
+    synth_patch_biquad_clear(&state->equalizer.low);
+    synth_patch_biquad_clear(&state->equalizer.mid);
+    synth_patch_biquad_clear(&state->equalizer.high);
+
+    /*
+     Anything staged for the old rate describes geometry this voice no longer
+     has. Drop it rather than let the render thread install it.
+
+     One atomic AND rather than a load followed by a store. The two-step version
+     looks equivalent and is not: a `publish` or an `adopt` landing between the
+     load and the store would be clobbered, and with it the invariant that
+     `liveShared & 3`, `liveWriteIndex` and `liveReadIndex` are always three
+     distinct slots. That permutation is the whole reason the triple buffer is
+     safe; once two of them coincide the render thread can read a half-written
+     snapshot. No shipped path reaches this concurrently today — see the header
+     — but the fix costs one instruction and the failure it prevents would be
+     close to undebuggable.
+    */
+    atomic_fetch_and_explicit(&state->liveShared, SYNTH_LIVE_INDEX_MASK,
+                              memory_order_acq_rel);
+}
+
+#pragma mark - Live editing
+
+int32_t synth_patch_voice_publish(SynthPatchVoiceState *state,
+                                  const SynthPatchConfig *config,
+                                  double sampleRate) {
+    if (state == NULL || config == NULL) { return 0; }
+    /* `state->sampleRate` is written only by `synth_patch_voice_update_rate`,
+       which is control-thread and, per the header, exclusive of this call — so
+       reading it here is a plain read rather than a race. A mismatch means the
+       caller is holding a voice from a graph that has been rebuilt underneath
+       it. */
+    if (sampleRate != state->sampleRate) { return 0; }
+
+    SynthPatchConfig sanitized = *config;
+    synth_patch_config_sanitize(&sanitized);
+
+    synth_patch_derive(&state->liveSlots[state->liveWriteIndex], &sanitized, sampleRate);
+
+    const int32_t exchanged = atomic_exchange_explicit(
+        &state->liveShared,
+        state->liveWriteIndex | SYNTH_LIVE_FRESH,
+        memory_order_acq_rel);
+    state->liveWriteIndex = exchanged & SYNTH_LIVE_INDEX_MASK;
+    return 1;
+}
+
+int64_t synth_patch_voice_adoptions(const SynthPatchVoiceState *state) {
+    if (state == NULL) { return 0; }
+    return atomic_load_explicit(&state->liveAdoptions, memory_order_relaxed);
+}
+
+int32_t synth_patch_voice_post_event(SynthPatchVoiceState *state,
+                                     int32_t kind,
+                                     int32_t midiNoteNumber,
+                                     int32_t velocity) {
+    if (state == NULL) { return 0; }
+
+    const int64_t write = atomic_load_explicit(&state->liveNoteWrite, memory_order_relaxed);
+    const int64_t read  = atomic_load_explicit(&state->liveNoteRead, memory_order_acquire);
+    if (write - read >= (int64_t)SYNTH_LIVE_NOTE_CAPACITY) { return 0; }
+
+    SynthLiveNoteEvent *slot = &state->liveNotes[write & SYNTH_LIVE_NOTE_MASK];
+    slot->kind = kind;
+    slot->note = midiNoteNumber;
+    slot->velocity = velocity;
+
+    atomic_store_explicit(&state->liveNoteWrite, write + 1, memory_order_release);
+    return 1;
+}
+
+int32_t synth_patch_live_event_note_on(void)  { return SynthLiveEventNoteOn; }
+int32_t synth_patch_live_event_note_off(void) { return SynthLiveEventNoteOff; }
+int32_t synth_patch_live_event_pedal(void)    { return SynthLiveEventPedal; }
+int32_t synth_patch_live_event_all_off(void)  { return SynthLiveEventAllOff; }
 
 #pragma mark - Construction
 
@@ -694,6 +816,16 @@ void synth_patch_voice_init(SynthPatchVoiceState *state,
     state->sustainPedalDown = 0;
     state->controlPhase = 0;
     state->rng = state->config.seed ? state->config.seed : 0x9E3779B97F4A7C15ULL;
+
+    /* The triple buffer's three indices start out distinct and stay that way:
+       one belongs to the publisher, one to the render thread, one is parked in
+       `liveShared` with no fresh bit. Set before anything can publish. */
+    atomic_store_explicit(&state->liveShared, 0, memory_order_relaxed);
+    state->liveWriteIndex = 1;
+    state->liveReadIndex = 2;
+    atomic_store_explicit(&state->liveAdoptions, 0, memory_order_relaxed);
+    atomic_store_explicit(&state->liveNoteWrite, 0, memory_order_relaxed);
+    atomic_store_explicit(&state->liveNoteRead, 0, memory_order_relaxed);
 
     synth_patch_voice_update_rate(state, sampleRate);
     synth_patch_voice_clear(state);

@@ -34,6 +34,26 @@ public protocol LineVoiceProvider: Sendable {
     /// Build one voice. Called once per line, on the control thread, before
     /// rendering starts. Allocate everything the voice will ever need here.
     func makeVoice(sampleRate: Double) -> LineVoiceInstance
+
+    /// How long this sound can still be heard after its last note ends.
+    ///
+    /// The engine renders this much past the final event and then reports the
+    /// end of the piece, so a sound has to say how long its own tail is.
+    /// Increment 002's built-in voice had a fixed 220 ms release and two
+    /// seconds was ample; a synth patch can ask for a 20-second release into a
+    /// long reverb, and a fixed number would simply cut it off — in live
+    /// playback and, worse, in an export.
+    ///
+    /// Defaulted, so this stayed a purely additive change to the interface
+    /// increments 003 and 005 both bind to.
+    var releaseTailSeconds: Double { get }
+}
+
+extension LineVoiceProvider {
+    /// Two seconds, which is what the engine used before any sound had an
+    /// opinion. Ample for a short release, and the right answer for a sound
+    /// that genuinely does not know.
+    public var releaseTailSeconds: Double { 2.0 }
 }
 
 /// One line's voice: the C vtable the render thread calls, plus the control-

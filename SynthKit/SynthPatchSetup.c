@@ -222,7 +222,7 @@ void synth_patch_prepare_tables(void) {
     synth_patch_tables_ready = 1;
 }
 
-#pragma mark - Array element accessors
+#pragma mark - Array element setters
 
 void synth_patch_config_set_oscillator(SynthPatchConfig *config, int32_t index,
                                        const SynthOscillatorConfig *oscillator) {
@@ -230,11 +230,6 @@ void synth_patch_config_set_oscillator(SynthPatchConfig *config, int32_t index,
     config->oscillators[index] = *oscillator;
 }
 
-void synth_patch_config_get_oscillator(const SynthPatchConfig *config, int32_t index,
-                                       SynthOscillatorConfig *outOscillator) {
-    if (index < 0 || index >= SYNTH_PATCH_OSCILLATOR_COUNT) { return; }
-    *outOscillator = config->oscillators[index];
-}
 
 void synth_patch_config_set_lfo(SynthPatchConfig *config, int32_t index,
                                 const SynthLFOConfig *lfo) {
@@ -242,11 +237,6 @@ void synth_patch_config_set_lfo(SynthPatchConfig *config, int32_t index,
     config->lfos[index] = *lfo;
 }
 
-void synth_patch_config_get_lfo(const SynthPatchConfig *config, int32_t index,
-                                SynthLFOConfig *outLFO) {
-    if (index < 0 || index >= SYNTH_PATCH_LFO_COUNT) { return; }
-    *outLFO = config->lfos[index];
-}
 
 void synth_patch_config_set_modulation(SynthPatchConfig *config, int32_t index,
                                        const SynthModulationSlotConfig *slot) {
@@ -254,11 +244,6 @@ void synth_patch_config_set_modulation(SynthPatchConfig *config, int32_t index,
     config->modulation[index] = *slot;
 }
 
-void synth_patch_config_get_modulation(const SynthPatchConfig *config, int32_t index,
-                                       SynthModulationSlotConfig *outSlot) {
-    if (index < 0 || index >= SYNTH_PATCH_MOD_SLOT_COUNT) { return; }
-    *outSlot = config->modulation[index];
-}
 
 #pragma mark - Parameter clamping
 
@@ -549,7 +534,6 @@ void synth_patch_voice_update_rate(SynthPatchVoiceState *state, double sampleRat
     /* A patch's cutoff may be 20 kHz, which is above Nyquist at 44.1 kHz and
        would make the state-variable filter's tan() blow up. */
     state->filterCutoffCeiling = (float)(sampleRate * 0.45);
-    state->tableStepPerHertz = (float)(1.0 / sampleRate);
 
     const double controlRate = sampleRate / (double)SYNTH_CONTROL_BLOCK_FRAMES;
 

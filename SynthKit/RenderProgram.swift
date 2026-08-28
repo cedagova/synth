@@ -31,11 +31,16 @@ public final class RenderProgram: @unchecked Sendable {
     private let voices: [LineVoiceInstance]
     private var isDestroyed = false
 
-    /// How long a voice may ring after the last scheduled note ends. The
-    /// built-in voice's release is 220 ms; two seconds leaves room for a sound
-    /// with a much longer tail (increment 005's sampled instruments) without
-    /// making every export longer than it needs to be.
-    public static let releaseTailSeconds: Double = 2.0
+    /// How long this program's voices may ring after the last scheduled note
+    /// ends, taken from the sound itself.
+    ///
+    /// A synth patch can ask for a twenty-second release into a long reverb,
+    /// and a fixed figure would cut it off — so `LineVoiceProvider` declares
+    /// its own tail and this is the longest any line asked for. Capped so a
+    /// single extreme patch cannot make every render minutes longer than the
+    /// music.
+    public static let maximumReleaseTailSeconds: Double = 30.0
+    public let releaseTailSeconds: Double
 
     /// Largest buffer the graph may ask for in one render call. AVAudioEngine
     /// uses far less than this live; manual rendering is free to use all of it.
@@ -148,7 +153,9 @@ public final class RenderProgram: @unchecked Sendable {
         // a final chord rings past the last bar line — so take whichever is
         // later and then add room for the release tail.
         let timelineEnd = Self.frame(forMicroseconds: timeline.totalMicroseconds, sampleRate: sampleRate)
-        let tail = Int64((Self.releaseTailSeconds * sampleRate).rounded())
+        self.releaseTailSeconds = min(
+            max(voiceProvider.releaseTailSeconds, 0), Self.maximumReleaseTailSeconds)
+        let tail = Int64((self.releaseTailSeconds * sampleRate).rounded())
         self.totalFrames = max(timelineEnd, lastFrame) + tail
         synth_engine_set_total_frames(engine, self.totalFrames)
 

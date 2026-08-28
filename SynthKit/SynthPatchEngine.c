@@ -254,7 +254,6 @@ void synth_patch_voice_note_on(void *opaque, int32_t midiNoteNumber, int32_t vel
 
     /* Equal temperament, A4 = 440 Hz. */
     const double frequency = 440.0 * pow(2.0, ((double)midiNoteNumber - 69.0) / 12.0);
-    slot->baseFrequency = (float)frequency;
 
     for (int32_t index = 0; index < SYNTH_PATCH_OSCILLATOR_COUNT; index++) {
         const SynthOscillatorConfig *oscillator = &state->config.oscillators[index];

@@ -25,6 +25,36 @@ public struct SynthPatchVoiceProvider: LineVoiceProvider {
     public var identifier: String { patch.identifier }
     public var displayName: String { patch.name }
 
+    /// How long this patch can still be heard after its last note ends.
+    ///
+    /// The amplitude envelope's release, plus however long the effect chain
+    /// keeps ringing after that. The delay's figure is the time it takes its
+    /// feedback to fall 60 dB; the reverb's is the same calculation over its
+    /// comb loop. Both are estimates of an exponential decay, deliberately
+    /// generous, because too long only makes an export slightly longer while
+    /// too short truncates the sound.
+    public var releaseTailSeconds: Double {
+        var tail = patch.amplitudeEnvelope.releaseSeconds
+
+        if patch.delay.isEnabled, patch.delay.mix > 0, patch.delay.feedback > 0 {
+            // Repeats until 60 dB down: log(0.001) / log(feedback) of them.
+            let repeats = log(0.001) / log(min(patch.delay.feedback, 0.99))
+            tail += patch.delay.timeSeconds * repeats
+        } else if patch.delay.isEnabled, patch.delay.mix > 0 {
+            tail += patch.delay.timeSeconds
+        }
+
+        if patch.reverb.isEnabled, patch.reverb.mix > 0 {
+            // The longest Freeverb comb is 1617 frames at 44.1 kHz — about
+            // 37 ms round trip — decaying by `roomSize`'s feedback each pass.
+            let feedback = min(0.70 + 0.28 * patch.reverb.roomSize, 0.99)
+            let passes = log(0.001) / log(feedback)
+            tail += patch.reverb.preDelaySeconds + 0.0367 * passes
+        }
+
+        return min(tail, RenderProgram.maximumReleaseTailSeconds)
+    }
+
     public func makeVoice(sampleRate: Double) -> LineVoiceInstance {
         // Sized and aligned by the C core so the layout stays private to it.
         let byteCount = synth_patch_voice_state_size()

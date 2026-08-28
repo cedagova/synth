@@ -164,7 +164,6 @@ typedef struct {
     float   velocityGain;
     float   keyTrack;       /* -1…1 about middle C */
     float   noteRandom;     /* -1…1, seeded */
-    float   baseFrequency;  /* Hz, before pitch modulation */
 
     uint64_t rng;
 
@@ -320,7 +319,6 @@ struct SynthPatchVoiceState {
     float   modulationRate[3];
 
     float   filterCutoffCeiling;
-    float   tableStepPerHertz;
 
     int32_t activeVoiceLimit;
 

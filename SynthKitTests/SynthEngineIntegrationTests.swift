@@ -245,6 +245,60 @@ final class SynthEngineIntegrationTests: XCTestCase {
         }
     }
 
+    /// A patch's tail is rendered rather than cut off.
+    ///
+    /// Increment 002 rendered a fixed two seconds past the last note, which
+    /// was ample for a 220 ms release and no effects. A synth patch can ask
+    /// for a long release into a long reverb, and the engine has to render
+    /// what the sound actually does — otherwise a piece would simply stop
+    /// mid-decay, in playback and in an export.
+    func testTheProgramRendersAsMuchTailAsThePatchAsksFor() throws {
+        var brief = SynthPatch.defaultVoice
+        brief.amplitudeEnvelope.releaseSeconds = 0.2
+
+        var lingering = brief
+        lingering.amplitudeEnvelope.releaseSeconds = 8
+        lingering.reverb = .init(isEnabled: true, roomSize: 0.9, dampening: 0.2,
+                                 mix: 0.4, preDelaySeconds: 0.05)
+
+        func program(_ patch: SynthPatch) throws -> RenderProgram {
+            try RenderProgram(timeline: try timeline(), sampleRate: 48_000,
+                              voiceProvider: SynthPatchVoiceProvider(patch: patch))
+        }
+
+        let short = try program(brief)
+        let long = try program(lingering)
+
+        XCTAssertGreaterThan(
+            long.releaseTailSeconds, short.releaseTailSeconds + 5,
+            "An 8-second release into a large reverb was given a \(long.releaseTailSeconds) s "
+                + "tail against \(short.releaseTailSeconds) s for a 200 ms release."
+        )
+        XCTAssertGreaterThan(long.totalFrames, short.totalFrames)
+        XCTAssertLessThanOrEqual(
+            long.releaseTailSeconds, RenderProgram.maximumReleaseTailSeconds,
+            "One extreme patch stretched the render past the cap."
+        )
+
+        // And the extra frames carry sound, rather than being silence appended
+        // to the file. Measured in the half-second that begins exactly where
+        // the short patch's render would have stopped: audible there is the
+        // whole point of the longer tail.
+        let audio = try PlaybackEngine.renderTimelineOffline(
+            try timeline(), voiceProvider: SynthPatchVoiceProvider(patch: lingering))
+        let cutoff = Double(short.totalFrames) / 48_000
+        XCTAssertGreaterThan(
+            Double(audio.frameCount) / 48_000, cutoff + 1,
+            "The long patch's render is no longer than the short patch's."
+        )
+        XCTAssertGreaterThan(
+            AudioRenderFixtures.rms(audio.left, from: cutoff, to: cutoff + 0.5, sampleRate: 48_000),
+            1e-4,
+            "Where the short patch's render would have ended, the long patch is already silent — "
+                + "so nothing was actually being cut off."
+        )
+    }
+
     /// A rendered piece still leaves the engine headroom.
     func testTheRenderedPieceDoesNotClip() throws {
         let audio = try render(Self.demandingPatch())

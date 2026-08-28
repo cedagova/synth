@@ -342,7 +342,7 @@ typedef struct SynthPatchConfig {
 void synth_patch_config_default(SynthPatchConfig *config);
 
 /*
- Element accessors for the three fixed-size arrays in `SynthPatchConfig`.
+ Element setters for the three fixed-size arrays in `SynthPatchConfig`.
 
  A C array crosses into Swift as a tuple, which cannot be subscripted, so the
  alternative is `withUnsafeMutablePointer` and a memory rebind at every call
@@ -353,16 +353,10 @@ void synth_patch_config_default(SynthPatchConfig *config);
  */
 void synth_patch_config_set_oscillator(SynthPatchConfig *config, int32_t index,
                                        const SynthOscillatorConfig *oscillator);
-void synth_patch_config_get_oscillator(const SynthPatchConfig *config, int32_t index,
-                                       SynthOscillatorConfig *outOscillator);
 void synth_patch_config_set_lfo(SynthPatchConfig *config, int32_t index,
                                 const SynthLFOConfig *lfo);
-void synth_patch_config_get_lfo(const SynthPatchConfig *config, int32_t index,
-                                SynthLFOConfig *outLFO);
 void synth_patch_config_set_modulation(SynthPatchConfig *config, int32_t index,
                                        const SynthModulationSlotConfig *slot);
-void synth_patch_config_get_modulation(const SynthPatchConfig *config, int32_t index,
-                                       SynthModulationSlotConfig *outSlot);
 
 /// Clamp every field into its documented range in place.
 ///

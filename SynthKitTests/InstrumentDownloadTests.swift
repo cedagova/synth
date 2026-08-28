@@ -200,6 +200,48 @@ final class InstrumentDownloadTests: XCTestCase {
         }
     }
 
+    func testALibraryOfHundredsOfFilesFinishesRatherThanExhaustingConnections() async throws {
+        // The defect this exists for: the transport used to build one
+        // `URLSession` per asset. Downloading the real 2,539-file orchestral
+        // library stalled dead at file 1,649 with 162 established and 83
+        // half-closed sockets and the process at zero per cent CPU — a session
+        // owns a connection pool and retires it asynchronously, so one per file
+        // leaks connections faster than the system reclaims them. Three assets
+        // never came close to showing it; four hundred do.
+        let (library, payloads) = makeLibrary(assetCount: 400, byteCountEach: 2_048)
+        let (store, database, assetsURL) = try makeStore(catalog: [library])
+        defer { database.close() }
+
+        let manager = InstrumentDownloadManager(
+            store: store, transfer: makeFixtureTransfer(), concurrentTransferLimit: 6
+        )
+        try await manager.install(library)
+
+        guard case .installed(let installed) = try store.state(of: library) else {
+            return XCTFail("A 401-asset library did not install.")
+        }
+        XCTAssertEqual(installed.assetCount, 401)
+
+        // Spot-check the ends and the middle byte-for-byte: a connection pool
+        // that muddled two responses would show up as one file holding
+        // another's bytes, which the digests would catch — but this says so
+        // directly.
+        for name in ["asset0.wav", "asset199.wav", "asset399.wav"] {
+            let installedBytes = try Data(
+                contentsOf: assetsURL
+                    .appending(path: library.identifier)
+                    .appending(path: "Samples")
+                    .appending(path: name)
+            )
+            XCTAssertEqual(installedBytes, payloads[name], "\(name) did not install byte-for-byte.")
+        }
+
+        XCTAssertEqual(
+            server.requests.filter { $0.path.hasSuffix(".wav") }.count, 400,
+            "Every asset should have been fetched exactly once."
+        )
+    }
+
     // MARK: Resume
 
     func testAnInterruptedTransferResumesFromWhereItStopped() async throws {

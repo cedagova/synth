@@ -203,12 +203,22 @@ final class NoNetworkBaselineTests: XCTestCase {
             source.contains("url.scheme?.lowercased() == permittedScheme"),
             "The allow-listed networking file no longer checks the URL's scheme at all."
         )
-        XCTAssertTrue(
-            source.contains(#"self.permittedScheme = "https""#),
+        // Every `public` initialiser must pin the scheme itself. The only
+        // initialiser that takes one is `internal`, which is what keeps the app
+        // — which imports SynthKit normally — unable to ask for anything else.
+        let publicInitialiserCount = source.components(separatedBy: "public convenience").count - 1
+        XCTAssertGreaterThan(publicInitialiserCount, 0, "The transfer has no public initialiser.")
+        XCTAssertEqual(
+            source.components(separatedBy: #"permittedScheme: "https""#).count - 1,
+            publicInitialiserCount,
             """
-            The transfer's public initialiser no longer hard-codes https. \
+            A public initialiser of the transfer does not hard-code https. \
             REQ-028 permits HTTPS catalog fetches and nothing else.
             """
+        )
+        XCTAssertFalse(
+            source.contains("public init(\n        permittedScheme"),
+            "The scheme-taking initialiser became public, so the app could now ask for plain HTTP."
         )
 
         // `permittedScheme` is internal so that only `@testable import` can

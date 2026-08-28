@@ -58,19 +58,98 @@ public final class AssetTransferURLSession: NSObject, AssetTransferring, @unchec
     /// `NoNetworkBaselineTests` asserts that nothing under `Synth/` mentions it.
     let permittedScheme: String
 
-    public init(stallTimeout: TimeInterval = 45, resourceTimeout: TimeInterval = 6 * 60 * 60) {
+    /// How many connections to open to one host at a time.
+    private let maximumConnectionsPerHost: Int
+
+    /// One session for the whole run, and one router demultiplexing its
+    /// callbacks by task.
+    ///
+    /// **This started life as a session per asset, and that was a real bug.**
+    /// The orchestral library is 2,539 files; downloading it for real stalled
+    /// dead at file 1,649 with 162 established and 83 half-closed sockets held
+    /// open and the process at zero per cent CPU. A session owns its connection
+    /// pool, and `finishTasksAndInvalidate()` retires it *asynchronously*, so
+    /// creating and dropping one per file leaks connections faster than the
+    /// system reclaims them until nothing can connect at all. It also threw away
+    /// every chance of connection reuse, which is most of the cost of fetching
+    /// two and a half thousand small files.
+    ///
+    /// One session fixes both: connections are pooled and reused, and
+    /// `httpMaximumConnectionsPerHost` is a real ceiling rather than a hope.
+    ///
+    /// Built in `init` rather than lazily, because six transfers start at once
+    /// and Swift's `lazy var` has no synchronisation at all — two of them
+    /// racing would build two sessions and route half the callbacks into the
+    /// one nobody is listening to.
+    private let session: URLSession
+
+    /// Demultiplexes the one session's callbacks back to the right transfer.
+    private let router: TransferRouter
+
+    public convenience override init() {
+        self.init(permittedScheme: "https")
+    }
+
+    public convenience init(
+        stallTimeout: TimeInterval,
+        resourceTimeout: TimeInterval = 6 * 60 * 60,
+        maximumConnectionsPerHost: Int = 6
+    ) {
+        self.init(
+            permittedScheme: "https",
+            stallTimeout: stallTimeout,
+            resourceTimeout: resourceTimeout,
+            maximumConnectionsPerHost: maximumConnectionsPerHost
+        )
+    }
+
+    /// The one initialiser. `permittedScheme` is `internal`, which is what keeps
+    /// the app unable to ask for anything but HTTPS — see the property above.
+    init(
+        permittedScheme: String,
+        stallTimeout: TimeInterval = 45,
+        resourceTimeout: TimeInterval = 6 * 60 * 60,
+        maximumConnectionsPerHost: Int = 6
+    ) {
         self.stallTimeout = stallTimeout
         self.resourceTimeout = resourceTimeout
-        self.permittedScheme = "https"
+        self.maximumConnectionsPerHost = maximumConnectionsPerHost
+        self.permittedScheme = permittedScheme
+
+        let router = TransferRouter()
+        self.router = router
+
+        let configuration = URLSessionConfiguration.ephemeral
+        // A 400 MB asset must not also be written into a URL cache; the staging
+        // file is the only copy that should exist while it downloads.
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieAcceptPolicy = .never
+        // An offline machine should say so immediately rather than sit waiting
+        // for a network that is not coming.
+        configuration.waitsForConnectivity = false
+        configuration.allowsCellularAccess = true
+        configuration.timeoutIntervalForRequest = stallTimeout
+        configuration.timeoutIntervalForResource = resourceTimeout
+        configuration.httpMaximumConnectionsPerHost = maximumConnectionsPerHost
+
+        let queue = OperationQueue()
+        queue.maxConcurrentOperationCount = 1
+        queue.name = "synth.asset-transfer"
+        self.session = URLSession(
+            configuration: configuration, delegate: router, delegateQueue: queue
+        )
+
         super.init()
     }
 
-    /// Test-only. See `permittedScheme`.
-    init(permittedScheme: String, stallTimeout: TimeInterval, resourceTimeout: TimeInterval) {
-        self.stallTimeout = stallTimeout
-        self.resourceTimeout = resourceTimeout
-        self.permittedScheme = permittedScheme
-        super.init()
+    deinit {
+        // Lets in-flight tasks finish, then retires the connection pool. A
+        // session keeps its delegate alive until this is called, so skipping it
+        // would leak the router as well as the sockets.
+        session.finishTasksAndInvalidate()
     }
 
     @discardableResult
@@ -97,32 +176,15 @@ public final class AssetTransferURLSession: NSObject, AssetTransferring, @unchec
             request.setValue("bytes=\(startingAtByteOffset)-", forHTTPHeaderField: "Range")
         }
 
-        let configuration = URLSessionConfiguration.ephemeral
-        // A 400 MB asset must not also be written into a URL cache; the staging
-        // file is the only copy that should exist while it downloads.
-        configuration.urlCache = nil
-        configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-        configuration.httpCookieStorage = nil
-        configuration.httpShouldSetCookies = false
-        configuration.httpCookieAcceptPolicy = .never
-        // An offline machine should say so immediately rather than sit waiting
-        // for a network that is not coming.
-        configuration.waitsForConnectivity = false
-        configuration.allowsCellularAccess = true
-        configuration.timeoutIntervalForRequest = stallTimeout
-        configuration.timeoutIntervalForResource = resourceTimeout
-
         let sink = TransferSink(host: host, began: began, receive: receive)
-        let queue = OperationQueue()
-        queue.maxConcurrentOperationCount = 1
-        let session = URLSession(configuration: configuration, delegate: sink, delegateQueue: queue)
-        defer { session.finishTasksAndInvalidate() }
-
         let task = session.dataTask(with: request)
 
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 sink.attach(continuation)
+                // Registered before `resume()`, because a response can arrive
+                // before the next line would otherwise have run.
+                router.register(sink, for: task.taskIdentifier)
                 task.resume()
             }
         } onCancel: {
@@ -131,13 +193,54 @@ public final class AssetTransferURLSession: NSObject, AssetTransferring, @unchec
     }
 }
 
-/// Bridges `URLSession`'s delegate callbacks to one `async` call.
+/// Routes one shared session's delegate callbacks to the right transfer.
+private final class TransferRouter: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var sinks: [Int: TransferSink] = [:]
+
+    func register(_ sink: TransferSink, for taskIdentifier: Int) {
+        lock.lock(); sinks[taskIdentifier] = sink; lock.unlock()
+    }
+
+    private func sink(for task: URLSessionTask) -> TransferSink? {
+        lock.lock(); defer { lock.unlock() }
+        return sinks[task.taskIdentifier]
+    }
+
+    private func remove(_ task: URLSessionTask) -> TransferSink? {
+        lock.lock(); defer { lock.unlock() }
+        return sinks.removeValue(forKey: task.taskIdentifier)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+    ) {
+        guard let sink = sink(for: dataTask) else {
+            completionHandler(.cancel)
+            return
+        }
+        sink.received(response, completionHandler: completionHandler)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        sink(for: dataTask)?.received(data, task: dataTask)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        remove(task)?.completed(with: error)
+    }
+}
+
+/// Bridges one task's callbacks to one `async` call.
 ///
 /// Every mutable field is touched only from the session's serial delegate
 /// queue, or once from `attach` before `resume()` starts anything — which is
 /// why the lock is only around the continuation, the one field two threads can
 /// race for.
-private final class TransferSink: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+private final class TransferSink: @unchecked Sendable {
     private let host: String
     private let began: @Sendable (AssetTransferResponse) throws -> Void
     private let receive: @Sendable (Data) throws -> Void
@@ -159,7 +262,6 @@ private final class TransferSink: NSObject, URLSessionDataDelegate, @unchecked S
         self.host = host
         self.began = began
         self.receive = receive
-        super.init()
     }
 
     func attach(_ continuation: CheckedContinuation<Int64, Error>) {
@@ -176,12 +278,10 @@ private final class TransferSink: NSObject, URLSessionDataDelegate, @unchecked S
         pending?.resume(with: result)
     }
 
-    // MARK: URLSessionDataDelegate
+    // MARK: What the router hands over
 
-    func urlSession(
-        _ session: URLSession,
-        dataTask: URLSessionDataTask,
-        didReceive response: URLResponse,
+    func received(
+        _ response: URLResponse,
         completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
     ) {
         guard let http = response as? HTTPURLResponse else {
@@ -221,18 +321,18 @@ private final class TransferSink: NSObject, URLSessionDataDelegate, @unchecked S
         completionHandler(.allow)
     }
 
-    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+    func received(_ data: Data, task: URLSessionDataTask) {
         guard sinkError == nil else { return }
         do {
             try receive(data)
             deliveredByteCount += Int64(data.count)
         } catch {
             sinkError = error
-            dataTask.cancel()
+            task.cancel()
         }
     }
 
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+    func completed(with error: Error?) {
         if let sinkError {
             finish(.failure(sinkError))
             return

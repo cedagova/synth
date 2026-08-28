@@ -341,7 +341,8 @@ final class CatalogFixtureServer: @unchecked Sendable {
 /// ships, not a stand-in for it.
 func makeFixtureTransfer(stallTimeout: TimeInterval = 10) -> AssetTransferring {
     AssetTransferURLSession(
-        permittedScheme: "http", stallTimeout: stallTimeout, resourceTimeout: 120
+        permittedScheme: "http", stallTimeout: stallTimeout, resourceTimeout: 120,
+        maximumConnectionsPerHost: 6
     )
 }
 

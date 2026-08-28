@@ -117,7 +117,7 @@ extension SoundLibraryError: LocalizedError {
 /// wrote.
 public final class SoundLibrary: @unchecked Sendable {
     private let database: SQLiteDatabase
-    private let catalog: SoundCatalogStoring
+    private let catalog: SoundCatalog
     private let shipped: ShippedSoundCollection
     private let dependentStores: [SoundDependentStore]
     private let makeIdentity: @Sendable () -> String
@@ -137,12 +137,13 @@ public final class SoundLibrary: @unchecked Sendable {
         )
     }
 
-    /// Seams exist for the failure paths — a catalog that refuses to write, a
-    /// dependent that refuses a deletion, and an identity generator that hands
-    /// back one a delete already retired.
+    /// Two seams exist for the failure paths tests could not otherwise reach:
+    /// an identity generator that hands back one a delete already retired, and
+    /// a clock. A refused *write* needs no seam — a trigger on the real table
+    /// reproduces one exactly.
     init(
         database: SQLiteDatabase,
-        catalog: SoundCatalogStoring,
+        catalog: SoundCatalog,
         shipped: ShippedSoundCollection = .standard,
         dependentStores: [SoundDependentStore] = [],
         makeIdentity: @escaping @Sendable () -> String = { "user." + UUID().uuidString.lowercased() },
@@ -475,9 +476,13 @@ public final class SoundLibrary: @unchecked Sendable {
     /// A deterministic, non-colliding name for a copy: "Glass Keys copy", then
     /// "Glass Keys copy 2", "Glass Keys copy 3".
     ///
-    /// Deterministic rather than unique-by-constraint. Names are not keys here,
+    /// Deterministic rather than unique-by-constraint, and the survey is
+    /// deliberately outside the insert's transaction. Names are not keys here,
     /// so this exists to keep a library of copies legible, not to prevent a
-    /// collision that would cost anything.
+    /// collision: two copies made at the same instant may both land on
+    /// "… copy 2", and that costs the owner a second look rather than a sound.
+    /// A read that fails is treated as an empty library for the same reason —
+    /// naming must never be the thing that stops a copy being made.
     private func copyName(for original: String) -> String {
         let base = original + " copy"
         let taken = Set(

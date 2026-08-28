@@ -1,44 +1,20 @@
 import Foundation
 
-/// The rows of the personal sound library.
+/// The rows of the personal sound library: the SQLite half of schema v4.
 ///
-/// Deliberately thin: it reads and writes `sounds` and `retired_sound_ids` and
-/// knows nothing about shipped content, edit-as-copy, or naming. All of that is
-/// `SoundLibrary`'s, which is the only thing that should be able to say what a
-/// legal change to a sound is.
+/// Deliberately thin. It reads and writes `sounds` and `retired_sound_ids` and
+/// knows nothing about shipped content, edit-as-copy, or naming — all of which
+/// is `SoundLibrary`'s, because that should be the only thing able to say what
+/// a legal change to a sound is.
 ///
-/// A protocol, like `PieceCatalogWriting`, so the library's failure paths — a
-/// store that refuses a write — can be exercised for real rather than described.
-public protocol SoundCatalogStoring: Sendable {
-    /// Every stored user sound, ordered by name then identity.
-    func allStoredSounds() throws -> [SoundEntry]
-
-    /// The stored sound with this identity, if there is one.
-    func storedSound(withID id: String) throws -> SoundEntry?
-
-    /// How many sounds the owner has of their own.
-    func storedSoundCount() throws -> Int
-
-    /// True when this identity has been retired by a delete and must never be
-    /// handed to another sound.
-    func isRetired(id: String) throws -> Bool
-
-    /// Adds one sound. The caller has already validated its document.
-    func insert(_ entry: SoundEntry, document: String) throws
-
-    /// Replaces the mutable fields of an existing sound.
-    func update(_ entry: SoundEntry, document: String) throws
-
-    /// Deletes the row and retires its identity.
-    ///
-    /// Called inside the caller's transaction — like `PieceCatalogDeleting`,
-    /// it must not open one of its own, because the deletion the owner sees is
-    /// larger than these two statements.
-    func deleteAndRetire(id: String, at timestamp: String) throws
-}
-
-/// The SQLite-backed personal sound library (schema v4).
-public final class SoundCatalog: SoundCatalogStoring, @unchecked Sendable {
+/// Concrete rather than a protocol, unlike `PieceCatalogWriting`. That protocol
+/// exists so the importer's half-failed writes — a content file that landed and
+/// a row that did not — can be exercised with a catalog that refuses. A sound
+/// has no such split: its document is in the row, so every failure path here is
+/// one SQL statement failing, which a trigger on the real table reproduces
+/// exactly (`SoundLibraryTests.testAStoreFailureOnSaveLeavesTheExistingEntryIntact`).
+/// An injection seam with nothing to inject would be scaffolding, not design.
+public final class SoundCatalog: @unchecked Sendable {
     /// Name of the table holding the owner's sounds.
     public static let tableName = "sounds"
 
@@ -56,6 +32,7 @@ public final class SoundCatalog: SoundCatalogStoring, @unchecked Sendable {
         revision, created_at, updated_at
         """
 
+    /// Every stored user sound, ordered by name then identity.
     public func allStoredSounds() throws -> [SoundEntry] {
         try database.query(
             """
@@ -66,6 +43,7 @@ public final class SoundCatalog: SoundCatalogStoring, @unchecked Sendable {
         .map(Self.entry(from:))
     }
 
+    /// The stored sound with this identity, if there is one.
     public func storedSound(withID id: String) throws -> SoundEntry? {
         try database.query(
             "SELECT \(Self.columns) FROM \(Self.tableName) WHERE id = ? LIMIT 1;",
@@ -75,10 +53,13 @@ public final class SoundCatalog: SoundCatalogStoring, @unchecked Sendable {
         .map(Self.entry(from:))
     }
 
+    /// How many sounds the owner has of their own.
     public func storedSoundCount() throws -> Int {
         try database.scalarInt("SELECT count(*) FROM \(Self.tableName);") ?? 0
     }
 
+    /// True when a delete retired this identity, so it must never be handed to
+    /// another sound.
     public func isRetired(id: String) throws -> Bool {
         let count = try database.scalarInt(
             "SELECT count(*) FROM \(Self.retiredTableName) WHERE id = ?;",
@@ -87,6 +68,7 @@ public final class SoundCatalog: SoundCatalogStoring, @unchecked Sendable {
         return (count ?? 0) > 0
     }
 
+    /// Adds one sound. The caller has already validated its document.
     public func insert(_ entry: SoundEntry, document: String) throws {
         try database.execute(
             """
@@ -159,21 +141,19 @@ public final class SoundCatalog: SoundCatalogStoring, @unchecked Sendable {
     /// the owner made that silently stops appearing in their library is the one
     /// failure this store must never have.
     static func entry(from row: SQLiteRow) throws -> SoundEntry {
-        let id = row.text("id") ?? "(no id)"
-
         func fail(_ reason: String) -> StoreError {
-            StoreError.soundRowUnreadable(id: id, reason: reason)
+            StoreError.soundRowUnreadable(id: row.text("id") ?? "(no id)", reason: reason)
         }
 
         guard
+            let id = row.text("id"),
             let name = row.text("name"),
             let rawCategory = row.text("category"),
             let documentVersion = row.integer("document_version"),
             let document = row.text("document"),
             let revision = row.integer("revision"),
             let createdAt = row.text("created_at"),
-            let updatedAt = row.text("updated_at"),
-            row.text("id") != nil
+            let updatedAt = row.text("updated_at")
         else {
             throw fail("Its stored form does not match this version of Synth.")
         }

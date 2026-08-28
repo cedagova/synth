@@ -31,6 +31,13 @@ enum LibraryState {
 final class AppModel {
     private(set) var state: LibraryState = .loading
 
+    /// The open piece's transport, or nil when the library is showing.
+    ///
+    /// One at a time, deliberately: there is one window, one audio engine and
+    /// one output device, and a second transport would be competing for all
+    /// three. Opening another piece replaces this one.
+    private(set) var playback: PlaybackModel?
+
     /// The live library surface, once the store is open. The menu commands
     /// reach the library through this rather than through the view hierarchy.
     var library: LibraryModel? {
@@ -75,8 +82,35 @@ final class AppModel {
         await attempt.value
     }
 
+    // MARK: - Opening a piece for playback
+
+    /// Opens `piece` on the transport screen (REQ-009).
+    ///
+    /// Compilation happens on the transport screen rather than here, so the
+    /// window changes immediately and a long piece is prepared in front of the
+    /// owner instead of behind a frozen library.
+    func openPlayback(for piece: PieceRecord) {
+        guard let store else { return }
+        if playback?.piece.id == piece.id { return }
+        playback?.close()
+        playback = PlaybackModel(piece: piece, store: store)
+    }
+
+    /// The Playback ▸ Open Selected Piece command, and the library's own
+    /// Return key and Play button.
+    func openSelectedPieceForPlayback() {
+        guard let piece = library?.selectedPiece else { return }
+        openPlayback(for: piece)
+    }
+
+    func closePlayback() {
+        playback?.close()
+        playback = nil
+    }
+
     private func performBootstrap(reopen: Bool) async {
         if reopen, let current = store {
+            closePlayback()
             current.close()
             store = nil
         }

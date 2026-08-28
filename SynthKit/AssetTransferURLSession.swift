@@ -23,6 +23,18 @@ import Foundation
 /// Nothing is ever *sent* here beyond an HTTP GET for a URL the build itself
 /// pins: no account, no telemetry, no user data, no request body. D9 and
 /// increment 001's "local only, no cloud storage" are untouched.
+public enum ShippedAssetTransfer {
+    /// The transfer the app runs downloads through.
+    ///
+    /// A factory, and it lives here, because this is the only file permitted to
+    /// name a networking type — so the app and the download manager can ask for
+    /// the shipped transfer without either of them mentioning one. That is not
+    /// ceremony: `NoNetworkBaselineTests` found this exact leak when the catalog
+    /// screen's model spelled the class out in a default argument, which is how
+    /// the guard is supposed to behave.
+    public static func make() -> AssetTransferring { AssetTransferURLSession() }
+}
+
 public final class AssetTransferURLSession: NSObject, AssetTransferring, @unchecked Sendable {
     /// How long a transfer may go without receiving a byte before it is
     /// treated as a dead connection.

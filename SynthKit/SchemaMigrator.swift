@@ -107,6 +107,58 @@ public enum SchemaMigrator {
                 ) STRICT;
                 """
             )
+        },
+        Migration(version: 4, name: "create_sounds") { database in
+            // The owner's personal sound library (REQ-023). Purely additive:
+            // nothing here touches `pieces` or `preferences`, so a store this
+            // step migrated still opens with every earlier record intact, and
+            // reverting this build leaves the store openable — the two extra
+            // tables are simply unread.
+            //
+            // **Only user sounds are rows.** The shipped collection is app
+            // content compiled into the build (`ShippedSoundCollection`), which
+            // is what makes "shipped content is never duplicated into user
+            // storage until edited" literally true and makes deleting a shipped
+            // sound impossible rather than merely refused.
+            //
+            // The patch document lives in the row rather than beside the
+            // database as a file. AD3 puts *verbatim assets* — MusicXML,
+            // downloaded samples — in the filesystem and metadata in SQLite; a
+            // patch is small structured metadata, and keeping it here is what
+            // makes a rename, a re-categorisation and an edit one atomic
+            // transaction instead of a row write plus a file write that can
+            // half-fail. `sounds/` in the container stays reserved for
+            // increment 005's sampled instrument assets, which are the other
+            // kind.
+            try database.executeScript(
+                """
+                CREATE TABLE sounds (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    shipped_origin_id TEXT,
+                    document_version INTEGER NOT NULL,
+                    document TEXT NOT NULL,
+                    revision INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                ) STRICT;
+
+                CREATE INDEX sounds_category ON sounds (category);
+
+                CREATE TABLE retired_sound_ids (
+                    id TEXT PRIMARY KEY,
+                    retired_at TEXT NOT NULL
+                ) STRICT;
+
+                CREATE TRIGGER sounds_never_reuse_a_retired_identity
+                    BEFORE INSERT ON sounds
+                    WHEN EXISTS (SELECT 1 FROM retired_sound_ids WHERE id = NEW.id)
+                BEGIN
+                    SELECT RAISE(ABORT, 'a deleted sound identity is never reused');
+                END;
+                """
+            )
         }
     ]
 

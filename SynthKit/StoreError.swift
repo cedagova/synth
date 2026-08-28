@@ -35,6 +35,12 @@ public enum StoreError: Error, Equatable, Sendable {
     /// no longer matches this build's schema, which is loud rather than a
     /// silently vanishing piece.
     case pieceRowUnreadable(id: String)
+
+    /// A `sounds` row could not be decoded into a `SoundEntry` — a missing
+    /// column, a category this build does not know, or a patch document it
+    /// cannot read. Loud for the same reason as `pieceRowUnreadable`: a sound
+    /// the owner made must never quietly disappear from the list.
+    case soundRowUnreadable(id: String, reason: String)
 }
 
 extension StoreError: LocalizedError {
@@ -67,6 +73,8 @@ extension StoreError: LocalizedError {
             return "Synth's library database has no readable schema version."
         case .pieceRowUnreadable(let id):
             return "Synth could not read the library entry \(id); its stored form does not match this version of Synth."
+        case .soundRowUnreadable(let id, let reason):
+            return "Synth could not read the sound \(id) in your library. \(reason)"
         }
     }
 
@@ -90,6 +98,8 @@ extension StoreError: LocalizedError {
             return "The library database may be damaged. Restore it from a backup."
         case .pieceRowUnreadable:
             return "Update Synth to the newest version you have used with this library, or restore the library from a backup."
+        case .soundRowUnreadable:
+            return "Your other sounds are unaffected. Update Synth to the newest version you have used with this library, or restore the library from a backup."
         }
     }
 }

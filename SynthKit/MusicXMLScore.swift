@@ -46,13 +46,10 @@ enum MusicXMLScore {
     /// Parses `data` and returns its metadata, or throws on a document that is
     /// not well-formed.
     static func metadata(from data: Data) throws -> MusicXMLScoreMetadata {
-        let parser = XMLParser(data: data)
-
-        // Security, and REQ-028's no-network rule, in two lines: a MusicXML
-        // file's DOCTYPE points at musicxml.org, and a hostile file could point
-        // an entity at a local file. Neither is ever fetched.
-        parser.shouldResolveExternalEntities = false
-        parser.externalEntityResolvingPolicy = .never
+        // Hardened in one place for every MusicXML reader: external entities
+        // are never resolved, so a DOCTYPE pointing at musicxml.org — or a
+        // hostile entity pointing at a local file — is never fetched.
+        let parser = MusicXMLParsing.makeParser(data)
 
         let scanner = MusicXMLScanner()
         parser.delegate = scanner

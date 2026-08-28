@@ -169,6 +169,77 @@ enum AudioRenderFixtures {
 
     static func decibels(_ ratio: Double) -> Double { 20 * log10(ratio) }
 
+    /// Energy at the fundamental and the next `count - 1` harmonics.
+    ///
+    /// The single measurement that separates one oscillator type from another:
+    /// a saw and a square play the same note, and the only thing that says
+    /// which one you are hearing is which harmonics carry energy.
+    static func harmonicEnergies(
+        _ samples: [Float],
+        fundamental: Double,
+        count: Int,
+        sampleRate: Double
+    ) -> [Double] {
+        (1...count).map { harmonic in
+            energy(samples, atHertz: fundamental * Double(harmonic), sampleRate: sampleRate)
+        }
+    }
+
+    /// Root-mean-square of one time window, in seconds.
+    ///
+    /// Windowed rather than whole-buffer because most claims about an envelope
+    /// or an effect tail are claims about *when* energy is present.
+    static func rms(
+        _ samples: [Float],
+        from startSeconds: Double,
+        to endSeconds: Double,
+        sampleRate: Double
+    ) -> Double {
+        let start = max(0, Int(startSeconds * sampleRate))
+        let end = min(samples.count, Int(endSeconds * sampleRate))
+        guard end > start else { return 0 }
+        var total = 0.0
+        for index in start..<end { total += Double(samples[index]) * Double(samples[index]) }
+        return (total / Double(end - start)).squareRoot()
+    }
+
+    /// Short-window RMS envelope, one value per `hop` samples.
+    static func rmsEnvelope(_ samples: [Float], window: Int = 512, hop: Int = 256) -> [Double] {
+        var envelope: [Double] = []
+        var start = 0
+        while start + window <= samples.count {
+            var total = 0.0
+            for index in start..<(start + window) {
+                total += Double(samples[index]) * Double(samples[index])
+            }
+            envelope.append((total / Double(window)).squareRoot())
+            start += hop
+        }
+        return envelope
+    }
+
+    /// Coefficient of variation of an RMS envelope: how much the level moves
+    /// relative to its own mean.
+    ///
+    /// This is how a chorus is measured. Its audible signature is not "louder"
+    /// or "brighter" — it is a level that keeps moving as the comb notches
+    /// sweep, and a held note whose loudness is constant has no chorus on it
+    /// however much the dry and wet signals differ.
+    static func levelVariation(_ samples: [Float]) -> Double {
+        let envelope = rmsEnvelope(samples)
+        guard envelope.count > 4 else { return 0 }
+        let mean = envelope.reduce(0, +) / Double(envelope.count)
+        guard mean > 0 else { return 0 }
+        let variance = envelope.reduce(0) { $0 + ($1 - mean) * ($1 - mean) } / Double(envelope.count)
+        return variance.squareRoot() / mean
+    }
+
+    static func peak(_ samples: [Float]) -> Float {
+        var peak: Float = 0
+        for sample in samples where abs(sample) > peak { peak = abs(sample) }
+        return peak
+    }
+
     /// Concert pitch of a MIDI note number.
     static func frequency(ofMIDINote note: Int) -> Double {
         440 * pow(2, (Double(note) - 69) / 12)

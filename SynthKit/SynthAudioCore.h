@@ -43,10 +43,11 @@ extern "C" {
 /*
  The line-voice rendering interface: how one sound renders one line's events.
 
- This is the surface increment 003's synthesizer (SYN001) and increment 005's
- sampled instruments (INS002) implement. Increment 002 ships exactly one
- implementation of it — the fixed built-in voice below — so playback is audible
- now (AD7).
+ This is the surface increment 003's synthesizer (SYN001) implements in
+ `SynthPatchEngine.h`, and increment 005's sampled instruments (INS002) will
+ implement next. Increment 002 shipped a fixed built-in voice behind it so
+ playback was audible before the synth existed; AD7 said increment 003 would
+ replace that voice, and it has. The interface itself is unchanged.
 
  It is a plain vtable of C function pointers rather than a Swift protocol
  because every one of these calls happens on the render thread, where a
@@ -94,25 +95,6 @@ typedef struct SynthLineVoice {
     /// Immediate silence, all notes and envelopes cleared.
     void (*reset)(void *state);
 } SynthLineVoice;
-
-#pragma mark - Built-in default voice (AD7)
-
-/*
- The fixed built-in voice. Transitional by design: increment 003 replaces it
- with the real synthesizer behind the interface above, and nothing else in the
- engine changes when it does.
- */
-typedef struct SynthDefaultVoiceState SynthDefaultVoiceState;
-
-/// Bytes to allocate for one default-voice state. The control thread allocates;
-/// this file never does.
-size_t synth_default_voice_state_size(void);
-
-/// Initialise a default voice in caller-provided storage and fill `outVoice`
-/// with its vtable. Control thread only.
-void synth_default_voice_init(SynthDefaultVoiceState *state,
-                              SynthLineVoice *outVoice,
-                              double sampleRate);
 
 #pragma mark - Transport
 

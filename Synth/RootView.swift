@@ -6,10 +6,14 @@ struct RootView: View {
 
     var body: some View {
         Group {
-            // The transport takes the whole window while a piece is open: it is
-            // its own place, not a panel beside the list, and later increments
-            // extend it rather than the library.
-            if let playback = model.playback {
+            // The studio takes the window over whatever else is showing, and
+            // deliberately does not close it. An open piece keeps playing while
+            // a sound is designed — that is what "live editing during playback"
+            // means when there is one window — so leaving the studio comes back
+            // to a transport that has been running all along.
+            if model.isStudioShowing, let studio = model.studio {
+                SoundStudioScreen(model: studio) { model.closeSoundStudio() }
+            } else if let playback = model.playback {
                 PlaybackScreen(model: playback) { model.closePlayback() }
                     // Keyed by piece so opening another one rebuilds the screen
                     // and re-runs its preparation task.

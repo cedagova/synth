@@ -63,7 +63,18 @@ struct PlaybackScreen: View {
         .onChange(of: model.measureFocusRequests) { _, _ in focus = .measure }
         .onChange(of: model.timeFocusRequests) { _, _ in focus = .time }
         .task { await model.prepare() }
-        .onDisappear { model.close() }
+        // **No `.onDisappear { model.close() }`.**
+        //
+        // There is now a second reason this screen can disappear: the sound
+        // studio takes the window over it while the piece stays open, which is
+        // the whole point of being able to edit a sound while it plays. Closing
+        // on disappear stopped the music the moment the studio opened — the
+        // frozen candidate's own screenshot caught the transport reading
+        // "Stopped" at 3.7 seconds of a 32-second piece.
+        //
+        // The model's lifetime was never this view's to own anyway.
+        // `AppModel.closePlayback()` closes it when the owner leaves the piece,
+        // and `openPlayback(for:)` closes the previous one before replacing it.
     }
 
     /// Loading and failure both sit over the transport rather than replacing

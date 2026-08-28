@@ -38,6 +38,28 @@ final class AppModel {
     /// three. Opening another piece replaces this one.
     private(set) var playback: PlaybackModel?
 
+    /// The sound studio, once it has been opened. Nil until then, because
+    /// building it opens the sound library and starts an audio engine, and an
+    /// owner who never designs a sound should pay for neither.
+    private(set) var studio: SoundStudioModel?
+
+    /// True while the studio is the screen showing.
+    ///
+    /// Separate from `studio != nil` because leaving the studio must not throw
+    /// the sound under edit away: the owner goes back to the transport, listens,
+    /// and comes back to the same unsaved patch.
+    private(set) var isStudioShowing = false
+
+    /// The channel every piece's playback renders through.
+    ///
+    /// It holds `SynthPatch.defaultVoice`, which is exactly what increment
+    /// 002's built-in voice sounded like and exactly what SYN001 replaced it
+    /// with — so with the studio closed the app makes the sound it always made.
+    /// What the channel adds is a way for the editor to replace that patch in
+    /// the voices that are *already rendering*, which is how a piece can be
+    /// played through the sound under edit without the piece stopping.
+    let playbackChannel = SynthPatchLiveVoices(patch: .defaultVoice)
+
     /// The live library surface, once the store is open. The menu commands
     /// reach the library through this rather than through the view hierarchy.
     var library: LibraryModel? {
@@ -93,7 +115,34 @@ final class AppModel {
         guard let store else { return }
         if playback?.piece.id == piece.id { return }
         playback?.close()
-        playback = PlaybackModel(piece: piece, store: store)
+        playback = PlaybackModel(
+            piece: piece,
+            store: store,
+            voiceProvider: SynthPatchVoiceProvider(live: playbackChannel)
+        )
+        isStudioShowing = false
+    }
+
+    // MARK: - The sound studio
+
+    /// Show the sound-design surface (REQ-016, REQ-017).
+    ///
+    /// Built once and then kept, so leaving it to listen to the piece and
+    /// coming back does not lose an unsaved edit. It sits *over* whatever else
+    /// is showing rather than replacing it: an open piece keeps playing while
+    /// the studio is up, which is the whole point of being able to edit its
+    /// sound while it does.
+    func openSoundStudio() {
+        guard let store else { return }
+        if studio == nil {
+            let editor = SoundEditorModel(store: store, playbackChannel: playbackChannel)
+            studio = SoundStudioModel(store: store, editor: editor)
+        }
+        isStudioShowing = true
+    }
+
+    func closeSoundStudio() {
+        isStudioShowing = false
     }
 
     /// The Playback ▸ Open Selected Piece command, and the library's own
@@ -111,6 +160,12 @@ final class AppModel {
     private func performBootstrap(reopen: Bool) async {
         if reopen, let current = store {
             closePlayback()
+            // The studio holds a live reference into the store's sound library
+            // and an audio engine of its own; both have to go before the store
+            // underneath them does.
+            studio?.editor.suspend()
+            studio = nil
+            isStudioShowing = false
             current.close()
             store = nil
         }

@@ -59,27 +59,39 @@ final class RealtimeSafetyTests: XCTestCase {
         "Block_copy", "CFRetain", "CFRelease", "abort(", "exit("
     ]
 
-    /// The render core is written so that this scan is meaningful.
+    /// Every file the audio thread executes, and the setup file each is split
+    /// against.
     ///
-    /// Construction lives in `SynthAudioSetup.c`, which is allowed to allocate,
-    /// so the boundary this checks is a whole file rather than a judgement about
-    /// which function runs where.
-    func testRenderCoreContainsNoRealtimeUnsafeCall() throws {
-        let core = try Self.source(named: "SynthAudioCore.c")
+    /// The synthesizer (SYN001) follows the same split as the engine, so it is
+    /// covered by the same guard: adding a render core without adding it here
+    /// would leave the real-time claim resting on a file nobody checks.
+    private static let renderCores = ["SynthAudioCore.c", "SynthPatchEngine.c"]
 
-        XCTAssertGreaterThan(core.count, 2_000, "SynthAudioCore.c is suspiciously small; the guard may be blind.")
+    /// The render cores are written so that this scan is meaningful.
+    ///
+    /// Construction lives in `SynthAudioSetup.c` and `SynthPatchSetup.c`, which
+    /// are allowed to allocate, so the boundary this checks is a whole file
+    /// rather than a judgement about which function runs where.
+    func testRenderCoresContainNoRealtimeUnsafeCall() throws {
+        for name in Self.renderCores {
+            let core = try Self.source(named: name)
 
-        // Strip comments before scanning: the file explains what it must not do,
-        // and a guard that read its own documentation as a violation would be
-        // unusable.
-        let code = Self.strippingComments(from: core)
-
-        for symbol in Self.forbiddenInRenderCore {
-            XCTAssertFalse(
-                code.contains(symbol),
-                "SynthAudioCore.c calls \(symbol), which is not real-time safe. "
-                    + "If this belongs to setup rather than rendering, it goes in SynthAudioSetup.c."
+            XCTAssertGreaterThan(
+                core.count, 2_000, "\(name) is suspiciously small; the guard may be blind."
             )
+
+            // Strip comments before scanning: these files explain what they must
+            // not do, and a guard that read its own documentation as a violation
+            // would be unusable.
+            let code = Self.strippingComments(from: core)
+
+            for symbol in Self.forbiddenInRenderCore {
+                XCTAssertFalse(
+                    code.contains(symbol),
+                    "\(name) calls \(symbol), which is not real-time safe. If this belongs to "
+                        + "setup rather than rendering, it goes in the matching *Setup.c."
+                )
+            }
         }
     }
 
@@ -94,46 +106,141 @@ final class RealtimeSafetyTests: XCTestCase {
         )
     }
 
-    /// The Swift the audio thread executes is one closure, and it does nothing
-    /// but call into C.
+    /// The synthesizer allocates nothing at all, on either thread.
+    ///
+    /// Its voice state is one caller-owned block sized by
+    /// `synth_patch_voice_state_size`, and its wavetables are static. That is
+    /// a stronger position than the engine's — there is no allocator call to
+    /// keep on the right side of a line — so the guard for it is that neither
+    /// of its files allocates.
+    func testTheSynthesizerNeverAllocates() throws {
+        for name in ["SynthPatchEngine.c", "SynthPatchSetup.c"] {
+            let code = Self.strippingComments(from: try Self.source(named: name))
+            for symbol in ["malloc", "calloc", "realloc", "free(", "posix_memalign"] {
+                XCTAssertFalse(
+                    code.contains(symbol),
+                    "\(name) calls \(symbol). The synthesizer's storage is owned by its caller; "
+                        + "nothing here should be allocating."
+                )
+            }
+        }
+    }
+
+    /// Rendering a full synthesizer patch does not allocate per block either.
+    ///
+    /// The same dynamic check as `testRenderingDoesNotAllocatePerBlock`, run
+    /// against the heaviest patch rather than the default voice: three
+    /// oscillators, a four-pole filter, six live modulation routes and all four
+    /// effects. A source scan cannot see an allocation the compiler emitted,
+    /// and the synthesizer is where one would hurt most.
+    func testRenderingASynthPatchDoesNotAllocatePerBlock() throws {
+        let timeline = try AudioRenderFixtures.timeline(AudioRenderFixtures.twoLineFixture())
+
+        let engine = PlaybackEngine(
+            voiceProvider: SynthPatchVoiceProvider(
+                patch: SynthEngineIntegrationTests.demandingPatch()))
+        try engine.setRenderMode(.offline(sampleRate: 48_000))
+        try engine.load(timeline: timeline)
+        engine.play()
+
+        _ = try engine.renderOffline(frameCount: 48_000)
+
+        func allocationsRendering(frames: Int64) throws -> Int {
+            let before = Self.liveAllocationCount()
+            _ = try engine.renderOffline(frameCount: frames)
+            return Self.liveAllocationCount() - before
+        }
+
+        let short = try allocationsRendering(frames: 48_000)
+        let long = try allocationsRendering(frames: 480_000)
+
+        let blocksShort = 48_000 / Int(RenderProgram.maximumFrameCount)
+        let blocksLong = 480_000 / Int(RenderProgram.maximumFrameCount)
+        let perBlock = Double(long - short) / Double(blocksLong - blocksShort)
+
+        XCTAssertLessThan(
+            perBlock, 0.25,
+            "Rendering a synth patch cost \(perBlock) allocations per render block "
+                + "(\(short) for \(blocksShort) blocks, \(long) for \(blocksLong))."
+        )
+    }
+
+    /// The Swift the audio thread executes is one closure per engine, and each
+    /// does nothing but call into C.
     ///
     /// Swift's presence on the render thread is a single trampoline, because
     /// anything richer risks ARC traffic on a captured reference. This reads the
     /// closure back out of the source and checks nothing else crept in.
-    func testTheOnlySwiftOnTheAudioThreadIsTheSourceNodeTrampoline() throws {
-        let source = try Self.source(named: "PlaybackEngine.swift")
+    ///
+    /// **There are two of these now.** SYN003's editor auditions a sound that
+    /// belongs to no piece, so it has an engine of its own with no program, no
+    /// transport and no mixer. That is a second audio thread running a second
+    /// Swift closure, and a guard that only knew about the first would have
+    /// stopped meaning what it says the day the second appeared.
+    func testEverySwiftRenderTrampolineDoesNothingButCallIntoC() throws {
+        for (file, entryPoint) in [
+            ("PlaybackEngine.swift", "synth_audio_core_render("),
+            ("SoundAuditionEngine.swift", "synth_patch_voice_render_stereo(")
+        ] {
+            let source = try Self.source(named: file)
 
-        let marker = "AVAudioSourceNode(format: format)"
-        XCTAssertEqual(
-            source.components(separatedBy: marker).count - 1, 1,
-            "Expected exactly one AVAudioSourceNode render block in PlaybackEngine.swift."
-        )
+            let marker = "AVAudioSourceNode(format: format)"
+            XCTAssertEqual(
+                source.components(separatedBy: marker).count - 1, 1,
+                "Expected exactly one AVAudioSourceNode render block in \(file)."
+            )
 
-        guard let start = source.range(of: marker) else { return XCTFail("Render block not found.") }
-        let remainder = source[start.upperBound...]
-        guard let end = remainder.range(of: "\n        }\n") else {
-            return XCTFail("Could not find the end of the render block.")
+            guard let start = source.range(of: marker) else {
+                return XCTFail("Render block not found in \(file).")
+            }
+            let remainder = source[start.upperBound...]
+            guard let end = remainder.range(of: "\n        }\n") else {
+                return XCTFail("Could not find the end of the render block in \(file).")
+            }
+            let body = Self.strippingComments(from: String(remainder[..<end.lowerBound]))
+
+            XCTAssertTrue(
+                body.contains(entryPoint),
+                "\(file)'s render block does not call \(entryPoint)."
+            )
+
+            // Anything that allocates, retains, dispatches, or throws.
+            let forbidden = [
+                "Array", "String", "Dictionary", "Set(", ".append", ".map", ".filter", ".reduce",
+                "print(", "DispatchQueue", "NSLock", "await", "try", "self.", "guard let", "if let",
+                "for ", "while ", "?? ", "as!", "as?"
+            ]
+            for symbol in forbidden {
+                XCTAssertFalse(
+                    body.contains(symbol),
+                    "\(file)'s audio-thread trampoline contains `\(symbol)`. It must do nothing "
+                        + "but call \(entryPoint). Body was:\n\(body)"
+                )
+            }
         }
-        let body = Self.strippingComments(from: String(remainder[..<end.lowerBound]))
+    }
+
+    /// Live editing must not put a lock on the audio thread.
+    ///
+    /// The whole point of publishing a patch through a triple buffer rather
+    /// than behind a mutex is that the render thread never waits for the
+    /// control thread. `SynthPatchLiveVoices` does hold an `NSLock` — for
+    /// registration, release and publication, all control-thread work — and the
+    /// guard that matters is that none of it is reachable from `render`. That
+    /// is already covered by the file scan above, since the render cores
+    /// contain no lock of any kind; this states the other half, that the
+    /// crossing itself is written as atomics.
+    func testTheLiveParameterCrossingIsAtomicRatherThanLocked() throws {
+        let engine = Self.strippingComments(from: try Self.source(named: "SynthPatchEngine.c"))
 
         XCTAssertTrue(
-            body.contains("synth_audio_core_render("),
-            "The render block does not call into the C core."
+            engine.contains("atomic_exchange_explicit") && engine.contains("atomic_load_explicit"),
+            "The render core no longer takes published patches through atomics."
         )
-
-        // Anything that allocates, retains, dispatches, or throws.
-        let forbidden = [
-            "Array", "String", "Dictionary", "Set(", ".append", ".map", ".filter", ".reduce",
-            "print(", "DispatchQueue", "NSLock", "await", "try", "self.", "guard let", "if let",
-            "for ", "while ", "?? ", "as!", "as?"
-        ]
-        for symbol in forbidden {
-            XCTAssertFalse(
-                body.contains(symbol),
-                "The audio thread's Swift trampoline contains `\(symbol)`. It must do nothing but "
-                    + "call synth_audio_core_render. Body was:\n\(body)"
-            )
-        }
+        XCTAssertTrue(
+            engine.contains("synth_patch_voice_adopt") && engine.contains("synth_patch_voice_drain_events"),
+            "The render core no longer adopts published patches or queued notes."
+        )
     }
 
     /// Rendering ten times as much audio must not cost ten times as many

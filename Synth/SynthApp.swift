@@ -11,5 +11,6 @@ struct SynthApp: App {
         }
         .defaultSize(width: 940, height: 620)
         .windowResizability(.contentMinSize)
+        .commands { LibraryCommands(model: model) }
     }
 }

@@ -15,6 +15,10 @@ public final class LibraryStore: @unchecked Sendable {
     /// Where each piece's verbatim MusicXML lives inside the container.
     public let pieceContent: PieceContentStoring
 
+    /// The owner's durable choices — from increment 002, the humanization
+    /// enable and intensity the transport exposes (REQ-012).
+    public let preferences: PreferenceStore
+
     /// Stores whose rows belong to a piece and must go when it does.
     ///
     /// Empty in this build: presets, the one dependent REQ-003 names, arrive in
@@ -43,6 +47,7 @@ public final class LibraryStore: @unchecked Sendable {
         self.database = database
         self.pieces = PieceCatalog(database: database)
         self.pieceContent = DirectoryPieceContentStore(directoryURL: container.piecesURL)
+        self.preferences = PreferenceStore(database: database)
         self.dependentStores = dependentStores
         self.schemaVersion = schemaVersion
         self.migrationOutcome = migrationOutcome

@@ -92,6 +92,21 @@ public enum SchemaMigrator {
                     ON pieces (content_file_name);
                 """
             )
+        },
+        Migration(version: 3, name: "create_preferences") { database in
+            // The owner's small durable choices — the humanization enable and
+            // intensity the transport exposes (REQ-012), and whatever later
+            // increments add. One key-value table so a new preference costs no
+            // migration; `updated_at` is diagnostic only.
+            try database.executeScript(
+                """
+                CREATE TABLE preferences (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                ) STRICT;
+                """
+            )
         }
     ]
 

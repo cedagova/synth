@@ -55,12 +55,20 @@ final class SoundEditorModel {
     /// Called with the stored entry after a successful save.
     var onSaved: ((SoundEntry) -> Void)?
 
+    /// Told when play-through starts and stops, so the transport can hand its
+    /// lines over and take them back.
+    ///
+    /// A closure rather than a reference to the transport, so the studio still
+    /// knows nothing about what else the window can show.
+    var onPlayThroughChanged: ((Bool) -> Void)?
+
     /// Whether an open piece should play through the sound being edited.
     ///
-    /// This is the play-through audition binding the plan describes. Per-line
-    /// assignment arrives in increment 004; until then, "the sound under edit"
-    /// means every line of the piece, which is enough to hear an edit land in
-    /// real music and is honest about being a stand-in.
+    /// **Every line, deliberately, and now explicitly an override.** Before
+    /// increment 004 there was nothing else it could be: the piece had one
+    /// sound. Now the piece has a sound per line, and this suspends all of them
+    /// so an edit is audible in real music without choosing which line to
+    /// sacrifice. Turning it off restores the preset exactly.
     private(set) var isPlayingPieceThroughSound = false
 
     /// True while the owner is holding a key on the on-screen keyboard.
@@ -313,14 +321,16 @@ final class SoundEditorModel {
         guard isOpen else { return }
         isPlayingPieceThroughSound = true
         playbackChannel.apply(patch)
-        statusMessage = "The piece is now playing through “\(title)”."
+        onPlayThroughChanged?(true)
+        statusMessage = "Every line of the piece is now playing through “\(title)”."
     }
 
     func stopPlayingPieceThroughSound() {
         guard isPlayingPieceThroughSound else { return }
         isPlayingPieceThroughSound = false
         playbackChannel.apply(.defaultVoice)
-        statusMessage = "The piece is back on Synth's default voice."
+        onPlayThroughChanged?(false)
+        statusMessage = "The piece is back on the sounds its preset assigns."
     }
 
     func togglePlayingPieceThroughSound() {

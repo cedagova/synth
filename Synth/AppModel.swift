@@ -114,6 +114,10 @@ final class AppModel {
     func openPlayback(for piece: PieceRecord) {
         guard let store else { return }
         if playback?.piece.id == piece.id { return }
+        // Play-through belongs to the piece that was open, not to the studio's
+        // sound. Leaving it on would hand the incoming piece's lines away
+        // before it had ever played its own preset.
+        studio?.editor.stopPlayingPieceThroughSound()
         playback?.close()
         playback = PlaybackModel(
             piece: piece,
@@ -136,6 +140,9 @@ final class AppModel {
         guard let store else { return }
         if studio == nil {
             let editor = SoundEditorModel(store: store, playbackChannel: playbackChannel)
+            editor.onPlayThroughChanged = { [weak self] isPlayingThrough in
+                self?.playback?.setPlayingThroughEditedSound(isPlayingThrough)
+            }
             studio = SoundStudioModel(store: store, editor: editor)
         }
         isStudioShowing = true

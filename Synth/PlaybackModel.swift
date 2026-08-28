@@ -142,10 +142,19 @@ final class PlaybackModel {
     private var queuedSeekMicroseconds: Int64?
     private var queuedMeasureSeek: (number: String, beat: Double)?
 
-    init(piece: PieceRecord, store: LibraryStore) {
+    /// `voiceProvider` is how increment 003's editor reaches this engine's
+    /// voices: a provider built on a `SynthPatchLiveVoices` channel renders
+    /// whatever the channel currently holds, and an edit published to that
+    /// channel lands in the voices that are already playing. The default is the
+    /// fixed default voice, which is the sound the app has always made.
+    init(
+        piece: PieceRecord,
+        store: LibraryStore,
+        voiceProvider: LineVoiceProvider = SynthPatchVoiceProvider()
+    ) {
         self.piece = piece
         self.store = store
-        self.engine = PlaybackEngine()
+        self.engine = PlaybackEngine(voiceProvider: voiceProvider)
         let stored = store.preferences.humanization()
         self.humanization = stored
         self.intensityDraft = Double(stored.intensity)

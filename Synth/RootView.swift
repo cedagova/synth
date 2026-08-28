@@ -33,7 +33,10 @@ struct RootView: View {
                 }
             }
         }
-        .frame(minWidth: 720, minHeight: 460)
+        // Wider than increment 003's 720 because the transport now sits beside
+        // the assignment and mixing panel, and squeezing a fader to nothing to
+        // keep an old number is not a saving.
+        .frame(minWidth: 1_040, minHeight: 560)
         .navigationTitle("Synth")
     }
 }

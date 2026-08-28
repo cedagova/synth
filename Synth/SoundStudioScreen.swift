@@ -59,11 +59,12 @@ struct SoundStudioScreen: View {
             ) { entry in
                 Button("Delete Sound", role: .destructive) { model.confirmDeletion(of: entry) }
                 Button("Cancel", role: .cancel) { model.cancelDeletion() }
-            } message: { entry in
-                Text(
-                    "This permanently removes “\(entry.name)”. Anything that was using it keeps "
-                    + "its own copy of the sound, so nothing you have already made will change."
-                )
+            } message: { _ in
+                // REQ-029's warning, and the exact count rather than a
+                // reassuring generality: ASN001's `usage(ofSoundID:)` knows how
+                // many presets and how many pieces this touches, and an owner
+                // deciding whether to delete a sound is entitled to that number.
+                Text(model.pendingDeletionWarning)
             }
 
             // The status bar is a row of this stack, not a `safeAreaInset`.

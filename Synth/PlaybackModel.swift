@@ -133,6 +133,18 @@ final class PlaybackModel {
     private let engine: PlaybackEngine
     private var ticker: Task<Void, Never>?
 
+    /// The sound every line renders through when the preset is not in charge —
+    /// the sound studio's live channel, in the built app.
+    private let baseVoiceProvider: LineVoiceProvider
+
+    /// The assignment, mixer and preset surface for this piece (ASN002).
+    ///
+    /// Owned here rather than by the screen because it writes to the same
+    /// engine the transport does, and the order the two touch it in matters: a
+    /// preset can only be applied once a program is loaded, since the mixer
+    /// half addresses that program's lines.
+    let assignment: AssignmentModel
+
     /// A seek asked for before the piece finished loading. The issue's failure
     /// clause: it queues rather than being dropped.
     ///
@@ -142,11 +154,16 @@ final class PlaybackModel {
     private var queuedSeekMicroseconds: Int64?
     private var queuedMeasureSeek: (number: String, beat: Double)?
 
-    /// `voiceProvider` is how increment 003's editor reaches this engine's
-    /// voices: a provider built on a `SynthPatchLiveVoices` channel renders
-    /// whatever the channel currently holds, and an edit published to that
-    /// channel lands in the voices that are already playing. The default is the
-    /// fixed default voice, which is the sound the app has always made.
+    /// `voiceProvider` is the sound every line starts on, before the piece's
+    /// own preset replaces it.
+    ///
+    /// It still matters, and for two reasons. It is what the engine renders in
+    /// the moment between loading the timeline and applying the preset; and it
+    /// is how increment 003's editor takes the whole piece over — a provider
+    /// built on a `SynthPatchLiveVoices` channel renders whatever the channel
+    /// currently holds, which is what ⌥⌘P uses. From ASN002 onwards the normal
+    /// state is per-line sounds from the active preset, and play-through is an
+    /// explicit, reversible override of them.
     init(
         piece: PieceRecord,
         store: LibraryStore,
@@ -154,7 +171,10 @@ final class PlaybackModel {
     ) {
         self.piece = piece
         self.store = store
-        self.engine = PlaybackEngine(voiceProvider: voiceProvider)
+        self.baseVoiceProvider = voiceProvider
+        let engine = PlaybackEngine(voiceProvider: voiceProvider)
+        self.engine = engine
+        self.assignment = AssignmentModel(store: store, engine: engine)
         let stored = store.preferences.humanization()
         self.humanization = stored
         self.intensityDraft = Double(stored.intensity)
@@ -232,6 +252,11 @@ final class PlaybackModel {
         // is already prepared is already prepared.
         if case .ready = loadState {
             startTicking()
+            // Coming back from the sound studio, where a sound this piece uses
+            // may have been created, edited or deleted. Only re-applies to the
+            // engine if the sounds actually moved, so returning from the studio
+            // having changed nothing costs the music nothing.
+            assignment.refreshFromStore()
             return
         }
 
@@ -251,6 +276,12 @@ final class PlaybackModel {
             let realized = await Self.realize(compiled, humanization: humanization)
             try loadIntoEngine(realized)
 
+            // After the program exists, never before: the preset's mixer half
+            // addresses the loaded program's lines, and its sound half replaces
+            // that program's voices. REQ-007's first-open preset is created
+            // here, by the same call that reads an existing one.
+            assignment.open(score: compiled)
+
             loadState = .ready
             statusMessage = readyMessage(for: compiled)
             applyQueuedSeek()
@@ -258,6 +289,29 @@ final class PlaybackModel {
             loadState = .failed(PlaybackFailure(error))
             statusMessage = nil
         }
+    }
+
+    /// The sound studio took every line over, or gave them back (SYN003's
+    /// ⌥⌘P).
+    ///
+    /// Taking them over needs no rebuild — the live channel is already every
+    /// line's provider until the preset replaces it, and publishing into it
+    /// reaches the running voices. Giving them back does: the preset's sounds
+    /// have to be built into a program again. The playhead and the mix survive
+    /// both, so the music does not restart either way.
+    func setPlayingThroughEditedSound(_ isPlayingThrough: Bool) {
+        guard isReady else { return }
+        if isPlayingThrough {
+            assignment.setSuspendedByPlayThrough(true)
+            do {
+                try engine.setVoices(.uniform(baseVoiceProvider))
+            } catch {
+                statusMessage = "Could not route the piece through the sound being edited: \(error)"
+            }
+        } else {
+            assignment.setSuspendedByPlayThrough(false)
+        }
+        refreshTransport()
     }
 
     /// Stops the audio and the ticker. Called when the screen goes away.
@@ -541,8 +595,11 @@ final class PlaybackModel {
 
         do {
             // `load` stops the graph; the position is carried across by hand
-            // because a new program starts at zero.
+            // because a new program starts at zero. So are the preset's sounds
+            // and mix — a fresh program's strips start at unity, centred and
+            // unmuted, which would silently throw the owner's mix away.
             try loadIntoEngine(realized)
+            assignment.programWasReloaded()
             seekEngine(to: resumeAt)
             if wasPlaying {
                 try engine.start()

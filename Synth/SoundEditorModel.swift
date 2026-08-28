@@ -55,12 +55,25 @@ final class SoundEditorModel {
     /// Called with the stored entry after a successful save.
     var onSaved: ((SoundEntry) -> Void)?
 
+    /// Told when play-through starts and stops, so the transport can hand its
+    /// lines over and take them back.
+    ///
+    /// A closure rather than a reference to the transport, so the studio still
+    /// knows nothing about what else the window can show.
+    var onPlayThroughChanged: ((Bool) -> Void)?
+
+    /// Told, with the sound's identity, every time the working patch changes —
+    /// so every line of the open piece that is assigned *this* sound hears it
+    /// while the piece plays (REQ-018), and no other line does.
+    var onPatchEdited: ((String, SynthPatch) -> Void)?
+
     /// Whether an open piece should play through the sound being edited.
     ///
-    /// This is the play-through audition binding the plan describes. Per-line
-    /// assignment arrives in increment 004; until then, "the sound under edit"
-    /// means every line of the piece, which is enough to hear an edit land in
-    /// real music and is honest about being a stand-in.
+    /// **Every line, deliberately, and now explicitly an override.** Before
+    /// increment 004 there was nothing else it could be: the piece had one
+    /// sound. Now the piece has a sound per line, and this suspends all of them
+    /// so an edit is audible in real music without choosing which line to
+    /// sacrifice. Turning it off restores the preset exactly.
     private(set) var isPlayingPieceThroughSound = false
 
     /// True while the owner is holding a key on the on-screen keyboard.
@@ -149,6 +162,10 @@ final class SoundEditorModel {
     func load(_ entry: SoundEntry) {
         // A key held on the previous sound must not be left held on the next.
         releaseEverything()
+        // …and an unsaved edit to the previous sound must not be left in the
+        // piece: the preset references the *library* sound, so walking away
+        // from the editor puts the piece back on what the library holds.
+        restoreStoredPatch(of: self.entry)
 
         self.entry = entry
         self.patch = entry.patch
@@ -174,6 +191,7 @@ final class SoundEditorModel {
 
     func close() {
         releaseEverything()
+        restoreStoredPatch(of: entry)
         stopPlayingPieceThroughSound()
         entry = nil
         statusMessage = nil
@@ -313,14 +331,16 @@ final class SoundEditorModel {
         guard isOpen else { return }
         isPlayingPieceThroughSound = true
         playbackChannel.apply(patch)
-        statusMessage = "The piece is now playing through “\(title)”."
+        onPlayThroughChanged?(true)
+        statusMessage = "Every line of the piece is now playing through “\(title)”."
     }
 
     func stopPlayingPieceThroughSound() {
         guard isPlayingPieceThroughSound else { return }
         isPlayingPieceThroughSound = false
         playbackChannel.apply(.defaultVoice)
-        statusMessage = "The piece is back on Synth's default voice."
+        onPlayThroughChanged?(false)
+        statusMessage = "The piece is back on the sounds its preset assigns."
     }
 
     func togglePlayingPieceThroughSound() {
@@ -331,8 +351,28 @@ final class SoundEditorModel {
 
     // MARK: Internals
 
+    /// Publishes the patch as it now stands to everything that renders it.
+    ///
+    /// Three destinations, and they are not the same thing:
+    ///
+    /// * the **audition** channel, so the test keyboard plays the edit;
+    /// * the **play-through** channel, when the studio has taken the whole
+    ///   piece over; and
+    /// * **every line of the open piece that is assigned this sound**, which is
+    ///   REQ-018 as the definition words it — *edited live during piece
+    ///   playback* — now that a piece has a sound per line rather than one for
+    ///   all of them. The transport's channels reach the voices that are
+    ///   already sounding, so this needs no rebuild and the music does not stop.
     private func publishWorkingPatch() {
         auditionChannel.apply(patch)
         if isPlayingPieceThroughSound { playbackChannel.apply(patch) }
+        if let entry, entry.isEditable { onPatchEdited?(entry.id, patch) }
+    }
+
+    /// Puts a sound the owner edited and then walked away from back to what the
+    /// library holds, so an unsaved edit never silently outlives the editor.
+    private func restoreStoredPatch(of entry: SoundEntry?) {
+        guard let entry, entry.isEditable, patch != savedPatch else { return }
+        onPatchEdited?(entry.id, savedPatch)
     }
 }

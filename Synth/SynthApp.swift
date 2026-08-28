@@ -9,11 +9,12 @@ struct SynthApp: App {
             RootView(model: model)
                 .task { await model.bootstrap() }
         }
-        .defaultSize(width: 940, height: 620)
+        .defaultSize(width: 1_280, height: 760)
         .windowResizability(.contentMinSize)
         .commands {
             LibraryCommands(model: model)
             PlaybackCommands(model: model)
+            MixCommands(model: model)
             SoundCommands(model: model)
         }
     }

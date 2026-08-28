@@ -50,6 +50,14 @@ struct PlaybackScreen: View {
                     }
                 }
 
+                // The assignment and mixing surface, always present rather than
+                // behind a disclosure: from increment 004 on, "which sound is
+                // this line playing" is as much a part of listening to a piece
+                // as where the playhead is.
+                Divider()
+                AssignmentPanel(model: model.assignment)
+                    .frame(width: 420)
+
                 if model.isReportShown {
                     Divider()
                     NotationReportPanel(model: model)
@@ -598,7 +606,7 @@ private struct PlaybackStatusBar: View {
     }
 }
 
-private struct SectionHeading: View {
+struct SectionHeading: View {
     let text: String
 
     init(_ text: String) { self.text = text }

@@ -48,6 +48,11 @@ struct SoundAlert: Identifiable, Equatable {
 final class SoundStudioModel {
     private let library: SoundLibrary
 
+    /// Read, never written, and only for one thing: REQ-029's warning has to
+    /// say how much of the owner's work a deletion touches, and ASN001's
+    /// `usage(ofSoundID:)` is where that answer lives.
+    private let presets: PresetLibrary
+
     /// Every sound in the library, shipped and the owner's, in list order.
     private(set) var sounds: [SoundEntry] = []
 
@@ -75,6 +80,12 @@ final class SoundStudioModel {
     /// The sound a delete is waiting for confirmation on.
     private(set) var pendingDeletion: SoundEntry?
 
+    /// Every preset that would receive an embedded copy of it (REQ-029).
+    ///
+    /// Read once, when the confirmation is raised, so the sentence the owner
+    /// reads is the state of the library at the moment they are asked.
+    private(set) var pendingDeletionUsage: [PresetSoundUsage] = []
+
     /// The sound being renamed, and the name being typed.
     private(set) var renaming: SoundEntry?
     var renameText = ""
@@ -90,6 +101,7 @@ final class SoundStudioModel {
 
     init(store: LibraryStore, editor: SoundEditorModel) {
         self.library = store.sounds
+        self.presets = store.presets
         self.editor = editor
         editor.onSaved = { [weak self] entry in self?.absorbSavedSound(entry) }
     }
@@ -251,18 +263,60 @@ final class SoundStudioModel {
     func requestDeletionOfSelection() {
         guard let entry = selectedSound else { return }
         guard entry.isEditable else { return refuseShipped(entry, verb: "deleted") }
+        // A failed read must not become "nothing is using it", which is the one
+        // wrong answer this sentence can give. It becomes an alert instead, and
+        // the confirmation is not raised at all.
+        do {
+            pendingDeletionUsage = try presets.usage(ofSoundID: entry.id)
+        } catch {
+            alert = SoundAlert(title: "Could not check what is using “\(entry.name)”", error)
+            return
+        }
         pendingDeletion = entry
     }
 
-    func cancelDeletion() { pendingDeletion = nil }
+    /// REQ-029's warning, in the owner's terms: how many presets hold this
+    /// sound, across how many pieces, and what deleting it does to them.
+    ///
+    /// The count is every preset in the library and not only the open piece's,
+    /// because a deleted sound is deleted everywhere and a warning that counted
+    /// one piece would understate what is about to happen.
+    var pendingDeletionWarning: String {
+        guard let entry = pendingDeletion else { return "" }
+        guard !pendingDeletionUsage.isEmpty else {
+            return "This permanently removes “\(entry.name)”. No preset is using it, so "
+                + "nothing you have already made will change."
+        }
+        let presetCount = pendingDeletionUsage.count
+        let pieceCount = Set(pendingDeletionUsage.map(\.pieceID)).count
+        let presetNames = pendingDeletionUsage.prefix(4).map { "“\($0.presetName)”" }
+        let listed = presetNames.joined(separator: ", ")
+        let more = presetCount > presetNames.count ? " and \(presetCount - presetNames.count) more" : ""
+        return "“\(entry.name)” is used by \(presetCount) preset"
+            + "\(presetCount == 1 ? "" : "s") across \(pieceCount) piece"
+            + "\(pieceCount == 1 ? "" : "s") — \(listed)\(more). Deleting it gives each of them "
+            + "its own private copy of the sound exactly as it is now, so they go on playing "
+            + "the same. Those copies can no longer be edited from your library."
+    }
+
+    func cancelDeletion() {
+        pendingDeletion = nil
+        pendingDeletionUsage = []
+    }
 
     func confirmDeletion(of entry: SoundEntry) {
         pendingDeletion = nil
+        let affected = pendingDeletionUsage
+        pendingDeletionUsage = []
         write("delete “\(entry.name)”") {
             try library.delete(entry)
             if editor.entry?.id == entry.id { editor.close() }
             reload()
-            statusMessage = "Deleted “\(entry.name)”."
+            statusMessage = affected.isEmpty
+                ? "Deleted “\(entry.name)”."
+                : "Deleted “\(entry.name)”. \(affected.count) preset"
+                    + "\(affected.count == 1 ? "" : "s") now hold\(affected.count == 1 ? "s" : "") "
+                    + "a copy of it and play exactly as before."
         }
     }
 

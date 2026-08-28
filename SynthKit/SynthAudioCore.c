@@ -605,6 +605,12 @@ int32_t synth_audio_core_render(SynthRenderEngine *engine,
            mix keeps per-line mixing exactly linear, which is what lets the
            mute and solo tests assert bit equality rather than a tolerance. */
         const float master = atomic_load_explicit(&engine->masterGain, memory_order_relaxed);
+        /* On a mono destination both channel pointers are the same buffer, so
+           scaling "both" would square the gain — a wrong declick curve and a
+           wrong level. Unreachable today, because the graph always connects
+           stereo, but a defensive path that is silently wrong is worse than
+           none. */
+        const int32_t separateChannels = (outRight != outLeft);
         float declick = engine->declickGain;
         const float target = engine->declickTarget;
         const float step = engine->declickStep;
@@ -618,7 +624,7 @@ int32_t synth_audio_core_render(SynthRenderEngine *engine,
             }
             const float scale = declick * master;
             outLeft[offset + f] *= scale;
-            outRight[offset + f] *= scale;
+            if (separateChannels) { outRight[offset + f] *= scale; }
         }
         engine->declickGain = declick;
 

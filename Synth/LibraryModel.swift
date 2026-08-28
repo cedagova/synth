@@ -149,6 +149,10 @@ final class LibraryModel {
     /// the Find menu item reaches a `@FocusState` that lives in the view.
     private(set) var searchFocusRequests = 0
 
+    /// The same mechanism for the list, so selecting from the menu also puts
+    /// keyboard focus where the arrow keys will do something.
+    private(set) var listFocusRequests = 0
+
     private let store: LibraryStore
     private let importer: MusicXMLImporter
     private let remover: PieceRemover
@@ -280,6 +284,38 @@ final class LibraryModel {
 
     func requestSearchFocus() {
         searchFocusRequests += 1
+    }
+
+    /// Moves the selection one row down, starting at the top when nothing is
+    /// selected. The Select Next Piece menu command.
+    func selectNextPiece() {
+        moveSelection(by: 1)
+    }
+
+    /// Moves the selection one row up, starting at the bottom when nothing is
+    /// selected. The Select Previous Piece menu command.
+    func selectPreviousPiece() {
+        moveSelection(by: -1)
+    }
+
+    /// These commands exist so the list is reachable and navigable without a
+    /// pointer even when Full Keyboard Access is off (REQ-027). Once a row is
+    /// selected the list has focus and its own arrow keys take over.
+    private func moveSelection(by offset: Int) {
+        let rows = visiblePieces
+        guard !rows.isEmpty else { return }
+
+        guard let current = selection,
+              let index = rows.firstIndex(where: { $0.id == current })
+        else {
+            selection = (offset > 0 ? rows.first : rows.last)?.id
+            listFocusRequests += 1
+            return
+        }
+
+        let next = min(max(index + offset, 0), rows.count - 1)
+        selection = rows[next].id
+        listFocusRequests += 1
     }
 
     func clearSearch() {

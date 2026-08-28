@@ -88,6 +88,9 @@ struct LibraryScreen: View {
         .onChange(of: model.searchFocusRequests) { _, _ in
             focus = .search
         }
+        .onChange(of: model.listFocusRequests) { _, _ in
+            focus = .list
+        }
         .task { await model.reload() }
     }
 

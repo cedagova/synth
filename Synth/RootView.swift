@@ -6,14 +6,26 @@ struct RootView: View {
 
     var body: some View {
         Group {
-            switch model.state {
-            case .loading:
-                LoadingView()
-            case .ready(let library):
-                LibraryScreen(model: library)
-            case .failed(let failure):
-                StoreFailureView(failure: failure) {
-                    await model.retry()
+            // The transport takes the whole window while a piece is open: it is
+            // its own place, not a panel beside the list, and later increments
+            // extend it rather than the library.
+            if let playback = model.playback {
+                PlaybackScreen(model: playback) { model.closePlayback() }
+                    // Keyed by piece so opening another one rebuilds the screen
+                    // and re-runs its preparation task.
+                    .id(playback.piece.id)
+            } else {
+                switch model.state {
+                case .loading:
+                    LoadingView()
+                case .ready(let library):
+                    LibraryScreen(model: library) { piece in
+                        model.openPlayback(for: piece)
+                    }
+                case .failed(let failure):
+                    StoreFailureView(failure: failure) {
+                        await model.retry()
+                    }
                 }
             }
         }

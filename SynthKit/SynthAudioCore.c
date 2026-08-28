@@ -464,7 +464,13 @@ int32_t synth_audio_core_render(SynthRenderEngine *engine,
      picked up on the block after that one lands, which is a few milliseconds
      later and inaudible.
     */
-    const int32_t command = atomic_load_explicit(&engine->transportCommand, memory_order_relaxed);
+    /* Acquire, to pair with the release store in the transport setters. The
+       pause reason is written before the command and read after it, so the
+       reason the render thread sees is always the one that belongs to the
+       command it acted on. Relaxed on both sides would let arm64 pair a new
+       command with the previous reason — a one-buffer window that no test can
+       reproduce, and that would report a device loss as an ordinary pause. */
+    const int32_t command = atomic_load_explicit(&engine->transportCommand, memory_order_acquire);
     int32_t currentState = atomic_load_explicit(&engine->transportState, memory_order_relaxed);
 
     if (!engine->pendingDiscontinuity) {
@@ -742,25 +748,25 @@ float synth_engine_master_gain(const SynthRenderEngine *engine) {
 void synth_engine_play(SynthRenderEngine *engine) {
     if (engine == NULL) { return; }
     atomic_store_explicit(&engine->requestedPauseReason, SynthPauseReasonNone, memory_order_relaxed);
-    atomic_store_explicit(&engine->transportCommand, SynthTransportPlaying, memory_order_relaxed);
+    atomic_store_explicit(&engine->transportCommand, SynthTransportPlaying, memory_order_release);
 }
 
 void synth_engine_pause(SynthRenderEngine *engine) {
     if (engine == NULL) { return; }
     atomic_store_explicit(&engine->requestedPauseReason, SynthPauseReasonNone, memory_order_relaxed);
-    atomic_store_explicit(&engine->transportCommand, SynthTransportPaused, memory_order_relaxed);
+    atomic_store_explicit(&engine->transportCommand, SynthTransportPaused, memory_order_release);
 }
 
 void synth_engine_pause_for_device_loss(SynthRenderEngine *engine) {
     if (engine == NULL) { return; }
     atomic_store_explicit(&engine->requestedPauseReason, SynthPauseReasonDeviceLost, memory_order_relaxed);
-    atomic_store_explicit(&engine->transportCommand, SynthTransportPaused, memory_order_relaxed);
+    atomic_store_explicit(&engine->transportCommand, SynthTransportPaused, memory_order_release);
 }
 
 void synth_engine_stop(SynthRenderEngine *engine) {
     if (engine == NULL) { return; }
     atomic_store_explicit(&engine->requestedPauseReason, SynthPauseReasonNone, memory_order_relaxed);
-    atomic_store_explicit(&engine->transportCommand, SynthTransportStopped, memory_order_relaxed);
+    atomic_store_explicit(&engine->transportCommand, SynthTransportStopped, memory_order_release);
 }
 
 void synth_engine_seek(SynthRenderEngine *engine, int64_t frame) {

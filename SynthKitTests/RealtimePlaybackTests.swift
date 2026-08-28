@@ -35,6 +35,22 @@ final class RealtimePlaybackTests: XCTestCase {
         )
     }
 
+    /// Block until the render thread has actually picked up the play command.
+    ///
+    /// `play()` only stores a command; the transport does not report `.playing`
+    /// until the next render block reads it. A "while playing" loop entered
+    /// before that sees `.stopped` and exits immediately, which looks exactly
+    /// like a piece that finished in no time at all.
+    @discardableResult
+    private func waitUntilPlaying(_ engine: PlaybackEngine, timeout: TimeInterval = 5) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if engine.transportState == .playing { return true }
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        return false
+    }
+
     /// Plays `timeline` in real time for `seconds` and reports what happened.
     private func playLive(
         _ timeline: PerformanceTimeline,
@@ -49,6 +65,7 @@ final class RealtimePlaybackTests: XCTestCase {
         try engine.start()
         engine.resetStatistics()
         engine.play()
+        _ = waitUntilPlaying(engine)
 
         let started = Date()
         // Poll rather than one long sleep, so a pause is noticed near when it
@@ -164,6 +181,7 @@ final class RealtimePlaybackTests: XCTestCase {
         try engine.start()
         engine.resetStatistics()
         engine.play()
+        XCTAssertTrue(waitUntilPlaying(engine), "Playback never started.")
 
         let started = Date()
         while engine.transportState == .playing,
@@ -220,6 +238,7 @@ final class RealtimePlaybackTests: XCTestCase {
         try engine.start()
         engine.resetStatistics()
         engine.play()
+        XCTAssertTrue(waitUntilPlaying(engine), "Playback never started.")
 
         let started = Date()
         while engine.transportState == .playing,

@@ -128,7 +128,12 @@ struct SynthRenderEngine {
     double  sampleRate;
     int64_t totalFrames;
 
-    /* Control thread writes, render thread reads. */
+    /* Control thread writes, render thread reads — except `transportCommand`,
+       which the render thread also writes in two places: the end-of-piece latch
+       and the overload watchdog, both of which retire a stale play command so
+       the engine does not immediately restart itself. Those writes are
+       same-thread and relaxed; the control thread's are release stores that
+       publish `requestedPauseReason` written just before them. */
     _Atomic int32_t  transportCommand;
     _Atomic int64_t  seekRequestFrame;
     _Atomic uint64_t seekGeneration;

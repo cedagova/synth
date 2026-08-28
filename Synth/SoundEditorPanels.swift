@@ -158,8 +158,24 @@ private struct ParameterNumberControl: View {
                 .onChange(of: isFieldFocused) { _, focused in
                     if focused { draft = Self.editableText(number) } else { commit() }
                 }
+                // The field follows the value whether or not it has focus.
+                //
+                // It used to update only when unfocused, on the reasoning that
+                // a focused field is being typed into. But a focused field is
+                // not necessarily being typed into: click into the cutoff
+                // field, then sweep the slider, and the number sat at whatever
+                // was last committed while the sound changed underneath it —
+                // the frozen candidate's own screenshot caught the slider hard
+                // left beside a field reading "9 kHz".
+                //
+                // Updating unconditionally is safe precisely because typing
+                // does not change the value: `number` comes from the patch, and
+                // the patch only moves when something is committed. So this
+                // fires when the slider moves and stays quiet mid-word.
                 .onChange(of: number) { _, _ in
-                    if !isFieldFocused { draft = parameter.displayText(for: .number(number)) }
+                    draft = isFieldFocused
+                        ? Self.editableText(number)
+                        : parameter.displayText(for: .number(number))
                 }
                 .onAppear { draft = parameter.displayText(for: .number(number)) }
                 .accessibilityLabel("\(parameter.accessibilityLabel) value")

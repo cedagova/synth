@@ -136,10 +136,38 @@ public struct ScoreNote: Equatable, Sendable, Codable {
     /// A fermata is attached here, so the tempo map holds over its span.
     public let hasFermata: Bool
 
+    /// Articulations printed on this note, in canonical order.
+    public let articulations: [ScoreArticulation]
+
+    /// Ornaments printed on this note, in canonical order. More than one is
+    /// unusual but legal; the realizer sounds the first and reports the rest.
+    public let ornaments: [ScoreOrnament]
+
+    /// Grace notes printed before this note, in the order they are played.
+    public let graceNotes: [ScoreGraceNote]
+
+    /// How many slurs open on this note. Nested slurs are counted rather than
+    /// flattened so a phrase inside a phrase does not close early.
+    public let slurStartCount: Int
+
+    /// How many slurs close on this note.
+    public let slurStopCount: Int
+
+    /// Dynamics printed inside this note's `<notations>`, in canonical order.
+    /// A dynamic printed as a `<direction>` instead lives in
+    /// `CompiledScore.expressionEvents`, because it governs a whole staff.
+    public let dynamics: [ScoreDynamic]
+
     public var isRest: Bool { pitch == nil }
 
     /// Onset plus duration, still within the source measure.
     public var endTicks: Int { startTicks + durationTicks }
+
+    /// True when this note carries anything the realizer has to shape.
+    public var hasExpression: Bool {
+        !articulations.isEmpty || !ornaments.isEmpty || !graceNotes.isEmpty
+            || slurStartCount > 0 || slurStopCount > 0 || !dynamics.isEmpty
+    }
 
     public init(
         sourceMeasureIndex: Int,
@@ -149,7 +177,13 @@ public struct ScoreNote: Equatable, Sendable, Codable {
         isChordMember: Bool = false,
         tiesForward: Bool = false,
         tiesBackward: Bool = false,
-        hasFermata: Bool = false
+        hasFermata: Bool = false,
+        articulations: [ScoreArticulation] = [],
+        ornaments: [ScoreOrnament] = [],
+        graceNotes: [ScoreGraceNote] = [],
+        slurStartCount: Int = 0,
+        slurStopCount: Int = 0,
+        dynamics: [ScoreDynamic] = []
     ) {
         self.sourceMeasureIndex = sourceMeasureIndex
         self.startTicks = startTicks
@@ -159,6 +193,12 @@ public struct ScoreNote: Equatable, Sendable, Codable {
         self.tiesForward = tiesForward
         self.tiesBackward = tiesBackward
         self.hasFermata = hasFermata
+        self.articulations = articulations
+        self.ornaments = ornaments
+        self.graceNotes = graceNotes
+        self.slurStartCount = slurStartCount
+        self.slurStopCount = slurStopCount
+        self.dynamics = dynamics
     }
 }
 
@@ -340,6 +380,10 @@ public struct CompiledScore: Equatable, Sendable, Codable {
     /// Tick-to-time mapping over the playback timeline.
     public let tempoMap: TempoMap
 
+    /// Dynamics, hairpins and pedal markings, bound to the source measure they
+    /// are printed in and sorted into a canonical order.
+    public let expressionEvents: [ScoreExpressionEvent]
+
     /// Everything the compiler met and did not honour, plus every structural
     /// fallback it had to apply.
     public let report: NotationReport
@@ -353,6 +397,7 @@ public struct CompiledScore: Equatable, Sendable, Codable {
         sourceMeasures: [SourceMeasure],
         playbackMeasures: [PlaybackMeasure],
         tempoMap: TempoMap,
+        expressionEvents: [ScoreExpressionEvent] = [],
         report: NotationReport
     ) {
         self.pieceID = pieceID
@@ -363,6 +408,7 @@ public struct CompiledScore: Equatable, Sendable, Codable {
         self.sourceMeasures = sourceMeasures
         self.playbackMeasures = playbackMeasures
         self.tempoMap = tempoMap
+        self.expressionEvents = expressionEvents
         self.report = report
     }
 

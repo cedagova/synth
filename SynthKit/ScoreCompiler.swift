@@ -460,6 +460,20 @@ private struct Compilation {
             }
         }
 
+        // One last ceiling on what a measure can be. Expansion may repeat a
+        // measure thousands of times, and the playback timeline accumulates
+        // those lengths, so an unbounded measure would overflow the timeline
+        // rather than merely be long.
+        let ceiling = ticksPerQuarter * 4 * 1024
+        if furthest > ceiling {
+            report.record(
+                .structuralFallback,
+                kind: "impossible measure length",
+                at: location,
+                detail: "this measure is longer than a thousand whole notes; it is clipped"
+            )
+            furthest = ceiling
+        }
         measureContentTicks[measureIndex] = max(measureContentTicks[measureIndex], furthest)
         if measureTimeSignature[measureIndex] == nil { measureTimeSignature[measureIndex] = state.timeSignature }
         if measureKeyFifths[measureIndex] == nil { measureKeyFifths[measureIndex] = state.keyFifths }
@@ -489,7 +503,13 @@ private struct Compilation {
                 if let fifths = element.childInt("fifths") { state.keyFifths = fifths }
 
             case "time":
-                if let beats = element.childInt("beats"), let beatType = element.childInt("beat-type") {
+                // Both bounded: a notated measure length is multiplied by the
+                // tick grid, so an unbounded numerator read out of a file
+                // would overflow rather than merely look wrong.
+                if let beats = element.childInt("beats"),
+                   let beatType = element.childInt("beat-type"),
+                   (1...1024).contains(beats),
+                   (1...1024).contains(beatType) {
                     state.timeSignature = TimeSignature(beats: beats, beatType: beatType)
                 } else if element.attribute("symbol") == "common" {
                     state.timeSignature = TimeSignature(beats: 4, beatType: 4)
@@ -824,6 +844,12 @@ private struct Compilation {
     /// Plenty of engravers type “D.C. al Fine” as words and never add a
     /// `<sound>` element. Ignoring that would silently flatten the form of a
     /// perfectly ordinary score, so the printed wording is read too.
+    ///
+    /// The subtlety worth spelling out: in “D.C. al Fine”, the words *Fine*
+    /// and *Coda* name where the jump ends, not a mark at this measure. The
+    /// `Fine` and `To Coda` marks are printed elsewhere in the score. So a
+    /// direction that declares a jump declares only that — reading its tail as
+    /// a `Fine` here would stop the piece on the wrong bar.
     private mutating func readJumpWords(_ words: [String], measureIndex: Int) {
         guard !words.isEmpty else { return }
         let text = words
@@ -836,15 +862,17 @@ private struct Compilation {
 
         if text.contains("dal segno") || text.hasPrefix("ds ") || text == "ds" {
             structures[measureIndex].dalSegno = true
-        } else if text.contains("da capo") || text.hasPrefix("dc ") || text == "dc" {
-            structures[measureIndex].daCapo = true
+            return
         }
+        if text.contains("da capo") || text.hasPrefix("dc ") || text == "dc" {
+            structures[measureIndex].daCapo = true
+            return
+        }
+
         if text.contains("to coda") || text.contains("al coda") {
             structures[measureIndex].toCoda = true
         }
-        if text.contains("fine") {
-            structures[measureIndex].fine = true
-        }
+        if text.contains("fine") { structures[measureIndex].fine = true }
         if text == "segno" { structures[measureIndex].hasSegno = true }
         if text == "coda" { structures[measureIndex].hasCoda = true }
     }

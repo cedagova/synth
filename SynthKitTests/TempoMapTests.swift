@@ -154,6 +154,21 @@ final class TempoMapTests: XCTestCase {
         XCTAssertEqual(doubled.segments.map(\.microsecondsPerQuarter), [500_000, 750_000])
     }
 
+    /// Two parts carrying different tempo marks at the same moment is a
+    /// malformed score, but it must still compile to the same bytes every
+    /// time. The builder resolves the clash by the value, not by whichever
+    /// order the changes happened to arrive in.
+    func testConflictingTemposAtOneMomentResolveTheSameWayEveryTime() {
+        let builder = TempoMapBuilder(ticksPerQuarter: 4, totalTicks: 32)
+        let a = TempoMapBuilder.Change(startTicks: 16, microsecondsPerQuarter: 400_000)
+        let b = TempoMapBuilder.Change(startTicks: 16, microsecondsPerQuarter: 600_000)
+
+        let forward = builder.build(changes: [a, b], holds: [])
+        let backward = builder.build(changes: [b, a], holds: [])
+        XCTAssertEqual(forward, backward)
+        XCTAssertEqual(forward.segments.map(\.microsecondsPerQuarter), [500_000, 600_000])
+    }
+
     func testOverlappingHoldsAreMergedIntoOneSpan() {
         let merged = TempoMapBuilder.merged(
             holds: [

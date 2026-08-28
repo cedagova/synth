@@ -76,6 +76,42 @@ final class ScoreCompilerTests: XCTestCase {
         XCTAssertEqual(played.firstIndex(of: "7"), 9, "the coda is only reached at the end")
     }
 
+    /// The same forms, written the way an engraver who never adds a `<sound>`
+    /// element writes them: as printed words alone.
+    func testJumpsWrittenOnlyAsWordsAreStillHonoured() throws {
+        let score = try compile(Self.wordsOnlyDaCapoAlFine())
+        XCTAssertEqual(playedMeasureNumbers(score), ["1", "2", "3", "4", "1", "2"])
+    }
+
+    /// "D.C. al Fine" names where the jump *ends*; the Fine itself is printed
+    /// on an earlier bar. Reading the tail of the instruction as a Fine at the
+    /// D.C. measure would stop the piece one bar too late.
+    func testTheTailOfAJumpInstructionIsNotMistakenForAMarkAtThatMeasure() throws {
+        let score = try compile(Self.wordsOnlyDaCapoAlFine())
+        // Measure 4 carries "D.C. al Fine". It is played once, on the way to
+        // the jump, and the piece stops at the Fine in measure 2.
+        XCTAssertEqual(playedMeasureNumbers(score).filter { $0 == "4" }.count, 1)
+        XCTAssertEqual(playedMeasureNumbers(score).last, "2")
+    }
+
+    /// Four measures: a Fine printed on measure 2 and "D.C. al Fine" on
+    /// measure 4, both as words with no `<sound>` element anywhere.
+    private static func wordsOnlyDaCapoAlFine() -> Data {
+        let measures = (1...4).map { number -> ScoreXML.Measure in
+            var items: [ScoreXML.Item] = []
+            if number == 1 {
+                items.append(.attributes(ScoreXML.Attributes(divisions: 4, fifths: 0, time: (4, 4))))
+            }
+            if number == 2 { items.append(.direction(ScoreXML.Direction(words: "Fine"))) }
+            if number == 4 { items.append(.direction(ScoreXML.Direction(words: "D.C. al Fine"))) }
+            items.append(.note(ScoreXML.Note(pitch: "C4", duration: 16, type: "whole")))
+            return ScoreXML.Measure(number: String(number), items: items)
+        }
+        return ScoreXML.Score(
+            parts: [ScoreXML.Part(id: "P1", name: "Keyboard", measures: measures)]
+        ).data()
+    }
+
     // MARK: Acceptance — line identity
 
     func testAFugueYieldsOneLinePerVoice() throws {
@@ -263,6 +299,41 @@ final class ScoreCompilerTests: XCTestCase {
         XCTAssertTrue(score.report.mentions(kind: "impossible duration"))
         XCTAssertTrue(score.report.mentions(kind: "unreadable pitch"))
         XCTAssertFalse(score.playbackMeasures.isEmpty)
+    }
+
+    func testAnAbsurdTimeSignatureIsIgnoredRatherThanOverflowingTheTimeline() throws {
+        let measure = ScoreXML.Measure(
+            number: "1",
+            items: [
+                .raw("<attributes><divisions>4</divisions>"
+                     + "<time><beats>9000000000000000000</beats><beat-type>4</beat-type></time>"
+                     + "</attributes>"),
+                .note(ScoreXML.Note(pitch: "C4", duration: 16, type: "whole"))
+            ]
+        )
+        let score = try compile(
+            ScoreXML.Score(parts: [ScoreXML.Part(id: "P1", name: "Piano", measures: [measure])]).data()
+        )
+        XCTAssertNil(score.sourceMeasures[0].timeSignature)
+        XCTAssertEqual(score.sourceMeasures[0].durationTicks, 16, "the written content still decides")
+    }
+
+    func testAMeasureLongerThanAnyMusicIsClippedAndReported() throws {
+        // 2,000 whole notes in one bar, past the thousand-whole-note ceiling.
+        var items: [ScoreXML.Item] = [
+            .attributes(ScoreXML.Attributes(divisions: 4, fifths: 0, time: (4, 4)))
+        ]
+        for _ in 0..<2_000 {
+            items.append(.note(ScoreXML.Note(pitch: "C4", duration: 16)))
+        }
+        let score = try compile(
+            ScoreXML.Score(
+                parts: [ScoreXML.Part(id: "P1", name: "Piano", measures: [ScoreXML.Measure(number: "1", items: items)])]
+            ).data()
+        )
+
+        XCTAssertTrue(score.report.mentions(kind: "impossible measure length"))
+        XCTAssertEqual(score.sourceMeasures[0].durationTicks, score.ticksPerQuarter * 4 * 1024)
     }
 
     func testAnUnreasonableDivisionsValueIsIgnoredRatherThanDrivingTheGrid() throws {

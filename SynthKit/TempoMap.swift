@@ -165,8 +165,15 @@ struct TempoMapBuilder {
     /// into those segments and slowed. Doing it the other way round would let
     /// a tempo change inside a held note quietly cancel the hold.
     func build(changes: [Change], holds: [Hold]) -> TempoMap {
+        // Sorted on both fields, not just the tick. Two parts can carry the
+        // same tempo mark at the same moment with different values, and the
+        // last write below wins — so an unstable sort on the tick alone would
+        // let the winner vary between runs and break byte determinism.
         var boundaries: [Int: Int] = [0: TempoMap.defaultMicrosecondsPerQuarter]
-        for change in changes.sorted(by: { $0.startTicks < $1.startTicks }) {
+        let ordered = changes.sorted {
+            ($0.startTicks, $0.microsecondsPerQuarter) < ($1.startTicks, $1.microsecondsPerQuarter)
+        }
+        for change in ordered {
             let tick = max(0, min(change.startTicks, totalTicks))
             boundaries[tick] = change.microsecondsPerQuarter
         }

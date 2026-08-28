@@ -417,22 +417,30 @@ public final class PresetLibrary: @unchecked Sendable, PieceDependentStore, Soun
     /// without an active preset is not a state the owner can act on; deleting
     /// the only one is refused, because REQ-007 promises a piece is always
     /// playable.
+    ///
+    /// **Whether this preset is the active one is read from the store, not from
+    /// the caller's value**, for the reason `write` gives: a stale list must be
+    /// harmless. Trusting `preset.isActive` would let a caller holding a preset
+    /// that was deactivated in the meantime promote a *second* active preset,
+    /// which the partial unique index then rejects — turning a legitimate
+    /// delete into a spurious "could not save".
     public func delete(_ preset: Preset) throws {
-        let siblings = try presets(forPieceID: preset.pieceID)
-        guard siblings.contains(where: { $0.id == preset.id }) else {
-            throw PresetError.presetNotFound(name: preset.name)
-        }
-        guard siblings.count > 1 else {
-            throw PresetError.lastPresetCannotBeDeleted(name: preset.name)
-        }
-
-        let successor = preset.isActive ? siblings.first(where: { $0.id != preset.id }) : nil
         let timestamp = now()
 
         try transact(named: preset.name) {
-            guard try catalog.preset(withID: preset.id) != nil else {
+            let siblings = try catalog.presets(forPieceID: preset.pieceID)
+                .sorted(by: Preset.isOrderedBefore)
+            guard let current = siblings.first(where: { $0.id == preset.id }) else {
                 throw PresetError.presetNotFound(name: preset.name)
             }
+            guard siblings.count > 1 else {
+                throw PresetError.lastPresetCannotBeDeleted(name: preset.name)
+            }
+
+            let successor = current.isActive
+                ? siblings.first(where: { $0.id != preset.id })
+                : nil
+
             try catalog.delete(presetID: preset.id)
             if let successor {
                 let promoted = Preset(

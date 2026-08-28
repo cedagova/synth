@@ -555,6 +555,42 @@ final class PresetLibraryTests: XCTestCase {
         XCTAssertEqual(try store.presets.activePreset(forPieceID: piece.id)?.id, first.id)
     }
 
+    /// A caller holding a preset that was deactivated in the meantime must
+    /// still be able to delete it.
+    ///
+    /// The stale value says "I am active", so trusting it would promote a
+    /// *second* active preset and the partial unique index would reject the
+    /// whole delete — a legitimate action failing with "Synth could not save".
+    /// The active flag is therefore read from the store inside the transaction.
+    func testDeletingAPresetThatWasDeactivatedElsewhereStillSucceeds() throws {
+        let piece = try importFugue()
+        let score = try compile(piece)
+        let first = try store.activePreset(for: score)
+        let second = try store.presets.duplicate(first, named: "Bright", makeActive: false)
+        let third = try store.presets.duplicate(first, named: "Aardvark", makeActive: false)
+
+        // Something else activates another preset; `first` is now stale and
+        // still claims to be active.
+        _ = try store.presets.activate(second)
+        XCTAssertTrue(first.isActive, "The test needs a stale value that claims to be active.")
+
+        try store.presets.delete(first)
+
+        XCTAssertEqual(try store.presets.presetCount(forPieceID: piece.id), 2)
+        XCTAssertEqual(
+            try store.presets.activePreset(forPieceID: piece.id)?.id, second.id,
+            "The preset that was really active must stay active."
+        )
+        XCTAssertEqual(
+            try store.database.scalarInt(
+                "SELECT count(*) FROM presets WHERE piece_id = ? AND is_active = 1;",
+                [.text(piece.id)]
+            ),
+            1
+        )
+        XCTAssertNotEqual(third.id, second.id)
+    }
+
     /// A piece is always playable (REQ-007), so its last preset stays.
     func testTheLastPresetOfAPieceCannotBeDeleted() throws {
         let score = try compile(try importFugue())

@@ -1013,6 +1013,7 @@ final class PresetLibraryTests: XCTestCase {
                 """
                 DROP TABLE presets;
                 DROP TABLE line_names;
+                DROP TABLE installed_instrument_libraries;
                 UPDATE schema_version SET version = 4 WHERE id = 1;
                 """
             )
@@ -1023,7 +1024,10 @@ final class PresetLibraryTests: XCTestCase {
 
         XCTAssertEqual(store.migrationOutcome.previousVersion, 4)
         XCTAssertEqual(store.migrationOutcome.currentVersion, SchemaMigrator.latestVersion)
-        XCTAssertEqual(store.migrationOutcome.appliedMigrationNames, ["create_presets"])
+        XCTAssertEqual(
+            store.migrationOutcome.appliedMigrationNames,
+            ["create_presets", "create_installed_instrument_libraries"]
+        )
 
         // Nothing the previous build wrote was disturbed.
         XCTAssertEqual(try store.pieceCount(), 1)
@@ -1056,7 +1060,7 @@ final class PresetLibraryTests: XCTestCase {
             guard case StoreError.storeWrittenByNewerApp(let stored, let supported) = error else {
                 return XCTFail("Expected storeWrittenByNewerApp, got \(error)")
             }
-            XCTAssertEqual(stored, 5)
+            XCTAssertEqual(stored, SchemaMigrator.latestVersion)
             XCTAssertEqual(supported, 4)
         }
 

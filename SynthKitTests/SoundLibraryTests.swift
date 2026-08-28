@@ -815,7 +815,7 @@ final class SoundLibraryTests: XCTestCase {
         XCTAssertEqual(store.migrationOutcome.previousVersion, 3)
         XCTAssertEqual(store.migrationOutcome.currentVersion, SchemaMigrator.latestVersion)
         XCTAssertEqual(
-            store.migrationOutcome.appliedMigrationNames, ["create_sounds", "create_presets"]
+            store.migrationOutcome.appliedMigrationNames, ["create_sounds", "create_presets", "create_installed_instrument_libraries"]
         )
 
         // Nothing the previous build wrote was disturbed.

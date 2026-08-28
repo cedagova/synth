@@ -14,6 +14,11 @@ import UniformTypeIdentifiers
 struct LibraryScreen: View {
     @Bindable var model: LibraryModel
 
+    /// Opens a piece on the transport screen. A closure rather than a
+    /// dependency on `AppModel`, so the library still knows nothing about what
+    /// happens after a piece is chosen.
+    let open: (PieceRecord) -> Void
+
     @FocusState private var focus: Field?
 
     fileprivate enum Field: Hashable {
@@ -23,7 +28,7 @@ struct LibraryScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            LibraryToolbar(model: model, searchFocus: $focus)
+            LibraryToolbar(model: model, searchFocus: $focus, open: open)
             Divider()
             content
         }
@@ -110,7 +115,21 @@ struct LibraryScreen: View {
             ForEach(model.visiblePieces) { piece in
                 PieceRow(piece: piece)
                     .tag(piece.id)
+                    // Double-click opens, the way a list of documents does.
+                    // Simultaneous rather than exclusive so a single click
+                    // still selects.
+                    .simultaneousGesture(
+                        TapGesture(count: 2).onEnded {
+                            model.selection = piece.id
+                            open(piece)
+                        }
+                    )
                     .contextMenu {
+                        Button("Play Piece") {
+                            model.selection = piece.id
+                            open(piece)
+                        }
+                        Divider()
                         Button("Remove Piece…", role: .destructive) {
                             model.requestRemoval(of: piece)
                         }
@@ -203,6 +222,7 @@ private struct PieceRow: View {
 private struct LibraryToolbar: View {
     @Bindable var model: LibraryModel
     @FocusState.Binding var searchFocus: LibraryScreen.Field?
+    let open: (PieceRecord) -> Void
 
     var body: some View {
         HStack(spacing: 12) {
@@ -223,6 +243,16 @@ private struct LibraryToolbar: View {
             .disabled(model.isLibraryEmpty)
 
             Divider().frame(height: 18)
+
+            Button {
+                if let piece = model.selectedPiece { open(piece) }
+            } label: {
+                Label("Play", systemImage: "play.fill")
+            }
+            .keyboardShortcut(.defaultAction)
+            .accessibilityLabel("Play the selected piece")
+            .accessibilityHint("Opens it on the transport screen.")
+            .disabled(model.selectedPiece == nil || model.isWorking)
 
             Button {
                 model.beginImport()

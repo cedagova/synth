@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    name: Build and test (macOS, Apple Silicon)
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          newest="$(/bin/ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          echo "Selecting $newest"
+          sudo xcode-select -s "$newest"
+          xcodebuild -version
+          swift --version
+          uname -m
+
+      - name: Build app
+        run: |
+          set -euo pipefail
+          xcodebuild build \
+            -project Synth.xcodeproj \
+            -scheme Synth \
+            -configuration Debug \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath .build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Run tests
+        run: |
+          set -euo pipefail
+          xcodebuild test \
+            -project Synth.xcodeproj \
+            -scheme Synth \
+            -configuration Debug \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath .build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Verify the app declares no Intel slice
+        run: |
+          set -euo pipefail
+          binary=".build/DerivedData/Build/Products/Debug/Synth.app/Contents/MacOS/Synth"
+          lipo -info "$binary"
+          lipo -archs "$binary" | grep -qx 'arm64'

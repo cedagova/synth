@@ -112,6 +112,40 @@ final class ArchiveUnpackingTests: XCTestCase {
         }
     }
 
+    func testAZipMemberIsStoppedWhileItExpands() throws {
+        // A member whose index understates its size is refused, and refused
+        // *during* the write rather than after it. Unreachable through the
+        // catalog, because the archive's own digest is pinned — the point of
+        // the bound is that it does not depend on that.
+        let archive = try write(ArchiveFixtures.zip, named: "fixture.zip")
+        let destination = try destinationRoot()
+        let counting = CountingDestination(
+            underlying: ArchiveUnpacking.DirectoryDestination(rootURL: destination)
+        )
+
+        XCTAssertThrowsError(
+            try ArchiveUnpacking.unpackZip(
+                at: archive, into: counting, strippingComponents: 0,
+                libraryID: "test", assetID: "fixture.zip",
+                declaredSizeOverride: 4
+            )
+        ) { error in
+            guard case InstrumentInstallError.archiveRejected(_, _, let reason) = error else {
+                return XCTFail("Expected archiveRejected, got \(error)")
+            }
+            XCTAssertTrue(reason.contains("expands to more than"))
+        }
+
+        XCTAssertLessThanOrEqual(
+            counting.bytesWritten, 4 + 256 * 1024,
+            """
+            The member kept being written past its declared size. A bound that \
+            only fires once the file is closed is no bound at all against the \
+            case it exists for.
+            """
+        )
+    }
+
     // MARK: Member paths
 
     func testAMemberThatClimbsOutOfTheLibraryFolderIsRefused() {
@@ -164,6 +198,42 @@ final class ArchiveUnpackingTests: XCTestCase {
     }
 
     // MARK: Streaming decode
+
+    /// Counts what actually reached the disk, so "stopped while expanding" is
+    /// checked rather than assumed.
+    final class CountingDestination: ArchiveUnpacking.Destination {
+        let underlying: ArchiveUnpacking.Destination
+        private(set) var bytesWritten = 0
+
+        init(underlying: ArchiveUnpacking.Destination) { self.underlying = underlying }
+
+        func createDirectory(_ relativePath: String) throws {
+            try underlying.createDirectory(relativePath)
+        }
+
+        func beginFile(_ relativePath: String) throws -> AppendableFile {
+            Counter(underlying: try underlying.beginFile(relativePath), destination: self)
+        }
+
+        fileprivate func add(_ count: Int) { bytesWritten += count }
+
+        private final class Counter: AppendableFile {
+            let underlying: AppendableFile
+            weak var destination: CountingDestination?
+
+            init(underlying: AppendableFile, destination: CountingDestination) {
+                self.underlying = underlying
+                self.destination = destination
+            }
+
+            func append(_ data: Data) throws {
+                destination?.add(data.count)
+                try underlying.append(data)
+            }
+
+            func close() throws { try underlying.close() }
+        }
+    }
 
     func testTheXZDecoderHandlesAStreamLargerThanItsBuffers() throws {
         // 3 MB of varied bytes, so the decode loop refills its input and drains

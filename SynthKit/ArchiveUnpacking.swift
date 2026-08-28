@@ -349,12 +349,15 @@ enum ArchiveUnpacking {
     /// the general-purpose flags). Stored and DEFLATE members are supported,
     /// which between them cover every entry in the catalog's archive; anything
     /// else is refused rather than silently skipped.
+    /// - Parameter declaredSizeOverride: test-only, so the expansion bound can
+    ///   be exercised without an archive built to lie about its own sizes.
     static func unpackZip(
         at archiveURL: URL,
         into destination: Destination,
         strippingComponents strip: Int,
         libraryID: String,
-        assetID: String
+        assetID: String,
+        declaredSizeOverride: Int64? = nil
     ) throws {
         let source = try SourceFile(url: archiveURL)
         defer { source.close() }
@@ -415,34 +418,47 @@ enum ArchiveUnpacking {
                 )
             }
 
+            let declaredSize = declaredSizeOverride ?? entry.uncompressedSize
             let file = try destination.beginFile(relative)
             var written: Int64 = 0
+
+            // The index says how big this member expands to, so hold it to
+            // that **while it writes**, not afterwards. A bound checked after
+            // the file is closed still rejects an over-expanding member, but
+            // only once its bytes are already on the disk — which is no bound
+            // at all against the case it exists for. This is a second limit on
+            // decompression, independent of the archive's own digest.
+            let bounded: (Data) throws -> Void = { chunk in
+                written += Int64(chunk.count)
+                guard written <= declaredSize else {
+                    throw InstrumentInstallError.archiveRejected(
+                        libraryID: libraryID, assetID: assetID,
+                        reason: "\(entry.name) expands to more than the \(declaredSize) "
+                            + "bytes its index declares."
+                    )
+                }
+                try file.append(chunk)
+            }
+
             do {
                 if entry.compressionMethod == 0 {
                     while true {
                         let chunk = try readChunk()
                         if chunk.isEmpty { break }
-                        try file.append(chunk)
-                        written += Int64(chunk.count)
+                        try bounded(chunk)
                     }
                 } else {
-                    written = try StreamingInflate.decode(
-                        format: .rawDeflate,
-                        read: readChunk,
-                        write: { try file.append($0) }
+                    try StreamingInflate.decode(
+                        format: .rawDeflate, read: readChunk, write: bounded
                     )
                 }
                 try file.close()
 
-                // The index says how big this member should expand to, so use
-                // it: a second bound on decompression that is independent of the
-                // archive's own digest, and the thing that would catch a
-                // decompression bomb before it filled the disk.
-                guard written == entry.uncompressedSize else {
+                guard written == declaredSize else {
                     throw InstrumentInstallError.archiveRejected(
                         libraryID: libraryID, assetID: assetID,
                         reason: "\(entry.name) expanded to \(written) bytes, but its index "
-                            + "says \(entry.uncompressedSize)."
+                            + "says \(declaredSize)."
                     )
                 }
             } catch {

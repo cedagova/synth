@@ -165,6 +165,16 @@ final class PlaybackModel {
 
     var positionText: String { TransportDisplay.positionText(position) }
 
+    /// What the status line says after a jump.
+    ///
+    /// Past the last measure there is no position to name — `position` is nil
+    /// by design, because the piece has no measure there — and the readout
+    /// already says "end of the piece". Saying "Jumped to —." instead of that
+    /// was what driving the app turned up.
+    private var jumpedMessage: String {
+        position == nil ? "Jumped to the end of the piece." : "Jumped to \(positionText)."
+    }
+
     var elapsedText: String {
         TransportDisplay.elapsedOfTotalText(
             microseconds: positionMicroseconds,
@@ -334,7 +344,7 @@ final class PlaybackModel {
             return
         }
         seekEngine(to: microseconds)
-        statusMessage = "Jumped to \(positionText)."
+        statusMessage = jumpedMessage
     }
 
     private func seekEngine(to microseconds: Int64) {
@@ -360,13 +370,13 @@ final class PlaybackModel {
                 return
             }
             seekEngine(to: microseconds)
-            statusMessage = "Jumped to \(positionText)."
+            statusMessage = jumpedMessage
             return
         }
         guard let queued = queuedSeekMicroseconds else { return }
         queuedSeekMicroseconds = nil
         seekEngine(to: queued)
-        statusMessage = "Jumped to \(positionText)."
+        statusMessage = jumpedMessage
     }
 
     func goToStart() {
@@ -378,7 +388,7 @@ final class PlaybackModel {
     func skip(byMicroseconds delta: Int64) {
         guard isReady else { return }
         seekEngine(to: positionMicroseconds + delta)
-        statusMessage = "Jumped to \(positionText)."
+        statusMessage = jumpedMessage
     }
 
     /// Seeks to what the measure and beat fields say, or explains why it could

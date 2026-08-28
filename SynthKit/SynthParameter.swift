@@ -388,7 +388,8 @@ extension SynthParameter {
             ),
             SynthParameter(
                 id: .lfoRate(index), group: group, name: "Rate",
-                detail: "How fast it moves.",
+                detail: "How fast it moves, from one cycle every hundred seconds up to a "
+                    + "buzz at the bottom of the audible range.",
                 kind: .number(range: 0.01...40, unit: .hertz, decimals: 2, isLogarithmic: true)
             ),
             SynthParameter(
@@ -410,7 +411,8 @@ extension SynthParameter {
         return [
             SynthParameter(
                 id: .modulationSource(index), group: group, name: "Route \(index + 1) Source",
-                detail: "What moves.",
+                detail: "What moves: an envelope, an LFO, the note's velocity, where it sits on "
+                    + "the keyboard, or one random value per note.",
                 kind: .option(
                     values: SynthPatch.ModulationSource.allCases.map(\.rawValue),
                     labels: SynthPatch.ModulationSource.allCases.map(\.displayName)
@@ -682,15 +684,22 @@ extension SynthParameter {
     }
 
     /// The inverse of `normalized`.
+    ///
+    /// The result is clamped as well as computed, because `exp(log(20))` is not
+    /// exactly 20 and a control parked at its own minimum must produce a value
+    /// the parameter accepts rather than one a hair outside it.
     public func denormalized(_ position: Double) -> Double {
         guard case .number(let range, _, _, let isLogarithmic) = kind else { return 0 }
         let clamped = min(max(position, 0), 1)
+        let value: Double
         if isLogarithmic, range.lowerBound > 0 {
             let low = log(range.lowerBound)
             let span = log(range.upperBound) - low
-            return exp(low + span * clamped)
+            value = exp(low + span * clamped)
+        } else {
+            value = range.lowerBound + (range.upperBound - range.lowerBound) * clamped
         }
-        return range.lowerBound + (range.upperBound - range.lowerBound) * clamped
+        return min(max(value, range.lowerBound), range.upperBound)
     }
 
     /// Bring a number into range. What "invalid parameter entry clamps to valid

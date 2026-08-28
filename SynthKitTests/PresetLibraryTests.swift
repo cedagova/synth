@@ -299,6 +299,64 @@ final class PresetLibraryTests: XCTestCase {
         }
     }
 
+    /// The symmetric guard: a palette that cannot cover a line is reported the
+    /// way an empty inventory is, rather than producing a preset that looks
+    /// real and plays nothing on that line.
+    ///
+    /// Unreachable through the app — the shipped collection is compiled into
+    /// the build — but `activePreset(for:palette:)` is public, and a caller
+    /// filtering the palette would land here.
+    func testAPaletteThatCannotCoverALineIsReportedNotSilentlySkipped() throws {
+        let piece = try importFugue()
+        let inventory = try store.lineInventory(for: try compile(piece))
+        let firstLine = try XCTUnwrap(inventory.entries.first)
+
+        XCTAssertThrowsError(try store.presets.activePreset(for: inventory, palette: [])) {
+            XCTAssertEqual(
+                $0 as? PresetError, .noSoundAvailableForLine(name: firstLine.name)
+            )
+        }
+        XCTAssertEqual(try store.presets.presetCount(forPieceID: piece.id), 0,
+                       "Nothing may be stored when the palette cannot cover the piece.")
+
+        XCTAssertThrowsError(
+            try PresetAutoAssignment.initialContent(for: inventory, palette: [])
+        )
+        XCTAssertThrowsError(try PresetAutoAssignment.assignment(for: firstLine, from: []))
+    }
+
+    /// Reconciliation has the same all-or-nothing rule: a line the palette
+    /// cannot cover is reported rather than dropped from the rebuilt preset.
+    func testReconciliationRefusesAPaletteThatCannotCoverANewLine() throws {
+        let piece = try importFugue()
+        let score = try compile(piece)
+        let preset = try store.activePreset(for: score)
+        let inventory = try store.lineInventory(for: score)
+
+        // A preset that has lost one of its lines, so reconciliation has to
+        // supply a replacement — with nothing to supply it from.
+        var content = preset.content
+        content.lines.removeLast()
+        let shortened = Preset(
+            id: preset.id, pieceID: preset.pieceID, name: preset.name, isActive: true,
+            documentVersion: preset.documentVersion, revision: preset.revision,
+            createdAt: preset.createdAt, updatedAt: preset.updatedAt, content: content
+        )
+
+        XCTAssertThrowsError(
+            try store.presets.reconcile(shortened, with: inventory, palette: [])
+        ) {
+            XCTAssertEqual(
+                $0 as? PresetError,
+                .noSoundAvailableForLine(name: try! XCTUnwrap(inventory.entries.last).name)
+            )
+        }
+        // The stored preset is untouched.
+        XCTAssertEqual(
+            try store.presets.activePreset(forPieceID: piece.id)?.content, preset.content
+        )
+    }
+
     // MARK: Auto-save and durability (REQ-024, REQ-025)
 
     /// "Assignment/mixer changes auto-save; relaunch restores the active preset

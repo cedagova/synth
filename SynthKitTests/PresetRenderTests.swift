@@ -529,6 +529,68 @@ final class PresetRenderTests: XCTestCase {
         )
     }
 
+    // MARK: A rebuild keeps the mix (REQ-008 with REQ-015)
+
+    /// Changing one line's sound must not throw the owner's mix away.
+    ///
+    /// A rebuild allocates a fresh C engine whose strips start at unity,
+    /// centred and unmuted. Before this increment nothing ever set them to
+    /// anything else, so that reset was invisible; now that volume, pan, mute
+    /// and solo are owner state it would be a plain defect — and `setVoices` is
+    /// public, so the obvious ASN002 call ("the owner picked another sound for
+    /// line 3") would have hit it.
+    func testChangingOneLinesSoundKeepsTheMixOnEveryOtherLine() throws {
+        let (_, score) = try twoLinePiece()
+        let bright = try store.sounds.create(patch: brightPatch(), named: "Bright", in: .leads)
+        let performance = try store.openActivePreset(for: score)
+        let lower = performance.lines[1].lineID
+
+        let engine = PlaybackEngine()
+        try engine.setRenderMode(.offline(sampleRate: 48_000))
+        try engine.load(timeline: timeline(score))
+
+        // A mix set directly on the busses, as ASN002 will while dragging.
+        let strip = try XCTUnwrap(engine.mixer(for: lower))
+        strip.gain = 0.3
+        strip.pan = 0.8
+        strip.isMuted = true
+        engine.masterGain = 0.7
+
+        // Change only the upper line's sound.
+        var providers: [ScoreLineID: any LineVoiceProvider] = [:]
+        providers[performance.lines[0].lineID] = SynthPatchVoiceProvider(patch: bright.patch)
+        try engine.setVoices(LineVoiceAssignment(providersByLine: providers))
+
+        let after = try XCTUnwrap(engine.mixer(for: lower))
+        XCTAssertEqual(after.gain, 0.3, accuracy: 1e-6, "The line's volume was reset.")
+        XCTAssertEqual(after.pan, 0.8, accuracy: 1e-6, "The line's pan was reset.")
+        XCTAssertTrue(after.isMuted, "The line's mute was dropped.")
+        XCTAssertEqual(engine.masterGain, 0.7, accuracy: 1e-6, "The master gain was reset.")
+    }
+
+    /// The same guarantee on the path a device change takes (REQ-015). Entering
+    /// offline rendering rebuilds through exactly the code an output switch
+    /// does, so this exercises that recovery without needing hardware to leave
+    /// the room.
+    func testTheMixSurvivesTheRebuildADeviceChangePerforms() throws {
+        let (_, score) = try twoLinePiece()
+        let performance = try store.openActivePreset(for: score)
+        let upper = performance.lines[0].lineID
+
+        let engine = PlaybackEngine()
+        try engine.load(timeline: timeline(score))
+        let strip = try XCTUnwrap(engine.mixer(for: upper))
+        strip.gain = 0.15
+        strip.isSoloed = true
+
+        try engine.setRenderMode(.offline(sampleRate: 44_100))
+
+        let after = try XCTUnwrap(engine.mixer(for: upper))
+        XCTAssertEqual(after.gain, 0.15, accuracy: 1e-6)
+        XCTAssertTrue(after.isSoloed)
+        XCTAssertEqual(engine.loadedProgram?.sampleRate, 44_100, "The rebuild did happen.")
+    }
+
     // MARK: The new real-time load profile (REQ-013)
 
     /// The dropout guardrail against the load **this leaf introduces**: the

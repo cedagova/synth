@@ -111,6 +111,13 @@ public struct PresetPerformance: Sendable {
 
     /// Resolve `preset` against the library.
     ///
+    /// A line the preset has no entry for is skipped rather than invented. That
+    /// cannot happen through `LibraryStore.openActivePreset(for:)`, which
+    /// reconciles first, and it is safe if it ever does: `voiceAssignment`
+    /// falls back to the default voice for a line it does not name and
+    /// `applyMixer` writes `.neutral`, so the line plays rather than going
+    /// silent.
+    ///
     /// - Parameters:
     ///   - inventory: supplies each line's display name and the order.
     ///   - library: where a live reference is looked up.

@@ -121,19 +121,42 @@ public enum PresetAutoAssignment {
     ///
     /// Every line gets an assignment — REQ-006 has no unassigned state — and a
     /// neutral mixer strip, so the result is immediately playable (REQ-007).
+    ///
+    /// **All or nothing.** A palette that cannot supply a sound for some line is
+    /// reported rather than quietly skipping that line, which would produce a
+    /// preset that looks real and plays nothing on it. The app cannot reach
+    /// that — `ShippedSoundCollection` is compiled into the build, so the
+    /// palette is never empty — but this is public API, and a later caller
+    /// passing a filtered palette (INS003's "instruments only", say) would.
+    /// The symmetric case, an inventory with no lines, is already
+    /// `PresetError.pieceHasNoLines`; this is the other half of that guard.
+    ///
+    /// - Throws: `PresetError.noSoundAvailableForLine`.
     public static func initialContent(
         for inventory: LineInventory,
         palette: [SoundEntry]
-    ) -> PresetContent {
+    ) throws -> PresetContent {
         PresetContent(
-            lines: inventory.entries.compactMap { entry in
-                guard let sound = sound(for: entry, from: palette) else { return nil }
-                return PresetLine(
+            lines: try inventory.entries.map { entry in
+                PresetLine(
                     lineID: entry.id,
-                    assignment: .library(kind: .synth, soundID: sound.id),
+                    assignment: try assignment(for: entry, from: palette),
                     mixer: .neutral
                 )
             }
         )
+    }
+
+    /// The assignment one line starts on, or a reported failure.
+    ///
+    /// - Throws: `PresetError.noSoundAvailableForLine`.
+    public static func assignment(
+        for entry: LineEntry,
+        from palette: [SoundEntry]
+    ) throws -> LineAssignment {
+        guard let sound = sound(for: entry, from: palette) else {
+            throw PresetError.noSoundAvailableForLine(name: entry.name)
+        }
+        return .library(kind: .synth, soundID: sound.id)
     }
 }

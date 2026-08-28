@@ -17,6 +17,11 @@ public enum PresetError: Error, Equatable, Sendable {
     /// compiles to zero lines is a broken import, not a preset problem.
     case pieceHasNoLines(pieceID: String)
 
+    /// The palette offered has no sound this line could be given. The
+    /// symmetric case to `pieceHasNoLines`, and reported for the same reason:
+    /// a preset with a line missing would look real and play nothing on it.
+    case noSoundAvailableForLine(name: String)
+
     /// The preset has no entry for that line.
     case lineNotInPreset(lineID: String)
 
@@ -41,6 +46,8 @@ extension PresetError: LocalizedError {
             return "A preset needs a name."
         case .pieceHasNoLines:
             return "Synth found no playable lines in this piece, so it cannot make a preset for it."
+        case .noSoundAvailableForLine(let name):
+            return "Synth has no sound it can give the line “\(name)”."
         case .lineNotInPreset(let lineID):
             return "This preset has no entry for the line \(lineID)."
         case .lastPresetCannotBeDeleted(let name):
@@ -60,6 +67,8 @@ extension PresetError: LocalizedError {
             return "Type a name and try again."
         case .pieceHasNoLines:
             return "Re-import the score; the file Synth stored may not contain any notes."
+        case .noSoundAvailableForLine:
+            return "Add a sound to your sound library and open the piece again."
         case .lineNotInPreset:
             return "Reopen the piece to rebuild its line list."
         case .lastPresetCannotBeDeleted:
@@ -262,7 +271,7 @@ public final class PresetLibrary: @unchecked Sendable, PieceDependentStore, Soun
         return try create(
             named: Self.initialPresetName,
             forPieceID: inventory.pieceID,
-            content: PresetAutoAssignment.initialContent(for: inventory, palette: palette),
+            content: try PresetAutoAssignment.initialContent(for: inventory, palette: palette),
             makeActive: true
         )
     }
@@ -285,14 +294,14 @@ public final class PresetLibrary: @unchecked Sendable, PieceDependentStore, Soun
             preset.content.lines.map { ($0.lineID, $0) },
             uniquingKeysWith: { first, _ in first }
         )
-        let rebuilt = inventory.entries.compactMap { entry -> PresetLine? in
+        // All or nothing, exactly as `initialContent` is: a line the palette
+        // cannot cover is reported, never dropped into a preset that looks
+        // complete and plays nothing on it.
+        let rebuilt = try inventory.entries.map { entry -> PresetLine in
             if let kept = existing[entry.id] { return kept }
-            guard let sound = PresetAutoAssignment.sound(for: entry, from: palette) else {
-                return nil
-            }
             return PresetLine(
                 lineID: entry.id,
-                assignment: .library(kind: .synth, soundID: sound.id),
+                assignment: try PresetAutoAssignment.assignment(for: entry, from: palette),
                 mixer: .neutral
             )
         }

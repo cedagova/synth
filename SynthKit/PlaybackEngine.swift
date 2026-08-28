@@ -134,9 +134,15 @@ public final class PlaybackEngine: @unchecked Sendable {
     /// Rebuilds the program, because a voice is allocated once per line when
     /// the program is built and the render thread only ever sees the resulting
     /// C vtable. Stopping the graph first is the synchronisation edge that
-    /// publishes the new voices, exactly as `load(timeline:)` does; the
-    /// playhead is carried across, so changing a line's sound mid-piece
-    /// resumes where it was rather than restarting.
+    /// publishes the new voices, exactly as `load(timeline:)` does.
+    ///
+    /// **The playhead and the whole mix are carried across**, so changing one
+    /// line's sound mid-piece resumes where it was and leaves every strip's
+    /// volume, pan, mute and solo where the owner put them. Calling this on its
+    /// own is therefore safe: it changes sounds and nothing else. Applying a
+    /// *different preset's* mixer state is a separate act — that is
+    /// `PresetPerformance.apply(to:)`, which calls this and then writes the new
+    /// preset's strips over the carried ones.
     ///
     /// This is the *assignment* path. Editing the patch of a sound already
     /// assigned goes through `SynthPatchLiveVoices` instead and needs no
@@ -176,6 +182,52 @@ public final class PlaybackEngine: @unchecked Sendable {
         try rebuildProgramAndGraph()
     }
 
+    /// Everything about a rebuild that must survive it.
+    ///
+    /// Mixer state is addressed **by `ScoreLineID`, not by index**, so a rebuild
+    /// cannot transpose one line's strip onto another's even if line order ever
+    /// changed underneath it.
+    private struct CarriedState {
+        let microseconds: Int64
+        let wasPlaying: Bool
+        let mixerByLine: [ScoreLineID: LineMixerState]
+        let masterGain: Float
+    }
+
+    private func captureState() -> CarriedState {
+        var mixerByLine: [ScoreLineID: LineMixerState] = [:]
+        if let program {
+            for (index, lineID) in program.lineIDs.enumerated() {
+                guard let strip = mixer(forLineAt: index) else { continue }
+                mixerByLine[lineID] = LineMixerState(
+                    volume: Double(strip.gain),
+                    pan: Double(strip.pan),
+                    isMuted: strip.isMuted,
+                    isSoloed: strip.isSoloed
+                )
+            }
+        }
+        return CarriedState(
+            microseconds: playbackPositionMicroseconds,
+            wasPlaying: transportState == .playing,
+            mixerByLine: mixerByLine,
+            masterGain: masterGain
+        )
+    }
+
+    private func restore(_ carried: CarriedState) {
+        guard let program else { return }
+        for (index, lineID) in program.lineIDs.enumerated() {
+            guard let state = carried.mixerByLine[lineID],
+                  let strip = mixer(forLineAt: index) else { continue }
+            strip.gain = Float(state.volume)
+            strip.pan = Float(state.pan)
+            strip.isMuted = state.isMuted
+            strip.isSoloed = state.isSoloed
+        }
+        masterGain = carried.masterGain
+    }
+
     /// Rebuild the program at the current rate and reconnect the graph.
     ///
     /// A program stores event positions in frames, so it belongs to exactly one
@@ -183,9 +235,16 @@ public final class PlaybackEngine: @unchecked Sendable {
     /// user picking another output, entering offline rendering — therefore ends
     /// up here, on one path, with the playhead carried across in microseconds
     /// so it survives the rate change.
+    ///
+    /// **The mix is carried across too**, and that is not cosmetic. A rebuild
+    /// allocates a fresh C engine, whose strips start at unity, centred and
+    /// unmuted; before increment 004 nothing ever set them to anything else, so
+    /// the reset was invisible. Now that the owner's volume, pan, mute and solo
+    /// are real state, losing them because a pair of headphones was unplugged
+    /// would be a plain defect — REQ-015 asks a device change to be graceful,
+    /// and silently discarding the mix is not.
     private func rebuildProgramAndGraph() throws {
-        let carriedMicroseconds = playbackPositionMicroseconds
-        let wasPlaying = transportState == .playing
+        let carried = captureState()
 
         let rate: Double
         switch mode {
@@ -212,11 +271,12 @@ public final class PlaybackEngine: @unchecked Sendable {
         }
 
         rebuildGraph(sampleRate: rate)
+        restore(carried)
 
-        if let program, carriedMicroseconds > 0 {
-            let frame = RenderProgram.frame(forMicroseconds: carriedMicroseconds, sampleRate: rate)
+        if let program, carried.microseconds > 0 {
+            let frame = RenderProgram.frame(forMicroseconds: carried.microseconds, sampleRate: rate)
             synth_engine_seek(program.engine, frame)
-            if wasPlaying { synth_engine_play(program.engine) }
+            if carried.wasPlaying { synth_engine_play(program.engine) }
         }
     }
 

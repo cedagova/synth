@@ -23,11 +23,17 @@ import SynthKit
 /// entirely rather than register it), and ⇧⌘↑/⇧⌘↓ behind the Library's ⌘↑/⌘↓
 /// Select Previous/Next Piece — the same loose Shift matching AppKit applies to
 /// non-character key equivalents. One of them
-/// was worse than dead: ⇧⌘⌫ was consumed by Edit's ⌘⌫ Remove Selected Piece,
-/// because AppKit matches the delete character loosely across Shift, so
+/// was worse than dead: ⇧⌘⌫ was consumed by Edit's ⌘⌫ Remove Selected Piece, so
 /// pressing it in the studio armed a *piece* removal that would surface the
-/// next time the owner went back to the library. `menu-bar.txt` in the smoke
-/// evidence is the dump this set was checked against.
+/// next time the owner went back to the library.
+///
+/// **So no shortcut in this menu uses Shift at all.** AppKit matches a key
+/// equivalent loosely across Shift, which makes ⇧⌘X collide with any ⌘X earlier
+/// in the bar — and the Sounds menu is last, so it always loses. Option and
+/// Control are matched exactly, and every shortcut here is checked against the
+/// whole live menu bar rather than against memory: `menu-bar.txt` in the smoke
+/// evidence is that dump, and the same run presses these keys and observes what
+/// they did.
 struct SoundCommands: Commands {
     let model: AppModel
 
@@ -48,12 +54,12 @@ struct SoundCommands: Commands {
             Button("Duplicate Sound") {
                 model.studio?.duplicateSelected()
             }
-            .keyboardShortcut("d", modifiers: [.command, .shift])
+            .keyboardShortcut("d", modifiers: [.command, .option])
 
             Button("Rename Sound…") {
                 model.studio?.beginRename()
             }
-            .keyboardShortcut("r", modifiers: .command)
+            .keyboardShortcut("r", modifiers: [.command, .control])
 
             Button("Delete Sound…") {
                 model.studio?.requestDeletionOfSelection()
@@ -108,7 +114,7 @@ struct SoundCommands: Commands {
             Button("All Test Notes Off") {
                 model.studio?.editor.releaseEverything()
             }
-            .keyboardShortcut("t", modifiers: [.command, .shift])
+            .keyboardShortcut("t", modifiers: [.command, .control])
 
             Button("Play the Open Piece Through This Sound") {
                 model.studio?.editor.togglePlayingPieceThroughSound()

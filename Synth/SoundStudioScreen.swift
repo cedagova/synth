@@ -161,12 +161,22 @@ private struct SoundRow: View {
     let entry: SoundEntry
     let model: SoundStudioModel
 
+    /// Focus goes to the rename field the moment it appears.
+    ///
+    /// Without this a rename started from the keyboard puts a text field on
+    /// screen that the keyboard is not in, which is a rename nobody can
+    /// complete without reaching for the mouse — the opposite of what REQ-027
+    /// asks of the command that opened it.
+    @FocusState private var isRenaming: Bool
+
     var body: some View {
         HStack(spacing: 8) {
             if model.renaming?.id == entry.id {
                 TextField("Name", text: Binding(get: { model.renameText },
                                                 set: { model.renameText = $0 }))
                     .textFieldStyle(.roundedBorder)
+                    .focused($isRenaming)
+                    .onAppear { isRenaming = true }
                     .onSubmit { model.commitRename() }
                     .onExitCommand { model.cancelRename() }
                     .accessibilityLabel("New name for \(entry.name)")

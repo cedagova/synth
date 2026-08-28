@@ -94,7 +94,14 @@ public struct SoundEntry: Equatable, Sendable, Identifiable {
     /// which never change within one build.
     public let revision: Int
 
-    /// ISO 8601 UTC. Empty for shipped entries, which have no store row.
+    /// ISO 8601 UTC.
+    ///
+    /// **Empty string for a shipped entry**, which has no store row and
+    /// therefore no moment it came into existence — the app version is what
+    /// says which shipped collection you have. A consumer that formats these as
+    /// dates must check `origin` (or for emptiness) rather than assume every
+    /// entry has one; `Optional` was rejected because it would put a `?` on
+    /// every user sound's timestamp to describe the shipped case.
     public let createdAt: String
     public let updatedAt: String
 

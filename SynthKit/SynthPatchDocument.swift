@@ -83,13 +83,21 @@ public enum SynthPatchDocument {
         }
     }
 
-    /// Load a patch, or explain precisely why it cannot be loaded.
-    public static func patch(from data: Data) throws -> SynthPatch {
-        let decoder = JSONDecoder()
-
+    /// The format version a document declares, without decoding the patch.
+    ///
+    /// The probe `patch(from:)` runs first, made public because SYN002 stores a
+    /// document's version in its row *alongside* the document. Two independent
+    /// records of one fact are exactly what a future forward migration would
+    /// trust and be wrong about — "rewrite every sound below format version N"
+    /// is only a trustworthy query if the column agrees with the bytes it
+    /// describes. This is how the store checks that it does.
+    ///
+    /// Throws the same errors `patch(from:)` would for bytes that are not a
+    /// readable document at all.
+    public static func version(of data: Data) throws -> Int {
         let probe: VersionProbe
         do {
-            probe = try decoder.decode(VersionProbe.self, from: data)
+            probe = try JSONDecoder().decode(VersionProbe.self, from: data)
         } catch let error as DecodingError {
             switch error {
             case .keyNotFound:
@@ -113,8 +121,14 @@ public enum SynthPatchDocument {
                 found: probe.version, supported: SynthPatch.currentVersion
             )
         }
+        return probe.version
+    }
 
-        let patch = try decode(version: probe.version, from: data, using: decoder)
+    /// Load a patch, or explain precisely why it cannot be loaded.
+    public static func patch(from data: Data) throws -> SynthPatch {
+        let patch = try decode(
+            version: try version(of: data), from: data, using: JSONDecoder()
+        )
         try validate(patch)
         return patch
     }

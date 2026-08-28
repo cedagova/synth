@@ -117,7 +117,8 @@ final class LibraryStoreTests: XCTestCase {
             .storeWrittenByNewerApp(storedVersion: 4, supportedVersion: 1),
             .migrationFailed(version: 2, name: "add_pieces", reason: "The disk is full."),
             .schemaVersionUnreadable,
-            .pieceRowUnreadable(id: "6E9B8F2A")
+            .pieceRowUnreadable(id: "6E9B8F2A"),
+            .soundRowUnreadable(id: "user.6E9B8F2A", reason: "It is not a patch document.")
         ]
 
         for error in errors {

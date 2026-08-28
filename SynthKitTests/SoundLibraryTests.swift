@@ -594,6 +594,72 @@ final class SoundLibraryTests: XCTestCase {
         }
     }
 
+    /// The row's recorded format version and the document's own must agree.
+    ///
+    /// They cannot disagree by accident today — there is one version — but the
+    /// column exists so a future forward migration can ask "which sounds are
+    /// below format version N?", and that query is only trustworthy if
+    /// something keeps the two honest. This is that something.
+    func testARowWhoseFormatVersionDisagreesWithItsDocumentIsRefused() throws {
+        let store = try launch()
+        defer { store.close() }
+
+        try store.database.execute(
+            """
+            INSERT INTO \(SoundCatalog.tableName)
+                (id, name, category, shipped_origin_id, document_version,
+                 document, revision, created_at, updated_at)
+            VALUES ('user.mislabelled', 'Mislabelled', 'keys', NULL, 7, ?, 1, '', '');
+            """,
+            [.text(String(decoding: try SynthPatchDocument.data(from: .defaultVoice), as: UTF8.self))]
+        )
+
+        XCTAssertThrowsError(try store.sounds.allSounds()) { error in
+            guard case StoreError.soundRowUnreadable(let id, let reason) = error else {
+                return XCTFail("Expected soundRowUnreadable, got \(error)")
+            }
+            XCTAssertEqual(id, "user.mislabelled")
+            XCTAssertTrue(reason.contains("7"), reason)
+            XCTAssertTrue(reason.contains("\(SynthPatch.currentVersion)"), reason)
+        }
+    }
+
+    /// Everything the library writes itself satisfies that invariant.
+    func testEverySoundTheLibraryWritesRecordsItsRealFormatVersion() throws {
+        let store = try launch()
+        defer { store.close() }
+
+        let created = try store.sounds.create(patch: testPatch(), named: "Consistent", in: .keys)
+        _ = try store.sounds.rename(created, to: "Consistent Still")
+        _ = try store.sounds.makeEditableCopy(of: store.sounds.shippedSounds[0])
+
+        let rows = try store.database.query(
+            "SELECT document_version, document FROM \(SoundCatalog.tableName);"
+        )
+        XCTAssertEqual(rows.count, 2)
+        for row in rows {
+            let recorded = try XCTUnwrap(row.integer("document_version"))
+            let declared = try SynthPatchDocument.version(
+                of: Data(try XCTUnwrap(row.text("document")).utf8)
+            )
+            XCTAssertEqual(Int(recorded), declared)
+        }
+    }
+
+    /// The recovery text has to match what actually happens. Reading is
+    /// all-or-nothing — one bad row stops the whole list — so a message that
+    /// reassured the owner their other sounds were fine would be wrong at the
+    /// exact moment they are deciding whether they have lost their work.
+    func testTheUnreadableRowMessageDoesNotPromiseTheOtherSoundsAreListable() throws {
+        let error = StoreError.soundRowUnreadable(id: "user.corrupt", reason: "It is not a patch.")
+        let text = [error.errorDescription, error.recoverySuggestion].compactMap { $0 }.joined(separator: " ")
+
+        XCTAssertTrue(text.contains("cannot list"), text)
+        XCTAssertTrue(text.contains("No sounds can be listed"), text)
+        XCTAssertFalse(text.lowercased().contains("unaffected"), text)
+        XCTAssertTrue(text.contains("backup"), text)
+    }
+
     func testDeletingASoundThatIsAlreadyGoneIsReportedNotSilent() throws {
         let store = try launch()
         defer { store.close() }

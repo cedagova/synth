@@ -162,9 +162,27 @@ public final class SoundCatalog: @unchecked Sendable {
             throw fail("It is filed under “\(rawCategory)”, which this version of Synth does not know.")
         }
 
+        // The row records the document's format version and the document
+        // records it too, so the two must be made to agree here — otherwise the
+        // column is an unchecked copy, and the obvious future use for it ("find
+        // every sound below format version N and rewrite it") would be a query
+        // nothing keeps honest. A v2 migration that rewrote `document` without
+        // the column, or the column without the documents, would then silently
+        // skip or double-process rows. Checked, that is a loud unreadable row
+        // instead — the same failure channel a corrupt document already uses.
+        let bytes = Data(document.utf8)
         let patch: SynthPatch
         do {
-            patch = try SynthPatchDocument.patch(from: Data(document.utf8))
+            let declared = try SynthPatchDocument.version(of: bytes)
+            guard Int(documentVersion) == declared else {
+                throw fail(
+                    "Its row records patch format version \(documentVersion), "
+                        + "but the document itself declares version \(declared)."
+                )
+            }
+            patch = try SynthPatchDocument.patch(from: bytes)
+        } catch let error as StoreError {
+            throw error
         } catch let error as SynthPatchDocumentError {
             throw fail(error.description)
         } catch {

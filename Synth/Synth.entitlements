@@ -8,5 +8,13 @@
 	     never writes back to the file the owner picked or dropped (D9). -->
 	<key>com.apple.security.files.user-selected.read-only</key>
 	<true/>
+	<!-- Outbound only, and only ever used to GET the instrument-catalog assets
+	     this build pins by URL and checksum (INS001, REQ-020/REQ-022). There is
+	     deliberately no com.apple.security.network.server: Synth accepts no
+	     incoming connections. Nothing is uploaded — no account, no telemetry,
+	     no user data leaves the machine (REQ-028, D9).
+	     NoNetworkBaselineTests asserts exactly this pair of facts. -->
+	<key>com.apple.security.network.client</key>
+	<true/>
 </dict>
 </plist>

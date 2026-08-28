@@ -35,6 +35,15 @@ public final class LibraryStore: @unchecked Sendable {
     /// "removing a piece removes its presets" a property of call sites.
     public let presets: PresetLibrary
 
+    /// The curated instrument catalog's installed state (REQ-020, REQ-022).
+    ///
+    /// Built here for the same reason `presets` is: every opened store must
+    /// have it, so no call site can end up with a store that cannot answer
+    /// "which instruments do I have?". It holds no transfer of its own and
+    /// therefore cannot reach the network — downloading is
+    /// `InstrumentDownloadManager`'s, and it has to be handed one explicitly.
+    public let instruments: InstrumentAssetStore
+
     /// Stores whose rows belong to a piece and must go when it does.
     ///
     /// Always contains `presets`, plus anything the caller added. The cascade,
@@ -73,6 +82,9 @@ public final class LibraryStore: @unchecked Sendable {
         self.presets = presets
         self.sounds = SoundLibrary(
             database: database, dependentStores: [presets] + soundDependentStores
+        )
+        self.instruments = InstrumentAssetStore(
+            database: database, assetsRootURL: container.assetsURL, fileManager: fileManager
         )
         self.dependentStores = [presets] + dependentStores
         self.schemaVersion = schemaVersion

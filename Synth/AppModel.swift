@@ -43,6 +43,16 @@ final class AppModel {
     /// owner who never designs a sound should pay for neither.
     private(set) var studio: SoundStudioModel?
 
+    /// The instrument catalog, once it has been opened.
+    ///
+    /// Kept after the screen closes, deliberately: a 2.6 GB download must not
+    /// stop because the owner went back to their piece. `suspend()` on the
+    /// store closing is the only thing that ends a transfer early.
+    private(set) var instrumentCatalog: InstrumentCatalogModel?
+
+    /// True while the catalog is the screen showing.
+    private(set) var isInstrumentCatalogShowing = false
+
     /// True while the studio is the screen showing.
     ///
     /// Separate from `studio != nil` because leaving the studio must not throw
@@ -158,6 +168,48 @@ final class AppModel {
         isStudioShowing = false
     }
 
+    // MARK: - The instrument catalog
+
+    /// Show the curated instrument catalog (REQ-020, REQ-022).
+    ///
+    /// Built once and kept, because the model owns the download tasks. Sits
+    /// over whatever else is showing, like the studio does, so an open piece
+    /// keeps playing while a library downloads behind it.
+    func openInstrumentCatalog() {
+        guard let store else { return }
+        if instrumentCatalog == nil {
+            instrumentCatalog = InstrumentCatalogModel(store: store)
+        }
+        isInstrumentCatalogShowing = true
+    }
+
+    func closeInstrumentCatalog() {
+        isInstrumentCatalogShowing = false
+    }
+
+    /// Runs the first-run instrument offer once the store is open.
+    ///
+    /// Built without showing the screen: the offer is a sheet the catalog model
+    /// raises, and `RootView` shows the catalog when it does. An owner who
+    /// declines never sees the catalog screen at all.
+    private func prepareInstrumentsForFirstRun() {
+        guard let store else { return }
+        let catalog = instrumentCatalog ?? InstrumentCatalogModel(store: store)
+        instrumentCatalog = catalog
+        catalog.prepareForFirstRun()
+        guard catalog.isShowingFirstRunOffer else { return }
+
+        // Declining puts the screen away again. An owner who never asked to see
+        // the catalog and said no to it should be back where they were, not
+        // left looking at the thing they just turned down. Accepting keeps it
+        // open, because that is where the progress is.
+        catalog.onFirstRunOfferAnswered = { [weak self] didAccept in
+            guard let self, !didAccept else { return }
+            self.isInstrumentCatalogShowing = false
+        }
+        isInstrumentCatalogShowing = true
+    }
+
     /// The Playback ▸ Open Selected Piece command, and the library's own
     /// Return key and Play button.
     func openSelectedPieceForPlayback() {
@@ -179,6 +231,12 @@ final class AppModel {
             studio?.editor.suspend()
             studio = nil
             isStudioShowing = false
+            // Downloads write into the container this store owns, so they have
+            // to stop before it is closed underneath them. Whatever has already
+            // arrived stays staged and resumes on the next attempt.
+            instrumentCatalog?.suspend()
+            instrumentCatalog = nil
+            isInstrumentCatalogShowing = false
             current.close()
             store = nil
         }
@@ -191,6 +249,7 @@ final class AppModel {
             let opened = try await Self.openStore(appVersion: appVersion)
             store = opened
             state = .ready(LibraryModel(store: opened))
+            prepareInstrumentsForFirstRun()
         } catch {
             state = .failed(StoreFailure(error))
         }

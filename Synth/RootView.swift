@@ -11,7 +11,11 @@ struct RootView: View {
             // a sound is designed — that is what "live editing during playback"
             // means when there is one window — so leaving the studio comes back
             // to a transport that has been running all along.
-            if model.isStudioShowing, let studio = model.studio {
+            // The catalog sits above even the studio, because the first-run
+            // offer is raised from it before anything else has been chosen.
+            if model.isInstrumentCatalogShowing, let catalog = model.instrumentCatalog {
+                InstrumentCatalogScreen(model: catalog) { model.closeInstrumentCatalog() }
+            } else if model.isStudioShowing, let studio = model.studio {
                 SoundStudioScreen(model: studio) { model.closeSoundStudio() }
             } else if let playback = model.playback {
                 PlaybackScreen(model: playback) { model.closePlayback() }

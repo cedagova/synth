@@ -407,16 +407,37 @@ final class CuratedInstrumentAssetTests: XCTestCase {
             )
         )
 
-        // Round-robin over the installed instruments, so no two adjacent lines
-        // share one and eighteen distinct sample sets are mapped at once —
-        // the worst memory case the product can reach.
+        // Eighteen distinct instruments, one from each library first and then
+        // the rest in catalog order. Taking the first eighteen straight off the
+        // catalog would map only VSCO 2 and understate the footprint by an
+        // order of magnitude: Salamander alone is 1.2 GB of the set, and it is
+        // the instrument most likely to be on a piano line in real use.
+        var chosen: [AvailableInstrument] = []
+        for libraryID in Set(available.map(\.libraryID)).sorted() {
+            if let first = available.first(where: { $0.libraryID == libraryID }) {
+                chosen.append(first)
+            }
+        }
+        for instrument in available where chosen.count < timeline.lines.count {
+            if !chosen.contains(where: { $0.coverage.identifier == instrument.coverage.identifier }) {
+                chosen.append(instrument)
+            }
+        }
+        XCTAssertEqual(chosen.count, timeline.lines.count)
+
         let loadStarted = Date()
         var byLine: [ScoreLineID: any LineVoiceProvider] = [:]
         for (index, line) in timeline.lines.enumerated() {
-            byLine[line.id] = try library.provider(for: available[index % available.count])
+            byLine[line.id] = try library.provider(for: chosen[index])
         }
         let loadSeconds = Date().timeIntervalSince(loadStarted)
         let footprint = library.memoryFootprint()
+
+        XCTAssertEqual(
+            Set(chosen.map(\.libraryID)).count, 3,
+            "All three libraries should be in the mix; got "
+                + "\(Set(chosen.map(\.libraryID)).sorted())."
+        )
 
         let expectedSeconds = Double(timeline.totalMicroseconds) / 1_000_000
         let engine = PlaybackEngine(voices: LineVoiceAssignment(providersByLine: byLine))
@@ -444,6 +465,7 @@ final class CuratedInstrumentAssetTests: XCTestCase {
             Dropout guardrail — orchestral reference on sampled instruments
               lines:              \(timeline.lines.count)
               distinct instruments: \(Set(byLine.values.map(\.identifier)).count)
+              libraries:          \(Set(chosen.map(\.libraryID)).sorted().joined(separator: ", "))
               events:             \(timeline.eventCount)
               timeline length:    \(String(format: "%.1f", expectedSeconds)) s
               wall clock:         \(String(format: "%.1f", elapsed)) s

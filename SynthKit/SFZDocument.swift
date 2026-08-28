@@ -30,7 +30,7 @@ public struct SFZDocument: Sendable, Equatable {
     public let regions: [SFZRegion]
 
     /// Opcodes and headers that were recognised as SFZ but not applied, with
-    /// how often each appeared and why it was not applied.
+    /// how often each was encountered and why it was not applied.
     ///
     /// INS003 reads this. It is deliberately a report rather than an error:
     /// an instrument that uses one unsupported opcode still plays, and the
@@ -90,8 +90,10 @@ public struct SFZRegion: Sendable, Equatable {
     /// `volume`, in decibels.
     public var volumeDecibels: Double = 0
 
-    /// `pan`, -100…100. Parsed and reported rather than applied — see
-    /// `SFZUnsupportedFeature.panIsOwnedByTheEngine`.
+    /// `pan`, -100…100. Parsed and reported rather than applied: the
+    /// line-voice interface renders mono and the engine owns pan (PLY003), so a
+    /// region cannot place itself in the stereo image. Nothing in the curated
+    /// set writes one. See `unsupportedReasons["pan"]`.
     public var pan: Double = 0
 
     /// `amp_veltrack`/100.
@@ -149,7 +151,9 @@ public struct SFZUnsupportedFeature: Sendable, Equatable, Hashable {
     /// The opcode or header, exactly as SFZ spells it.
     public let name: String
 
-    /// How many times it appeared in this instrument.
+    /// How many times it was encountered. An opcode written once on a
+    /// `<group>` counts once per region that inherited it, because that is how
+    /// many places it would have changed the sound.
     public let occurrences: Int
 
     /// Why it was not applied, in language that can be shown to the owner.

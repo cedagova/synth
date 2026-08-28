@@ -549,6 +549,42 @@ final class SampledInstrumentRenderTests: XCTestCase {
         }
     }
 
+    /// An SFZ cannot name a file outside the library it belongs to.
+    ///
+    /// The curated files are pinned by digest so this is not a live threat, but
+    /// an SFZ is third-party text that names files to open, and a `..` in one
+    /// must never become a read outside the installed library. Held by
+    /// construction rather than by the catalog continuing to be trustworthy.
+    func testASamplePathCannotEscapeTheInstalledLibrary() throws {
+        let outside = root.deletingLastPathComponent()
+            .appending(path: "outside-\(UUID().uuidString).wav")
+        try SFZFixtures.writeWave(SFZFixtures.constant(0.9), to: outside)
+        defer { try? FileManager.default.removeItem(at: outside) }
+
+        try SFZFixtures.writeWave(
+            SFZFixtures.constant(0.3), to: root.appending(path: "inside.wav")
+        )
+        let instrument = try SFZFixtures.writeInstrument(
+            """
+            <group> ampeg_attack=0 ampeg_release=0.01 amp_veltrack=0 pitch_keytrack=0
+            <region> sample=inside.wav lokey=60 hikey=60 pitch_keycenter=60
+            <region> sample=../\(outside.lastPathComponent) lokey=62 hikey=62 pitch_keycenter=62
+            """,
+            in: root, instrumentName: "Escaping"
+        )
+
+        let loaded = try SampledInstrument(instrument)
+        XCTAssertEqual(loaded.features.unplayableSamples.count, 1)
+        XCTAssertTrue(
+            loaded.features.unplayableSamples[0].reason.contains("outside"),
+            "Got: \(loaded.features.unplayableSamples[0].reason)"
+        )
+
+        let harness = try SampledVoiceHarness(instrument)
+        XCTAssertEqual(Double(harness.level(ofNote: 60)), 0.3, accuracy: 0.02)
+        XCTAssertEqual(harness.level(ofNote: 62), 0, "The escaping region must not sound.")
+    }
+
     /// A corrupt file is a load failure with a reason, not a crash and not
     /// noise on the audio thread.
     func testACorruptSampleFileIsRejectedWithAReason() throws {
@@ -560,6 +596,51 @@ final class SampledInstrumentRenderTests: XCTestCase {
 
         XCTAssertThrowsError(try SampledInstrument(instrument)) { error in
             XCTAssertTrue("\(error)".contains("Corrupt"))
+        }
+    }
+
+    /// Issue #23: "a playing line whose asset disappears degrades to
+    /// silence-with-flag, not a crash."
+    ///
+    /// What actually happens is better than silence and is worth being precise
+    /// about: the samples are mapped, and POSIX keeps a mapping valid after the
+    /// directory entry goes, so the note that is already sounding finishes. The
+    /// flag arrives on the next load, where the instrument becomes unavailable
+    /// with a reason and INS001's re-download path. Neither step crashes, which
+    /// is the property the criterion is really about.
+    func testAnAssetDeletedDuringPlaybackDoesNotCrashAndIsFlaggedOnReload() throws {
+        try SFZFixtures.writeWave(
+            SFZFixtures.constant(0.5, seconds: 4.0), to: root.appending(path: "vanishing.wav")
+        )
+        let instrument = try SFZFixtures.writeInstrument(
+            """
+            <group> ampeg_attack=0 ampeg_release=0.01 amp_veltrack=0 pitch_keytrack=0
+            <region> sample=vanishing.wav lokey=60 hikey=60 pitch_keycenter=60
+            """,
+            in: root, instrumentName: "Vanishing"
+        )
+
+        let harness = try SampledVoiceHarness(instrument)
+        harness.noteOn(60)
+        _ = harness.render(seconds: 0.1)
+
+        try FileManager.default.removeItem(at: root.appending(path: "vanishing.wav"))
+
+        let afterDeletion = harness.render(seconds: 0.5)
+        XCTAssertEqual(
+            SampledVoiceHarness.meanAbsolute(afterDeletion.suffix(2000)), 0.5, accuracy: 0.02,
+            "The sounding note reads a mapping, which outlives the directory entry."
+        )
+        harness.noteOff(60)
+        _ = harness.render(seconds: 0.1)
+
+        // The flag: loading it again cannot find the file, and says so.
+        XCTAssertThrowsError(try SampledInstrument(instrument)) { error in
+            guard let failure = error as? SampledInstrument.LoadError else {
+                return XCTFail("Expected a LoadError, got \(error).")
+            }
+            XCTAssertTrue(failure.description.contains("Vanishing"))
+            XCTAssertTrue(failure.recoverySuggestion.contains("Re-download"))
         }
     }
 

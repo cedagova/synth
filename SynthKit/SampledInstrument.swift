@@ -124,10 +124,28 @@ public final class SampledInstrument: @unchecked Sendable {
             } else if seenFailures.contains(region.samplePath) {
                 continue
             } else {
-                do {
-                    let waveform = try SampleWaveform(
-                        contentsOf: root.appending(path: region.samplePath)
+                // A `sample` path must stay inside the library INS001
+                // installed. The curated files are pinned by digest, so this is
+                // not a live threat today; it is here because an SFZ file is
+                // third-party text that names files to open, and `../..` in one
+                // must never become a read outside the library — a property
+                // worth holding by construction rather than by the catalog
+                // continuing to be trustworthy.
+                guard let sampleURL = Self.resolve(
+                    region.samplePath, under: root, notEscaping: instrument.libraryRootURL
+                ) else {
+                    seenFailures.insert(region.samplePath)
+                    unplayable.append(
+                        SampledInstrumentFeatures.UnplayableSample(
+                            path: region.samplePath,
+                            reason: "it points outside the installed library."
+                        )
                     )
+                    continue
+                }
+
+                do {
+                    let waveform = try SampleWaveform(contentsOf: sampleURL)
                     index = mappings.count
                     mappings.append(waveform)
                     loaded[region.samplePath] = index
@@ -233,6 +251,19 @@ public final class SampledInstrument: @unchecked Sendable {
     }
 
     static let keyCount = Int(SAMPLE_VOICE_KEY_COUNT)
+
+    /// `path` joined to `directory`, or nil when the result leaves `boundary`.
+    ///
+    /// Compared on the standardized paths, so `..` is resolved before the
+    /// containment test rather than after it, and with a trailing separator on
+    /// the boundary so a sibling directory whose name merely starts with the
+    /// library's does not pass.
+    static func resolve(_ path: String, under directory: URL, notEscaping boundary: URL) -> URL? {
+        let candidate = directory.appending(path: path).standardizedFileURL
+        var root = boundary.standardizedFileURL.path(percentEncoded: false)
+        if !root.hasSuffix("/") { root += "/" }
+        return candidate.path(percentEncoded: false).hasPrefix(root) ? candidate : nil
+    }
 
     /// The table pointer a voice is built over. Valid while this object lives.
     var renderData: UnsafePointer<SampleInstrumentData> { UnsafePointer(instrumentStorage) }

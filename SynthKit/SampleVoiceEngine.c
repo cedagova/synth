@@ -353,7 +353,14 @@ static void sample_voice_start_region(SampleVoiceState *state,
 
     slot->sustainLevel = sample_clampf(region->sustainLevel, 0.0f, 1.0f);
     slot->decayCoefficient = sample_decay_coefficient(region->decaySeconds, state->sampleRate);
-    slot->releaseCoefficient = sample_decay_coefficient(region->releaseSeconds, state->sampleRate);
+
+    /* SFZ's default `ampeg_release` is zero, and taking that literally would
+       cut a sample off mid-cycle — a click, which is exactly the kind of
+       audible defect REQ-013's dropout-free bar is about. Every library in the
+       curated set states a release of its own, so this two-millisecond floor
+       only ever applies to a file that stated none, where it is inaudible. */
+    const float release = region->releaseSeconds > 0.002f ? region->releaseSeconds : 0.002f;
+    slot->releaseCoefficient = sample_decay_coefficient(release, state->sampleRate);
 
     if (region->attackSeconds > 0.0f) {
         const double frames = (double)region->attackSeconds * state->sampleRate;

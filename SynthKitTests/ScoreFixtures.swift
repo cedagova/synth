@@ -1287,7 +1287,11 @@ enum MusicXMLScoreFixtures {
                 var notations: [String] = []
                 if beat == 0 { notations.append(ScoreXML.Notation.slurStart()) }
                 if beat == 3 { notations.append(ScoreXML.Notation.slurStop()) }
-                if beat == 0, measureIndex % 4 == 0 {
+                // Ornaments sit inside the hairpin, not beside it: a trill in
+                // the middle of a crescendo is where realization and dynamics
+                // have to agree, and a fixture that kept them apart would
+                // never ask them to.
+                if beat == 0, measureIndex % 4 == 2 {
                     notations.append(
                         ScoreXML.Notation.ornament(
                             ornamentSigns[(measureIndex / 4) % ornamentSigns.count]

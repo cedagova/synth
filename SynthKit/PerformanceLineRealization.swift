@@ -276,14 +276,22 @@ extension Realization {
                 continue
             }
 
-            let base = curve.velocity(atTicks: entry.absoluteTicks)
-                + curve.accent(atTicks: entry.absoluteTicks)
             let shaping = ArticulationShaping.combined(note.articulations)
-            var velocity = base + shaping.velocity
-            for dynamic in note.dynamics {
-                if let level = dynamic.sustainedLevel { velocity = level }
-                velocity += dynamic.momentaryBoost
+            // Read at a tick rather than once per note: an ornament's notes
+            // are spread across the principal's span, and inside a hairpin
+            // they have to swell with it. Taking one reading at the principal's
+            // onset would flatten a trill into thirteen notes at one loudness.
+            func velocity(atTicks tick: Int) -> Int {
+                var result = curve.velocity(atTicks: tick)
+                    + curve.accent(atTicks: tick)
+                    + shaping.velocity
+                for dynamic in note.dynamics {
+                    if let level = dynamic.sustainedLevel { result = level }
+                    result += dynamic.momentaryBoost
+                }
+                return result
             }
+            let principalVelocity = velocity(atTicks: entry.absoluteTicks)
 
             var onset = entry.absoluteTicks
             var duration = shapedDuration(
@@ -302,7 +310,7 @@ extension Realization {
                     principalOnset: onset,
                     principalDuration: duration,
                     notatedDuration: note.durationTicks,
-                    velocity: velocity,
+                    velocity: principalVelocity,
                     entry: entry,
                     ordinal: &ordinal
                 )
@@ -336,7 +344,7 @@ extension Realization {
                                 onsetTicks: onset + step.offsetTicks,
                                 durationTicks: step.durationTicks,
                                 midiNoteNumber: step.midiNoteNumber,
-                                velocity: velocity,
+                                velocity: velocity(atTicks: onset + step.offsetTicks),
                                 origin: .ornament,
                                 playbackMeasureIndex: entry.playbackMeasureIndex,
                                 sourceMeasureIndex: entry.sourceMeasureIndex,
@@ -356,7 +364,7 @@ extension Realization {
                     onsetTicks: onset,
                     durationTicks: max(1, duration),
                     midiNoteNumber: midi,
-                    velocity: velocity,
+                    velocity: velocity(atTicks: onset),
                     origin: .notated,
                     playbackMeasureIndex: entry.playbackMeasureIndex,
                     sourceMeasureIndex: entry.sourceMeasureIndex,

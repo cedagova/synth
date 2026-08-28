@@ -236,6 +236,54 @@ final class PerformanceRealizerTests: XCTestCase {
         XCTAssertLessThan(try XCTUnwrap(velocities.last), try XCTUnwrap(velocities.first))
     }
 
+    /// An ornament's notes are spread across the principal's span, so inside a
+    /// hairpin they have to swell with it. Reading the curve once at the
+    /// principal's onset would leave a flat plateau in the middle of a
+    /// crescendo — which is exactly what the end-to-end smoke run found.
+    func testATrillInsideACrescendoSwellsWithIt() throws {
+        let measures = (0..<3).map { index -> ScoreXML.Measure in
+            var items: [ScoreXML.Item] = []
+            if index == 0 {
+                items.append(
+                    .attributes(
+                        ScoreXML.Attributes(divisions: 24, fifths: 0, time: (4, 4), clefs: [("G", 2)])
+                    )
+                )
+                items.append(.direction(.dynamic("p")))
+                items.append(.direction(.wedge("crescendo")))
+            }
+            if index == 2 {
+                items.append(.direction(.wedge("stop")))
+                items.append(.direction(.dynamic("f")))
+            }
+            items.append(
+                .note(
+                    ScoreXML.Note(
+                        pitch: "C5",
+                        duration: 96,
+                        type: "whole",
+                        notations: index < 2 ? [ScoreXML.Notation.ornament("trill-mark")] : []
+                    )
+                )
+            )
+            return ScoreXML.Measure(number: String(index + 1), items: items)
+        }
+        let timeline = try realize(
+            ScoreXML.Score(parts: [ScoreXML.Part(id: "P1", name: "Flute", measures: measures)]).data()
+        )
+
+        let velocities = timeline.lines[0].events
+            .filter { $0.sourceMeasureIndex < 2 }
+            .map(\.velocity)
+        XCTAssertGreaterThan(velocities.count, 20, "two trilled whole notes are many events")
+        XCTAssertEqual(velocities, velocities.sorted(), "the trill rises with the hairpin")
+        XCTAssertGreaterThan(
+            Set(velocities).count,
+            8,
+            "and it rises continuously rather than in one step at the bar line"
+        )
+    }
+
     func testAScoreWithNoDynamicsPlaysAtTheDefaultLevel() throws {
         let timeline = try realize(MusicXMLScoreFixtures.repeatsVoltasAndDaCapo())
         XCTAssertTrue(

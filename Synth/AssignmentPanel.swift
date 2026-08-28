@@ -96,14 +96,18 @@ private struct PresetBar: View {
                     Button("Done") { model.commitPresetRename() }
                         .accessibilityLabel("Finish renaming this preset")
                 } else {
-                    Picker("Preset", selection: presetSelection) {
+                    // The picker's own title is its accessible name. Adding
+                    // `.accessibilityLabel` beside it does not replace that
+                    // title, it prefixes it — the live tree read back
+                    // "Preset, Active preset", which is what VoiceOver would
+                    // have said.
+                    Picker("Active preset", selection: presetSelection) {
                         ForEach(model.presets) { preset in
                             Text(preset.name).tag(preset.id)
                         }
                     }
                     .labelsHidden()
                     .frame(minWidth: 140)
-                    .accessibilityLabel("Active preset")
                     .accessibilityValue(model.spokenPreset)
                     .accessibilityHint(
                         "Switching applies at once — every preset is already saved."
@@ -161,14 +165,17 @@ private struct PresetBar: View {
     }
 
     private func deletionMessage(for preset: Preset) -> String {
-        model.presets.count <= 1
-            ? "This is the only preset this piece has, so Synth will put a fresh one in its "
-                + "place with each line back on its automatically chosen sound. Your sounds "
-                + "themselves are not touched."
-            : "This removes “\(preset.name)” and its mix. The piece's other "
-                + "\(model.presets.count - 1) preset"
-                + "\(model.presets.count - 1 == 1 ? "" : "s") and all of your sounds are "
-                + "untouched."
+        let others = model.presets.count - 1
+        guard others > 0 else {
+            return "This is the only preset this piece has, so Synth will put a fresh one in "
+                + "its place with each line back on its automatically chosen sound. Your "
+                + "sounds themselves are not touched."
+        }
+        let rest = others == 1
+            ? "The piece's other preset"
+            : "The piece's other \(others) presets"
+        return "This removes “\(preset.name)” and its mix. \(rest) and all of your sounds are "
+            + "untouched."
     }
 
     private var presetSelection: Binding<String> {
@@ -212,7 +219,14 @@ private struct LineStrip: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(isSelected ? AnyShapeStyle(.selection.opacity(0.35)) : AnyShapeStyle(.clear))
+        .background(isSelected ? AnyShapeStyle(.tint.opacity(0.16)) : AnyShapeStyle(.clear))
+        .overlay(alignment: .leading) {
+            // Which strip the Mix menu's commands will act on, visible without
+            // having to look for a focus ring.
+            Rectangle()
+                .fill(isSelected ? AnyShapeStyle(.tint) : AnyShapeStyle(.clear))
+                .frame(width: 3)
+        }
     }
 
     // MARK: The name
@@ -279,7 +293,7 @@ private struct LineStrip: View {
     // MARK: The sound
 
     private var soundRow: some View {
-        Picker("Sound", selection: soundSelection) {
+        Picker("Sound for the line “\(line.name)”", selection: soundSelection) {
             // The line's own sound first when it is not something the library
             // can offer — an embedded copy, or a reference that resolved to
             // nothing. Leaving it out would make the picker show some other
@@ -296,7 +310,6 @@ private struct LineStrip: View {
             }
         }
         .labelsHidden()
-        .accessibilityLabel("Sound for the line “\(line.name)”")
         .accessibilityValue(line.source.displayName)
         .accessibilityHint("Choosing a sound changes what this line plays straight away.")
     }

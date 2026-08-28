@@ -42,6 +42,18 @@ struct MixCommands: Commands {
             Button("Rename Line…") { assignment?.beginRenameOfSelectedLine() }
                 .keyboardShortcut("e", modifiers: [.command, .control])
 
+            // The sound picker is a real pop-up button and is the ordinary way
+            // to choose. These are the keyboard's way, because opening a
+            // pop-up menu is exactly what Full Keyboard Access cannot be
+            // assumed to do.
+            Button("Next Sound for Line") { assignment?.cycleSoundOnSelectedLine(by: 1) }
+                .keyboardShortcut("k", modifiers: [.command, .control])
+
+            Button("Previous Sound for Line") { assignment?.cycleSoundOnSelectedLine(by: -1) }
+                .keyboardShortcut("l", modifiers: [.command, .control])
+
+            Divider()
+
             Button("Mute Line") { assignment?.toggleMuteOnSelectedLine() }
                 .keyboardShortcut("m", modifiers: [.command, .control])
 

@@ -135,6 +135,11 @@ final class AssignmentModel {
         }
     }
 
+    /// The same sounds flattened, in exactly the order the picker lists them,
+    /// so stepping through with the keyboard visits them in the order the eye
+    /// would.
+    var orderedPalette: [SoundEntry] { paletteByCategory.flatMap(\.sounds) }
+
     // MARK: Opening the piece
 
     /// Reads the piece's lines and its active preset, and puts that preset on
@@ -313,6 +318,22 @@ final class AssignmentModel {
             reloadPresetAndApply()
             statusMessage = "“\(line.name)” now plays “\(sound.name)”."
         }
+    }
+
+    /// Steps the selected line through the sound library.
+    ///
+    /// The picker beside the line is the ordinary way to choose a sound. This
+    /// is the keyboard's way, and it exists for the reason the sound studio's
+    /// Select Next Sound does: arrow keys move *inside* a control that already
+    /// has focus, and opening a pop-up menu is not something a keyboard-only
+    /// owner can be assumed to be able to do (REQ-027).
+    func cycleSoundOnSelectedLine(by offset: Int) {
+        guard let line = selectedLine else { return }
+        let ordered = orderedPalette
+        guard !ordered.isEmpty else { return }
+        let current = ordered.firstIndex { line.source.isLibrarySound($0.id) }
+        let index = current.map { ($0 + offset + ordered.count) % ordered.count } ?? 0
+        assign(soundID: ordered[index].id, toLine: line.lineID)
     }
 
     // MARK: The mixer (REQ-008)

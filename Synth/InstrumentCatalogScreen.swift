@@ -352,7 +352,11 @@ private struct LicenceSheet: View {
 
             HStack {
                 Spacer()
-                Button("Done", action: close).keyboardShortcut(.defaultAction)
+                Button("Done", action: close)
+                    .keyboardShortcut(.defaultAction)
+                    // Distinct from the catalog header's Done, which is a
+                    // different button doing a different thing one window away.
+                    .accessibilityIdentifier("instrument-licence-done")
             }
         }
         .padding(20)

@@ -238,7 +238,14 @@ public final class InstrumentDownloadManager: @unchecked Sendable {
 
         let file = try staging.openPart(forLibraryID: library.identifier, assetID: asset.identifier)
         let sink = AssetWriteSink(
-            file: file, digest: digest, alreadyOnDiskByteCount: startOffset
+            file: file,
+            digest: digest,
+            alreadyOnDiskByteCount: startOffset,
+            // Progress has to move *inside* an asset, not only between assets.
+            // Driving the real app found this: the piano is a single 412 MB
+            // archive, so per-asset reporting left it saying "Zero bytes of
+            // 412 MB" for minutes while it downloaded perfectly.
+            reportBytes: { delta in tally.addTransferredBytes(delta) }
         )
 
         do {
@@ -288,7 +295,7 @@ public final class InstrumentDownloadManager: @unchecked Sendable {
             )
         }
 
-        tally.assetFinished(receivedByteCount: sink.receivedByteCount)
+        tally.assetFinished()
     }
 
     /// Rehashes an existing partial file so a resumed transfer's digest covers
@@ -391,15 +398,18 @@ private final class AssetWriteSink: @unchecked Sendable {
     private var received: Int64 = 0
     private var alreadyOnDisk: Int64
     private var finalHex: String?
+    private let reportBytes: @Sendable (Int64) -> Void
 
     init(
         file: AppendableFile,
         digest: consuming StreamingAssetDigest,
-        alreadyOnDiskByteCount: Int64
+        alreadyOnDiskByteCount: Int64,
+        reportBytes: @escaping @Sendable (Int64) -> Void
     ) {
         self.file = file
         self.digest = digest
         self.alreadyOnDisk = alreadyOnDiskByteCount
+        self.reportBytes = reportBytes
     }
 
     /// Bytes this transfer delivered, not counting a resumed prefix.
@@ -416,11 +426,18 @@ private final class AssetWriteSink: @unchecked Sendable {
     }
 
     func write(_ chunk: Data) throws {
-        lock.lock(); defer { lock.unlock() }
-        guard let file else { return }
-        try file.append(chunk)
+        lock.lock()
+        guard let file else { lock.unlock(); return }
+        do {
+            try file.append(chunk)
+        } catch {
+            lock.unlock()
+            throw error
+        }
         digest.update(chunk)
         received += Int64(chunk.count)
+        lock.unlock()
+        reportBytes(Int64(chunk.count))
     }
 
     /// Throws away what is on disk and starts the file and the digest again.
@@ -431,6 +448,8 @@ private final class AssetWriteSink: @unchecked Sendable {
         try file?.close()
         file = nil
         try? FileManager.default.removeItem(at: url)
+        // Whatever was counted for this asset is no longer on disk.
+        reportBytes(-(alreadyOnDisk + received))
         guard FileManager.default.createFile(atPath: url.path(percentEncoded: false), contents: nil)
         else {
             throw InstrumentInstallError.stagingWriteFailed(
@@ -473,9 +492,21 @@ private final class ProgressTally: @unchecked Sendable {
     private let totalAssetCount: Int
     private let reportSnapshot: @Sendable (InstrumentDownloadProgress) -> Void
 
-    private var completedBytes: Int64 = 0
+    /// Bytes already on disk when this run started: assets a previous run
+    /// finished, plus the partial prefixes it left behind.
+    private var carriedOverBytes: Int64 = 0
+
+    /// Bytes this run has actually transferred.
+    private var transferredBytes: Int64 = 0
+
     private var completedAssets = 0
     private var phase: InstrumentDownloadProgress.Phase = .downloading
+
+    /// When a snapshot was last published. Thousands of chunks arrive per
+    /// second across six concurrent transfers, and the owner cannot read a
+    /// number that changes that fast — nor should the main actor be woken for
+    /// each one.
+    private var lastPublished = Date.distantPast
 
     init(
         libraryID: String,
@@ -491,21 +522,35 @@ private final class ProgressTally: @unchecked Sendable {
 
     func assetAlreadyComplete(byteCount: Int64) {
         lock.lock()
-        completedBytes += byteCount
+        carriedOverBytes += byteCount
         completedAssets += 1
         lock.unlock()
     }
 
     func addResumedBytes(_ count: Int64) {
         lock.lock()
-        completedBytes += count
+        carriedOverBytes += count
         lock.unlock()
     }
 
-    func assetFinished(receivedByteCount: Int64) {
+    /// Called for every chunk written, from whichever transfer wrote it.
+    func addTransferredBytes(_ delta: Int64) {
         lock.lock()
-        completedBytes += receivedByteCount
+        transferredBytes += delta
+        guard Date().timeIntervalSince(lastPublished) > 0.25 else {
+            lock.unlock()
+            return
+        }
+        lastPublished = Date()
+        let snapshot = makeSnapshot()
+        lock.unlock()
+        reportSnapshot(snapshot)
+    }
+
+    func assetFinished() {
+        lock.lock()
         completedAssets += 1
+        lastPublished = Date()
         let snapshot = makeSnapshot()
         lock.unlock()
         reportSnapshot(snapshot)
@@ -523,7 +568,7 @@ private final class ProgressTally: @unchecked Sendable {
     private func makeSnapshot() -> InstrumentDownloadProgress {
         InstrumentDownloadProgress(
             libraryID: libraryID,
-            completedByteCount: completedBytes,
+            completedByteCount: max(0, min(totalByteCount, carriedOverBytes + transferredBytes)),
             totalByteCount: totalByteCount,
             completedAssetCount: completedAssets,
             totalAssetCount: totalAssetCount,

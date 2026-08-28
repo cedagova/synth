@@ -79,8 +79,9 @@ extern float synth_patch_wavetables[SYNTH_WAVETABLE_BANK_COUNT]
 
  The block boundary is anchored to the voice's own frame counter, not to the
  host buffer, so the output does not depend on how the engine happened to chop
- time at a note boundary. `OfflineRenderTests.testTheRenderIsIndependentOfThe\
- HostBufferSize` is what would catch that going wrong.
+ time at a note boundary. The buffer-size-independence tests in
+ `OfflineRenderTests` and `SynthEngineIntegrationTests` are what would catch
+ that going wrong.
  */
 #define SYNTH_CONTROL_BLOCK_FRAMES 16
 
@@ -102,6 +103,16 @@ extern float synth_patch_wavetables[SYNTH_WAVETABLE_BANK_COUNT]
 /// Above this the soft limiter starts bending; below it the voice is exactly
 /// linear, so the engine's mixer arithmetic still holds.
 #define SYNTH_LIMIT_KNEE 0.8f
+
+/// Output magnitude below which a silent-input effect chain counts as decayed.
+/// -140 dBFS: far below anything audible, and far below the 24-bit floor an
+/// export could carry.
+#define SYNTH_EFFECT_SILENCE 1.0e-7f
+
+/// Consecutive silent frames before the chain is allowed to stop running.
+/// Roughly 40 ms at 48 kHz: a generous margin, so a reverb passing through
+/// zero cannot be mistaken for one that has finished.
+#define SYNTH_EFFECT_IDLE_FRAMES 2048
 
 /// How the per-sample loop reads one oscillator.
 enum {
@@ -198,10 +209,16 @@ typedef struct {
     float   filterLastK;
 
     float   noiseLevel;
-    /// Interpolated across the control block so a moving envelope does not
-    /// step the output.
-    float   gainCurrent;
+    /// The voice's gain at the start of the current control block, at its end,
+    /// and where it has actually reached.
+    ///
+    /// Interpolated across the block so a moving envelope does not step the
+    /// output, and interpolated from `gainStart` by position rather than by
+    /// accumulation so the result cannot depend on where the host split a
+    /// buffer.
+    float   gainStart;
     float   gainTarget;
+    float   gainCurrent;
 } SynthPatchVoiceSlot;
 
 #pragma mark - Effects
@@ -271,6 +288,26 @@ struct SynthPatchVoiceState {
     /// Position inside the current control block, carried across render calls
     /// so buffer chopping cannot change the result.
     int32_t controlPhase;
+
+    /*
+     Effect-chain idling.
+
+     A per-sound effect chain is not cheap — eight comb filters and four
+     allpasses per line, before the delay and the chorus — and it would
+     otherwise run at full cost on every line of an eighteen-line score for the
+     whole piece, including the lines that are not playing. These two fields
+     let the chain stop once it has genuinely decayed: `effectSilentFrames`
+     counts consecutive frames with silent input *and* output below the
+     threshold, and `effectsIdle` latches when enough of them have passed. Any
+     non-silent input clears both immediately.
+
+     Counted in frames rather than in render calls on purpose. The engine
+     splits a buffer wherever a note starts, so a call-based counter would idle
+     at a different moment depending on how the host chopped time, and the
+     render would stop being independent of the buffer size.
+     */
+    int32_t effectSilentFrames;
+    int32_t effectsIdle;
 
     /// Free-running LFOs, shared by every voice that does not retrigger.
     double  freeLFOPhase[SYNTH_PATCH_LFO_COUNT];

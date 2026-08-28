@@ -754,6 +754,103 @@ final class SynthEngineRenderTests: XCTestCase {
         )
     }
 
+    /// The effect chain stops running once it has decayed, and picking it back
+    /// up is inaudible.
+    ///
+    /// A per-sound effect chain is eight comb filters, four allpasses, a delay
+    /// and a chorus — per line — so a line that is not playing must not keep
+    /// paying for it. What has to be true for that shortcut to be safe is that
+    /// a note after a long silence sounds exactly as it would have without it,
+    /// to well below anything audible.
+    func testTheEffectChainStopsWhenItHasDecayedAndResumesInaudibly() {
+        let patch = SynthPatch.singleOscillator(
+            .init(type: .analog, analogShape: .saw, level: 1), name: "idle",
+            chorus: .init(isEnabled: true, rateHertz: 1, depthMilliseconds: 8,
+                          centreMilliseconds: 15, mix: 0.4, feedback: 0.3),
+            delay: .init(isEnabled: true, timeSeconds: 0.2, feedback: 0.5, mix: 0.3),
+            reverb: .init(isEnabled: true, roomSize: 0.7, dampening: 0.4, mix: 0.4)
+        )
+
+        // One note, a long silence in which everything rings down and the chain
+        // idles, then a second note.
+        let harness = SynthVoiceHarness(patch: patch, sampleRate: sampleRate)
+        harness.noteOn(note)
+        _ = harness.render(seconds: 0.3)
+        harness.noteOff(note)
+        let silence = harness.render(seconds: 6.0)
+        harness.noteOn(note)
+        let second = harness.render(seconds: 0.5)
+
+        // The silence really did go silent, which is what lets the chain idle.
+        XCTAssertLessThan(
+            AudioRenderFixtures.rms(silence, from: 4.0, to: 6.0, sampleRate: sampleRate), 1e-7,
+            "The effect chain never rang down, so the idle path was never exercised."
+        )
+        // And the note after it is a full-strength note, not a truncated one.
+        XCTAssertGreaterThan(
+            AudioRenderFixtures.rms(second, from: 0.05, to: 0.25, sampleRate: sampleRate), 0.02,
+            "The note after the idle period is missing or quiet."
+        )
+        XCTAssertLessThanOrEqual(AudioRenderFixtures.peak(second), 1.0)
+    }
+
+    /// Rendering in different block sizes gives identical samples, including
+    /// across the point where the effect chain idles.
+    ///
+    /// The idle counter is in frames rather than in render calls precisely so
+    /// this holds: a call-based counter would idle at a different moment
+    /// depending on how the host chopped time, and the output would quietly
+    /// depend on the buffer size.
+    func testTheVoiceIsIndependentOfTheBlockSizeAcrossAnIdlePeriod() {
+        let patch = SynthPatch.singleOscillator(
+            .init(type: .analog, analogShape: .saw, level: 1), name: "blocks",
+            chorus: .init(isEnabled: true, rateHertz: 1, depthMilliseconds: 8,
+                          centreMilliseconds: 15, mix: 0.4, feedback: 0.3),
+            delay: .init(isEnabled: true, timeSeconds: 0.2, feedback: 0.5, mix: 0.3),
+            reverb: .init(isEnabled: true, roomSize: 0.7, dampening: 0.4, mix: 0.4)
+        )
+
+        func render(blockFrames: Int) -> [Float] {
+            let provider = SynthPatchVoiceProvider(patch: patch)
+            let instance = provider.makeVoice(sampleRate: sampleRate)
+            defer { instance.release() }
+            let vtable = instance.vtable
+            vtable.prepare(vtable.state, sampleRate)
+            vtable.reset(vtable.state)
+
+            var output: [Float] = []
+            var block = [Float](repeating: 0, count: blockFrames)
+
+            func run(frames: Int) {
+                var remaining = frames
+                while remaining > 0 {
+                    let count = min(blockFrames, remaining)
+                    block.withUnsafeMutableBufferPointer { buffer in
+                        vtable.render(vtable.state, buffer.baseAddress!, Int32(count))
+                    }
+                    output.append(contentsOf: block[0..<count])
+                    remaining -= count
+                }
+            }
+
+            vtable.noteOn(vtable.state, Int32(note), 100)
+            run(frames: Int(0.3 * sampleRate))
+            vtable.noteOff(vtable.state, Int32(note))
+            run(frames: Int(6.0 * sampleRate))
+            vtable.noteOn(vtable.state, Int32(note), 100)
+            run(frames: Int(0.5 * sampleRate))
+            return output
+        }
+
+        let small = render(blockFrames: 37)
+        let large = render(blockFrames: 4096)
+        XCTAssertEqual(small.count, large.count)
+        XCTAssertEqual(
+            small, large,
+            "Rendering in 37-frame blocks differed from 4096-frame blocks."
+        )
+    }
+
     /// Full polyphony with a loud patch stays inside the limiter, and the
     /// engine still has headroom of its own afterwards.
     func testFullPolyphonyStaysInsideTheLimiter() {

@@ -71,6 +71,20 @@ static inline double synth_patch_wrap(double phase) {
     return phase - floor(phase);
 }
 
+/*
+ Phase advance in the oscillator inner loop.
+
+ A conditional subtraction rather than `synth_patch_wrap`, because the
+ increment is always below one: it is frequency over sample rate, and no note
+ — even two octaves up through the modulation matrix — reaches the sample
+ rate. Worth the special case, because this runs three times per sample per
+ sounding note and is the hottest line in the file.
+ */
+static inline double synth_patch_advance(double phase, double increment) {
+    const double next = phase + increment;
+    return next >= 1.0 ? next - 1.0 : next;
+}
+
 /// xorshift64*. Small, fast, and — the point here — exactly repeatable.
 static inline float synth_patch_random(uint64_t *rng) {
     uint64_t x = *rng;
@@ -118,6 +132,8 @@ void synth_patch_voice_clear(SynthPatchVoiceState *state) {
     state->controlPhase = 0;
     state->rng = state->config.seed ? state->config.seed : 0x9E3779B97F4A7C15ULL;
     state->noteCounter = 0;
+    state->effectSilentFrames = 0;
+    state->effectsIdle = 0;
 
     for (int32_t index = 0; index < SYNTH_PATCH_LFO_COUNT; index++) {
         state->freeLFOPhase[index] = (double)state->config.lfos[index].startPhase;
@@ -134,6 +150,7 @@ void synth_patch_voice_clear(SynthPatchVoiceState *state) {
         slot->amplitude.level = 0.0f;
         slot->modulation.stage = SynthPatchEnvelopeIdle;
         slot->modulation.level = 0.0f;
+        slot->gainStart = 0.0f;
         slot->gainCurrent = 0.0f;
         slot->gainTarget = 0.0f;
         slot->filterLastCutoff = -1.0f;
@@ -765,6 +782,10 @@ void synth_patch_voice_render(void *opaque, float *monoOut, int32_t frameCount) 
             }
             for (int32_t index = 0; index < SYNTH_PATCH_MAX_VOICES; index++) {
                 SynthPatchVoiceSlot *slot = &state->slots[index];
+                /* The gain glide's origin, captured for every slot including
+                   the ones that are only ringing down, so the interpolation
+                   below is a function of position rather than of history. */
+                slot->gainStart = slot->gainCurrent;
                 if (!slot->inUse) { continue; }
                 synth_patch_update_slot(state, slot);
                 if (slot->amplitude.stage == SynthPatchEnvelopeIdle) {
@@ -783,13 +804,30 @@ void synth_patch_voice_render(void *opaque, float *monoOut, int32_t frameCount) 
 
         for (int32_t index = 0; index < SYNTH_PATCH_MAX_VOICES; index++) {
             SynthPatchVoiceSlot *slot = &state->slots[index];
-            if (!slot->inUse && slot->gainCurrent == 0.0f) { continue; }
+            /* Decided from `gainStart`, which only moves at a control-block
+               boundary, so a chunk split inside a block cannot change whether
+               a ringing-down slot is rendered. */
+            if (!slot->inUse && slot->gainStart == 0.0f) { continue; }
 
-            const float gainStep = (slot->gainTarget - slot->gainCurrent)
-                                 / (float)(SYNTH_CONTROL_BLOCK_FRAMES - state->controlPhase);
-            float gain = slot->gainCurrent;
+            /*
+             The gain glide, as a function of where we are in the control block
+             rather than as a running sum.
+
+             An accumulating `gain += step` gives a slightly different answer
+             depending on where a chunk boundary happened to fall, because the
+             running value is rounded to a float and the step recomputed from
+             it. The error is around 1e-7 — inaudible, but it would make a
+             render depend on the host's buffer size, and increment 006 has to
+             be able to claim that an export is bit-identical to what was
+             played.
+            */
+            const float span = slot->gainTarget - slot->gainStart;
+            float gain = slot->gainStart;
 
             for (int32_t frame = 0; frame < chunk; frame++) {
+                gain = slot->gainStart
+                     + span * ((float)(state->controlPhase + frame + 1)
+                               * (1.0f / (float)SYNTH_CONTROL_BLOCK_FRAMES));
                 float mixed = 0.0f;
 
                 for (int32_t osc = 0; osc < SYNTH_PATCH_OSCILLATOR_COUNT; osc++) {
@@ -817,16 +855,16 @@ void synth_patch_voice_render(void *opaque, float *monoOut, int32_t frameCount) 
                             const float phase = (float)slot->oscPhase[osc]
                                               + modulator * slot->fmDepth[osc] * (1.0f / 6.2831853f);
                             mixed += slot->oscLevel[osc] * synth_patch_sine((double)phase);
-                            slot->fmPhase[osc] = synth_patch_wrap(
-                                slot->fmPhase[osc] + slot->fmIncrement[osc]);
+                            slot->fmPhase[osc] = synth_patch_advance(
+                                slot->fmPhase[osc], slot->fmIncrement[osc]);
                             break;
                         }
                         default:
                             break;
                     }
                     if (slot->oscMode[osc] != SynthOscModeSilent) {
-                        slot->oscPhase[osc] = synth_patch_wrap(
-                            slot->oscPhase[osc] + slot->oscIncrement[osc]);
+                        slot->oscPhase[osc] = synth_patch_advance(
+                            slot->oscPhase[osc], slot->oscIncrement[osc]);
                     }
                 }
 
@@ -842,18 +880,14 @@ void synth_patch_voice_render(void *opaque, float *monoOut, int32_t frameCount) 
                 }
 
                 out[frame] += mixed * gain;
-                gain += gainStep;
             }
 
-            /* Snap a finished note's residual gain to zero. Without this the
-               ramp lands on something like 1e-9 rather than 0, the skip above
-               never fires, and a silent slot keeps costing three table reads a
-               sample for the rest of the piece. */
-            slot->gainCurrent = synth_patch_flush(gain);
-            if (!slot->inUse
-                && slot->gainCurrent > -1.0e-6f && slot->gainCurrent < 1.0e-6f) {
-                slot->gainCurrent = 0.0f;
-            }
+            /* A finished note's ramp lands exactly on zero at the last frame
+               of its control block — `a + (0 - a) * 1` is exactly zero — so
+               the skip above starts firing on the next block with no need to
+               snap anything, and a silent slot stops costing three table reads
+               a sample for the rest of the piece. */
+            slot->gainCurrent = gain;
         }
 
         written += chunk;
@@ -861,12 +895,43 @@ void synth_patch_voice_render(void *opaque, float *monoOut, int32_t frameCount) 
         if (state->controlPhase >= SYNTH_CONTROL_BLOCK_FRAMES) { state->controlPhase = 0; }
     }
 
-    /* One fixed effect chain for the whole patch, after the voices are summed:
-       running it per voice would multiply its cost by the polyphony and make a
-       held chord's reverb louder than a single note's. */
-    for (int32_t frame = 0; frame < frameCount; frame++) {
-        float sample = monoOut[frame];
+    /*
+     One fixed effect chain for the whole patch, after the voices are summed.
 
+     Per patch rather than per voice: running it per voice would multiply its
+     cost by the polyphony and would make a held chord's reverb louder than a
+     single note's.
+
+     Skipped entirely once the chain has decayed on silent input. On an
+     eighteen-line score that is most of the saving there is — a line that is
+     not playing would otherwise still pay for eight comb filters, four
+     allpasses, a delay and a chorus on every sample of the piece.
+    */
+    /* Whole-buffer fast path, exactly equivalent to the per-frame loop below
+       when the chain is already idle and nothing new arrived. */
+    int32_t inputSilent = 1;
+    for (int32_t frame = 0; frame < frameCount; frame++) {
+        if (monoOut[frame] != 0.0f) { inputSilent = 0; break; }
+    }
+    if (inputSilent && state->effectsIdle) { return; }
+
+    for (int32_t frame = 0; frame < frameCount; frame++) {
+        const float input = monoOut[frame];
+
+        /* Counted in FRAMES, not in render calls. The engine splits a buffer
+           wherever a note starts, so a call-based counter would idle at a
+           different moment depending on how the host chopped time — and the
+           output would stop being independent of the buffer size, which
+           `OfflineRenderTests` and `SynthEngineIntegrationTests` both check. */
+        if (input != 0.0f) {
+            state->effectSilentFrames = 0;
+            state->effectsIdle = 0;
+        } else if (state->effectsIdle) {
+            monoOut[frame] = 0.0f;
+            continue;
+        }
+
+        float sample = input;
         if (config->equalizer.isEnabled) {
             sample = synth_patch_biquad_step(&state->equalizer.low, sample);
             sample = synth_patch_biquad_step(&state->equalizer.mid, sample);
@@ -876,6 +941,17 @@ void synth_patch_voice_render(void *opaque, float *monoOut, int32_t frameCount) 
         if (config->delay.isEnabled)  { sample = synth_patch_delay_step(&state->delay, sample); }
         if (config->reverb.isEnabled) { sample = synth_patch_reverb_step(&state->reverb, sample); }
 
-        monoOut[frame] = synth_patch_flush(synth_patch_limit(synth_patch_finite(sample)));
+        sample = synth_patch_flush(synth_patch_limit(synth_patch_finite(sample)));
+        monoOut[frame] = sample;
+
+        const float magnitude = sample < 0.0f ? -sample : sample;
+        if (input == 0.0f && magnitude < SYNTH_EFFECT_SILENCE) {
+            state->effectSilentFrames++;
+            if (state->effectSilentFrames >= SYNTH_EFFECT_IDLE_FRAMES) {
+                state->effectsIdle = 1;
+            }
+        } else {
+            state->effectSilentFrames = 0;
+        }
     }
 }

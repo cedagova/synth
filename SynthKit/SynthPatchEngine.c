@@ -44,8 +44,13 @@ static inline float synth_patch_flush(float value) {
 /*
  Anything that is not a finite number is a bug that has already happened; the
  job here is to make sure it does not leave the voice as a burst of noise at
- full scale. Effect feedback paths are the only realistic source, and they are
- all damped and clamped, so this should never fire.
+ full scale.
+
+ Applied to every recursive store in the file — the two filter integrators, the
+ three equaliser biquads, and the delay, chorus and reverb feedback paths —
+ because those are the only places a value can feed back into itself. All of
+ them are damped and clamped below unity, so this should never fire; a guard
+ that covered most of them would be worth much less than one that covers all.
  */
 static inline float synth_patch_finite(float value) {
     if (!(value == value)) { return 0.0f; }
@@ -132,8 +137,6 @@ void synth_patch_voice_clear(SynthPatchVoiceState *state) {
     state->controlPhase = 0;
     state->rng = state->config.seed ? state->config.seed : 0x9E3779B97F4A7C15ULL;
     state->noteCounter = 0;
-    state->effectSilentFrames = 0;
-    state->effectsIdle = 0;
 
     for (int32_t index = 0; index < SYNTH_PATCH_LFO_COUNT; index++) {
         state->freeLFOPhase[index] = (double)state->config.lfos[index].startPhase;
@@ -300,9 +303,16 @@ void synth_patch_voice_note_on(void *opaque, int32_t midiNoteNumber, int32_t vel
     slot->filterLastCutoff = -1.0f;
     slot->filterLastK = -1.0f;
 
-    /* Resolve the derived values now rather than at the next control-block
-       boundary, so a note that starts mid-block is heard on the frame the
-       timeline asked for. */
+    /* Resolve the derived values now rather than waiting for the next
+       control-block boundary, so the oscillators, filter and levels are already
+       correct for this note on its very first frame.
+
+       The amplitude envelope is the one thing this cannot make exact: it is
+       being started here, so its level is zero, and the note's attack begins at
+       the next control-block boundary — at most fifteen frames, or 0.31 ms at
+       48 kHz, later. Deterministic and independent of the buffer size, and far
+       below the ear's resolution for an onset, but it is a quantisation and
+       worth saying so rather than claiming sample accuracy. */
     synth_patch_resolve_slot(state, slot);
 }
 
@@ -480,8 +490,10 @@ static inline float synth_patch_filter_stage(SynthPatchVoiceSlot *slot, int32_t 
     const float v1 = slot->filterA1 * slot->filterIC1[stage] + slot->filterA2 * v3;
     const float v2 = slot->filterIC2[stage] + slot->filterA2 * slot->filterIC1[stage]
                    + slot->filterA3 * v3;
-    slot->filterIC1[stage] = synth_patch_flush(2.0f * v1 - slot->filterIC1[stage]);
-    slot->filterIC2[stage] = synth_patch_flush(2.0f * v2 - slot->filterIC2[stage]);
+    slot->filterIC1[stage] = synth_patch_finite(
+        synth_patch_flush(2.0f * v1 - slot->filterIC1[stage]));
+    slot->filterIC2[stage] = synth_patch_finite(
+        synth_patch_flush(2.0f * v2 - slot->filterIC2[stage]));
 
     switch (type) {
         case SynthFilterTypeHighpass: return input - slot->filterK * v1 - v2;
@@ -500,8 +512,10 @@ static inline float synth_patch_filter_stage(SynthPatchVoiceSlot *slot, int32_t 
 
  Split from the envelope/LFO advance below because a note that starts partway
  through a control block still needs its derived values before the first sample
- is written. Resolving without advancing keeps that note sample-accurate
- instead of up to fifteen frames late.
+ is written. Resolving without advancing gives that note the right oscillators,
+ filter and levels immediately; its amplitude envelope still starts at the next
+ control-block boundary, which is where the 0.31 ms onset quantisation noted in
+ `synth_patch_voice_note_on` comes from.
  */
 static void synth_patch_resolve_slot(SynthPatchVoiceState *state, SynthPatchVoiceSlot *slot) {
     const SynthPatchConfig *config = &state->config;
@@ -670,7 +684,7 @@ static inline float synth_patch_biquad_step(SynthBiquad *biquad, float input) {
     biquad->x2 = biquad->x1;
     biquad->x1 = input;
     biquad->y2 = biquad->y1;
-    biquad->y1 = synth_patch_flush(output);
+    biquad->y1 = synth_patch_finite(synth_patch_flush(output));
     return biquad->y1;
 }
 
@@ -901,36 +915,22 @@ void synth_patch_voice_render(void *opaque, float *monoOut, int32_t frameCount) 
      cost by the polyphony and would make a held chord's reverb louder than a
      single note's.
 
-     Skipped entirely once the chain has decayed on silent input. On an
-     eighteen-line score that is most of the saving there is — a line that is
-     not playing would otherwise still pay for eight comb filters, four
-     allpasses, a delay and a chorus on every sample of the piece.
+     Run unconditionally, including over silence. An earlier version of this
+     stopped the chain once its input had been silent and its output below
+     -140 dBFS for long enough, on the reasoning that a line which is not
+     playing should not keep paying for eight comb filters and four allpasses.
+     It was wrong, and `testAboveTheSizedRateTheLongestDelayShortensPredictably`
+     is what caught it: a delay line holds up to a second of audio that has not
+     reached the output yet, and a reverb pre-delay holds another tenth. Silent
+     output does not mean an empty chain, so the shortcut swallowed the repeat
+     entirely. Making it safe would mean tracking every stage's internal
+     latency; measured against the eighteen-line orchestral reference the
+     shortcut saved nothing at all, because in a real score the lines are
+     almost never silent. So it is gone rather than repaired.
     */
-    /* Whole-buffer fast path, exactly equivalent to the per-frame loop below
-       when the chain is already idle and nothing new arrived. */
-    int32_t inputSilent = 1;
     for (int32_t frame = 0; frame < frameCount; frame++) {
-        if (monoOut[frame] != 0.0f) { inputSilent = 0; break; }
-    }
-    if (inputSilent && state->effectsIdle) { return; }
+        float sample = monoOut[frame];
 
-    for (int32_t frame = 0; frame < frameCount; frame++) {
-        const float input = monoOut[frame];
-
-        /* Counted in FRAMES, not in render calls. The engine splits a buffer
-           wherever a note starts, so a call-based counter would idle at a
-           different moment depending on how the host chopped time — and the
-           output would stop being independent of the buffer size, which
-           `OfflineRenderTests` and `SynthEngineIntegrationTests` both check. */
-        if (input != 0.0f) {
-            state->effectSilentFrames = 0;
-            state->effectsIdle = 0;
-        } else if (state->effectsIdle) {
-            monoOut[frame] = 0.0f;
-            continue;
-        }
-
-        float sample = input;
         if (config->equalizer.isEnabled) {
             sample = synth_patch_biquad_step(&state->equalizer.low, sample);
             sample = synth_patch_biquad_step(&state->equalizer.mid, sample);
@@ -940,17 +940,6 @@ void synth_patch_voice_render(void *opaque, float *monoOut, int32_t frameCount) 
         if (config->delay.isEnabled)  { sample = synth_patch_delay_step(&state->delay, sample); }
         if (config->reverb.isEnabled) { sample = synth_patch_reverb_step(&state->reverb, sample); }
 
-        sample = synth_patch_flush(synth_patch_limit(synth_patch_finite(sample)));
-        monoOut[frame] = sample;
-
-        const float magnitude = sample < 0.0f ? -sample : sample;
-        if (input == 0.0f && magnitude < SYNTH_EFFECT_SILENCE) {
-            state->effectSilentFrames++;
-            if (state->effectSilentFrames >= SYNTH_EFFECT_IDLE_FRAMES) {
-                state->effectsIdle = 1;
-            }
-        } else {
-            state->effectSilentFrames = 0;
-        }
+        monoOut[frame] = synth_patch_flush(synth_patch_limit(synth_patch_finite(sample)));
     }
 }

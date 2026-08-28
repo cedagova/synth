@@ -531,6 +531,25 @@ void synth_patch_voice_update_rate(SynthPatchVoiceState *state, double sampleRat
     if (!(sampleRate > 0.0)) { sampleRate = 48000.0; }
     state->sampleRate = sampleRate;
 
+    /*
+     Two rates, on purpose.
+
+     Pitch, envelopes, LFOs and the filter are derived from the real rate,
+     because a note has to sound at the frequency it was asked for however fast
+     the device is running. The effect buffers are derived from `effectiveRate`
+     instead, which is capped at the rate they were sized for.
+
+     Without that cap a 192 kHz interface — ordinary hardware for this audience
+     — would make every reverb comb saturate to the same maximum length, and
+     eight identical combs are not a room, they are one metallic ring. Capping
+     gives a room that is slightly smaller than the patch asked for, which is a
+     far better answer than a broken one. The same cap keeps the chorus tap and
+     the delay inside the buffers they actually have.
+    */
+    const double effectiveRate = sampleRate > SYNTH_PATCH_MAX_SAMPLE_RATE
+        ? SYNTH_PATCH_MAX_SAMPLE_RATE
+        : sampleRate;
+
     /* A patch's cutoff may be 20 kHz, which is above Nyquist at 44.1 kHz and
        would make the state-variable filter's tan() blow up. */
     state->filterCutoffCeiling = (float)(sampleRate * 0.45);
@@ -575,15 +594,22 @@ void synth_patch_voice_update_rate(SynthPatchVoiceState *state, double sampleRat
 
     /* Chorus. */
     {
-        const double centre = state->config.chorus.centreMilliseconds * 0.001 * sampleRate;
-        double depth = state->config.chorus.depthMilliseconds * 0.001 * sampleRate;
-        /* The modulated tap must stay inside the buffer and above zero delay. */
+        const double limit = (double)(SYNTH_CHORUS_MAX_FRAMES - 4);
+        double centre = state->config.chorus.centreMilliseconds * 0.001 * effectiveRate;
+        if (centre > limit) { centre = limit; }
+        double depth = state->config.chorus.depthMilliseconds * 0.001 * effectiveRate;
+
+        /* The swept tap must stay inside the buffer at its far extreme and
+           strictly behind the write head at its near one. Clamping the centre
+           without clamping the depth to match would let the tap read *ahead* of
+           the write pointer — in bounds, but audio from the previous pass
+           rather than the signal the patch asked for. */
+        if (centre + depth > limit) { centre = limit - depth; }
+        if (centre < 2.0) { centre = 2.0; }
         if (depth > centre - 2.0) { depth = centre - 2.0; }
         if (depth < 0.0) { depth = 0.0; }
-        double limit = (double)(SYNTH_CHORUS_MAX_FRAMES - 4);
-        double useCentre = centre;
-        if (useCentre + depth > limit) { useCentre = limit - depth; }
-        state->chorus.centreFrames = (float)useCentre;
+
+        state->chorus.centreFrames = (float)centre;
         state->chorus.depthFrames  = (float)depth;
         state->chorus.mix          = state->config.chorus.mix;
         state->chorus.feedback     = state->config.chorus.feedback;
@@ -592,7 +618,7 @@ void synth_patch_voice_update_rate(SynthPatchVoiceState *state, double sampleRat
 
     /* Delay. */
     {
-        int32_t length = (int32_t)(state->config.delay.timeSeconds * sampleRate);
+        int32_t length = (int32_t)(state->config.delay.timeSeconds * effectiveRate);
         state->delay.lengthFrames = synth_patch_clampi(length, 1, SYNTH_DELAY_MAX_FRAMES - 1);
         state->delay.feedback = state->config.delay.feedback;
         state->delay.mix      = state->config.delay.mix;
@@ -603,7 +629,7 @@ void synth_patch_voice_update_rate(SynthPatchVoiceState *state, double sampleRat
 
     /* Reverb. */
     {
-        const double scale = sampleRate / 44100.0;
+        const double scale = effectiveRate / 44100.0;
         for (int32_t index = 0; index < SYNTH_REVERB_COMB_COUNT; index++) {
             state->reverb.combLength[index] = synth_patch_clampi(
                 (int32_t)((double)synth_reverb_comb_tuning[index] * scale),
@@ -615,7 +641,7 @@ void synth_patch_voice_update_rate(SynthPatchVoiceState *state, double sampleRat
                 1, SYNTH_REVERB_ALLPASS_MAX_FRAMES);
         }
         state->reverb.preDelayLength = synth_patch_clampi(
-            (int32_t)(state->config.reverb.preDelaySeconds * sampleRate),
+            (int32_t)(state->config.reverb.preDelaySeconds * effectiveRate),
             1, SYNTH_REVERB_PREDELAY_MAX_FRAMES - 1);
         /* 0.70…0.98 comb feedback. Never 1: the tail must always end. */
         state->reverb.feedback = 0.70f + 0.28f * state->config.reverb.roomSize;

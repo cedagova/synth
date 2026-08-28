@@ -24,16 +24,6 @@ static inline float synth_clampf(float value, float low, float high) {
 
 static inline int64_t synth_min64(int64_t a, int64_t b) { return a < b ? a : b; }
 
-/*
- Denormals cost hundreds of cycles on some paths and are the classic way an
- audio thread quietly starts missing its deadline as a long release tail decays
- towards zero. Flushing them keeps the cost of a fading note constant, and
- makes the decay identical between runs.
- */
-static inline float synth_flush_denormal(float value) {
-    return (value > -1.0e-25f && value < 1.0e-25f) ? 0.0f : value;
-}
-
 #pragma mark - Scheduler
 
 /// Put every line back to its state at `frame`: cursors rewound, voices

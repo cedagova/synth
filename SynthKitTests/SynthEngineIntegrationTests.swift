@@ -114,6 +114,18 @@ final class SynthEngineIntegrationTests: XCTestCase {
     /// The synthesizer inherits the engine's buffer-size independence: the
     /// control-block boundary is anchored to the voice, not to the host's
     /// buffer, so chopping time differently cannot change the result.
+    ///
+    /// **The block sizes matter, and 64 against 4096 would not be a test.**
+    /// Both are multiples of the sixteen-frame control block, so a host
+    /// boundary always lands where the voice was going to stop anyway and the
+    /// interesting path is never taken. 471 is not a multiple of anything here,
+    /// which is what makes this a claim about arbitrary splits — and arbitrary
+    /// splits are the normal case, because the engine also cuts a buffer at
+    /// every note onset and note-off.
+    ///
+    /// It is a bit-equality claim rather than a tolerance because increment
+    /// 006's REQ-026 — an export identical to what was played — is structurally
+    /// this property at two different block sizes.
     func testTheSynthRenderIsIndependentOfTheHostBufferSize() throws {
         let patch = Self.demandingPatch()
         let loaded = try timeline()
@@ -138,13 +150,15 @@ final class SynthEngineIntegrationTests: XCTestCase {
             return PlaybackEngine.RenderedAudio(sampleRate: 48_000, left: left, right: right)
         }
 
-        let small = try render(blockFrames: 64)
-        let large = try render(blockFrames: 4096)
-        XCTAssertEqual(small.frameCount, large.frameCount)
-        XCTAssertEqual(
-            small.canonicalData(), large.canonicalData(),
-            "Rendering in 64-frame blocks differed from 4096-frame blocks."
-        )
+        let reference = try render(blockFrames: 4096)
+        for blockFrames in [Int64(64), 471, 1000] {
+            let candidate = try render(blockFrames: blockFrames)
+            XCTAssertEqual(candidate.frameCount, reference.frameCount)
+            XCTAssertEqual(
+                candidate.canonicalData(), reference.canonicalData(),
+                "Rendering in \(blockFrames)-frame blocks differed from 4096-frame blocks."
+            )
+        }
     }
 
     // MARK: The audio half of the round trip

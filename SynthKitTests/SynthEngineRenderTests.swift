@@ -754,15 +754,14 @@ final class SynthEngineRenderTests: XCTestCase {
         )
     }
 
-    /// The effect chain stops running once it has decayed, and picking it back
-    /// up is inaudible.
+    /// A note after a long silence sounds like a note.
     ///
-    /// A per-sound effect chain is eight comb filters, four allpasses, a delay
-    /// and a chorus — per line — so a line that is not playing must not keep
-    /// paying for it. What has to be true for that shortcut to be safe is that
-    /// a note after a long silence sounds exactly as it would have without it,
-    /// to well below anything audible.
-    func testTheEffectChainStopsWhenItHasDecayedAndResumesInaudibly() {
+    /// The effect chain runs across the gap, rings down, and starts again from
+    /// a settled state. This is where an attempt to *stop* running it once its
+    /// output went quiet would show up — and it is worth keeping now that such
+    /// an attempt has been made and reverted, because the next person to have
+    /// the idea will run this.
+    func testANoteAfterALongSilenceStillSoundsCorrect() {
         let patch = SynthPatch.singleOscillator(
             .init(type: .analog, analogShape: .saw, level: 1), name: "idle",
             chorus: .init(isEnabled: true, rateHertz: 1, depthMilliseconds: 8,
@@ -781,10 +780,11 @@ final class SynthEngineRenderTests: XCTestCase {
         harness.noteOn(note)
         let second = harness.render(seconds: 0.5)
 
-        // The silence really did go silent, which is what lets the chain idle.
+        // The gap really did go quiet, so the second note starts from silence
+        // rather than on top of a chain that never settled.
         XCTAssertLessThan(
             AudioRenderFixtures.rms(silence, from: 4.0, to: 6.0, sampleRate: sampleRate), 1e-7,
-            "The effect chain never rang down, so the idle path was never exercised."
+            "The effect chain never rang down across six seconds of silence."
         )
         // And the note after it is a full-strength note, not a truncated one.
         XCTAssertGreaterThan(
@@ -794,14 +794,15 @@ final class SynthEngineRenderTests: XCTestCase {
         XCTAssertLessThanOrEqual(AudioRenderFixtures.peak(second), 1.0)
     }
 
-    /// Rendering in different block sizes gives identical samples, including
-    /// across the point where the effect chain idles.
+    /// Rendering in different block sizes gives bit-identical samples, over a
+    /// note, a long silence, and a second note.
     ///
-    /// The idle counter is in frames rather than in render calls precisely so
-    /// this holds: a call-based counter would idle at a different moment
-    /// depending on how the host chopped time, and the output would quietly
-    /// depend on the buffer size.
-    func testTheVoiceIsIndependentOfTheBlockSizeAcrossAnIdlePeriod() {
+    /// 37 against 4096: the first is not a multiple of the sixteen-frame
+    /// control block, so a host boundary lands inside a block and the split
+    /// path is actually taken. Comparing two aligned sizes would exercise
+    /// nothing — which is exactly how the gain glide's original
+    /// accumulate-and-redivide error survived its first test.
+    func testTheVoiceIsIndependentOfTheBlockSizeAcrossALongSilence() {
         let patch = SynthPatch.singleOscillator(
             .init(type: .analog, analogShape: .saw, level: 1), name: "blocks",
             chorus: .init(isEnabled: true, rateHertz: 1, depthMilliseconds: 8,
@@ -848,6 +849,132 @@ final class SynthEngineRenderTests: XCTestCase {
         XCTAssertEqual(
             small, large,
             "Rendering in 37-frame blocks differed from 4096-frame blocks."
+        )
+    }
+
+    /// A device running faster than the effect buffers were sized for still
+    /// gets a coherent sound.
+    ///
+    /// 176.4 and 192 kHz interfaces are ordinary hardware for this audience,
+    /// and `PlaybackEngine` builds its graph at whatever rate the device
+    /// reports. Nothing goes out of bounds at those rates — every index is
+    /// masked or clamped — but "in bounds" is not the claim the issue makes.
+    /// What has to hold is that the note is still in tune, the reverb is still
+    /// a room rather than eight identical combs ringing as one, and the chorus
+    /// is still sweeping its own signal rather than reading the previous pass.
+    func testAnUnusuallyFastDeviceStillProducesACoherentSound() {
+        let extremes = SynthPatch.singleOscillator(
+            .init(type: .analog, analogShape: .saw, level: 1), name: "fast",
+            // Deliberately at the far end of every effect's range, which is
+            // where the buffer limits actually bite.
+            chorus: .init(isEnabled: true, rateHertz: 2, depthMilliseconds: 20,
+                          centreMilliseconds: 30, mix: 0.5, feedback: 0.3),
+            delay: .init(isEnabled: true, timeSeconds: 1.0, feedback: 0.6, mix: 0.4),
+            reverb: .init(isEnabled: true, roomSize: 0.9, dampening: 0.3,
+                          mix: 0.4, preDelaySeconds: 0.1)
+        )
+        let dry = SynthPatch.singleOscillator(
+            .init(type: .analog, analogShape: .saw, level: 1), name: "dry")
+
+        for rate in [44_100.0, 96_000.0, 192_000.0] {
+            let samples = SynthVoiceHarness.renderNote(
+                patch: extremes, midiNoteNumber: note, velocity: 100,
+                holdSeconds: 1.2, tailSeconds: 1.5, sampleRate: rate)
+
+            // In tune: pitch follows the real device rate, not the capped one.
+            let steady = Array(samples[Int(0.3 * rate)..<Int(1.1 * rate)])
+            let atPitch = AudioRenderFixtures.energy(
+                steady, atHertz: fundamental, sampleRate: rate)
+            let aSemitoneSharp = AudioRenderFixtures.energy(
+                steady, atHertz: fundamental * 1.0595, sampleRate: rate)
+            XCTAssertGreaterThan(
+                atPitch, aSemitoneSharp * 8,
+                "At \(rate) Hz the note is not at \(fundamental) Hz."
+            )
+
+            XCTAssertLessThanOrEqual(AudioRenderFixtures.peak(samples), 1.0)
+            for sample in samples where !sample.isFinite {
+                return XCTFail("At \(rate) Hz the voice produced a non-finite sample.")
+            }
+
+            // A reverb, not a ring. Measured on its own, because a one-second
+            // delay's repeats would otherwise sit inside the windows: what is
+            // being checked is that the eight combs still have eight different
+            // lengths, and saturating them all to one would sustain rather than
+            // decay.
+            let reverbOnly = SynthPatch.singleOscillator(
+                .init(type: .analog, analogShape: .saw, level: 1), name: "reverb",
+                reverb: .init(isEnabled: true, roomSize: 0.9, dampening: 0.3,
+                              mix: 0.5, preDelaySeconds: 0.1))
+            let tail = SynthVoiceHarness.renderNote(
+                patch: reverbOnly, holdSeconds: 0.4, tailSeconds: 4.0, sampleRate: rate)
+            let early = AudioRenderFixtures.rms(tail, from: 0.9, to: 1.1, sampleRate: rate)
+            let late = AudioRenderFixtures.rms(tail, from: 3.9, to: 4.1, sampleRate: rate)
+            XCTAssertGreaterThan(early, 1e-4, "At \(rate) Hz there is no reverb tail at all.")
+            XCTAssertLessThan(
+                late, early * 0.5,
+                "At \(rate) Hz the tail went from \(early) to \(late) over three seconds; it is "
+                    + "ringing rather than decaying."
+            )
+
+            // A chorus, not a static comb: the swept tap has to stay behind the
+            // write head, or it reads the previous pass and stops moving.
+            let chorusOnly = SynthPatch.singleOscillator(
+                .init(type: .analog, analogShape: .saw, level: 1), name: "chorus",
+                chorus: .init(isEnabled: true, rateHertz: 1, depthMilliseconds: 20,
+                              centreMilliseconds: 30, mix: 0.5, feedback: 0.4))
+            let moving = AudioRenderFixtures.levelVariation(Array(
+                SynthVoiceHarness.renderNote(
+                    patch: chorusOnly, holdSeconds: 2.0, sampleRate: rate
+                )[Int(0.3 * rate)..<Int(1.9 * rate)]))
+            let flat = AudioRenderFixtures.levelVariation(Array(
+                SynthVoiceHarness.renderNote(
+                    patch: dry, holdSeconds: 2.0, sampleRate: rate
+                )[Int(0.3 * rate)..<Int(1.9 * rate)]))
+            XCTAssertGreaterThan(
+                moving, flat * 2,
+                "At \(rate) Hz the chorus moved the level by \(moving) against \(flat) dry."
+            )
+        }
+    }
+
+    /// Above 96 kHz the maximum delay time shortens, and that is the documented
+    /// trade rather than a surprise.
+    ///
+    /// The delay line is one preallocated buffer sized for 96 kHz, so a device
+    /// running at 192 kHz cannot hold a full second in it. The engine takes the
+    /// shorter delay instead of reading past the buffer, and this pins where
+    /// the repeat actually lands so the behaviour is recorded rather than
+    /// discovered.
+    func testAboveTheSizedRateTheLongestDelayShortensPredictably() {
+        let patch = SynthPatch.singleOscillator(
+            .init(type: .analog, analogShape: .saw, level: 1), name: "delay",
+            delay: .init(isEnabled: true, timeSeconds: 1.0, feedback: 0.2, mix: 0.6))
+
+        func firstRepeatSeconds(at rate: Double) -> Double {
+            let samples = SynthVoiceHarness.renderNote(
+                patch: patch, holdSeconds: 0.15, tailSeconds: 1.5, sampleRate: rate)
+            // Search past the note and its release for the loudest 40 ms window.
+            var best = 0.0
+            var bestAt = 0.0
+            var start = 0.4
+            while start < 1.5 {
+                let level = AudioRenderFixtures.rms(
+                    samples, from: start, to: start + 0.04, sampleRate: rate)
+                if level > best { best = level; bestAt = start }
+                start += 0.01
+            }
+            XCTAssertGreaterThan(best, 1e-4, "No repeat found at \(rate) Hz.")
+            return bestAt
+        }
+
+        XCTAssertEqual(
+            firstRepeatSeconds(at: 48_000), 1.0, accuracy: 0.06,
+            "At 48 kHz a one-second delay should repeat at one second."
+        )
+        XCTAssertEqual(
+            firstRepeatSeconds(at: 192_000), 0.5, accuracy: 0.06,
+            "At 192 kHz the buffer holds half a second, so the repeat should land there."
         )
     }
 

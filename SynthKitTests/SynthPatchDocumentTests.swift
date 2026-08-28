@@ -309,6 +309,92 @@ final class SynthPatchDocumentTests: XCTestCase {
         }
     }
 
+    /// Loading is dispatched on the document's own version, so a v1 document
+    /// is read by a v1 reader rather than by whatever the current shape
+    /// happens to be.
+    ///
+    /// The failure this guards against is not reachable today and is entirely
+    /// reachable the moment `currentVersion` becomes 2: without the branch,
+    /// every patch already in a user's library would be handed to the v2
+    /// decoder and start failing to load. Asserting that a hand-written v1
+    /// document — not one this build just produced — still loads is what keeps
+    /// the seam honest as the format moves on.
+    func testAVersionOneDocumentIsReadByTheVersionOneReader() throws {
+        // Written out rather than round-tripped, so this stays a statement
+        // about the v1 wire format and not about today's encoder.
+        let json = """
+        {
+          "version": 1,
+          "patch": {
+            "identifier": "fixture.v1",
+            "name": "Version One",
+            "oscillators": [
+              {"type":"analog","analogShape":"saw","wavetableBank":"harmonic","level":0.9,
+               "detuneSemitones":0,"detuneCents":0,"shapeAmount":0.5,
+               "frequencyModulationRatio":1,"retriggersPhase":true,"startPhase":0},
+              {"type":"wavetable","analogShape":"sine","wavetableBank":"hollow","level":0.25,
+               "detuneSemitones":12,"detuneCents":0,"shapeAmount":0.7,
+               "frequencyModulationRatio":1,"retriggersPhase":true,"startPhase":0},
+              {"type":"frequencyModulation","analogShape":"sine","wavetableBank":"harmonic",
+               "level":0,"detuneSemitones":0,"detuneCents":0,"shapeAmount":0.5,
+               "frequencyModulationRatio":2,"retriggersPhase":true,"startPhase":0}
+            ],
+            "noiseLevel": 0.1,
+            "filter": {"isEnabled":true,"type":"lowpass","poles":4,"cutoffHertz":2500,
+                       "resonance":0.3,"keyTracking":0.5},
+            "amplitudeEnvelope": {"attackSeconds":0.01,"decaySeconds":0.2,"sustainLevel":0.7,
+                                  "releaseSeconds":0.4,"curve":0.5},
+            "modulationEnvelope": {"attackSeconds":0.01,"decaySeconds":0.4,"sustainLevel":0,
+                                   "releaseSeconds":0.3,"curve":1},
+            "lfos": [
+              {"shape":"sine","rateHertz":5,"startPhase":0,"retriggersPerNote":false},
+              {"shape":"sampleAndHold","rateHertz":8,"startPhase":0.25,"retriggersPerNote":true}
+            ],
+            "modulation": [
+              {"source":"lfo1","destination":"filterCutoff","amount":0.4},
+              {"source":"none","destination":"none","amount":0},
+              {"source":"none","destination":"none","amount":0},
+              {"source":"none","destination":"none","amount":0},
+              {"source":"none","destination":"none","amount":0},
+              {"source":"none","destination":"none","amount":0},
+              {"source":"none","destination":"none","amount":0},
+              {"source":"none","destination":"none","amount":0}
+            ],
+            "equalizer": {"isEnabled":false,"lowGainDecibels":0,"lowHertz":200,
+                          "midGainDecibels":0,"midHertz":1000,"midQ":1,
+                          "highGainDecibels":0,"highHertz":6000},
+            "chorus": {"isEnabled":false,"rateHertz":0.6,"depthMilliseconds":4,
+                       "centreMilliseconds":12,"mix":0.4,"feedback":0.15},
+            "delay": {"isEnabled":false,"timeSeconds":0.28,"feedback":0.35,"mix":0.25,
+                      "dampening":0.4},
+            "reverb": {"isEnabled":true,"roomSize":0.6,"dampening":0.5,"mix":0.3,
+                       "preDelaySeconds":0.02},
+            "maximumVoices": 16,
+            "outputLevel": 0.2,
+            "velocitySensitivity": 1.4,
+            "seed": 987654321
+          }
+        }
+        """
+        let patch = try SynthPatchDocument.patch(from: Data(json.utf8))
+
+        XCTAssertEqual(patch.identifier, "fixture.v1")
+        XCTAssertEqual(patch.oscillators[0].analogShape, .saw)
+        XCTAssertEqual(patch.oscillators[1].type, .wavetable)
+        XCTAssertEqual(patch.oscillators[2].type, .frequencyModulation)
+        XCTAssertEqual(patch.filter.poles, 4)
+        XCTAssertEqual(patch.lfos[1].shape, .sampleAndHold)
+        XCTAssertEqual(patch.modulation[0].destination, .filterCutoff)
+        XCTAssertEqual(patch.maximumVoices, 16)
+        XCTAssertEqual(patch.seed, 987_654_321)
+
+        // And it renders, which is the point of loading it.
+        let samples = SynthVoiceHarness.renderNote(patch: patch, holdSeconds: 0.4)
+        XCTAssertGreaterThan(
+            AudioRenderFixtures.rms(samples, from: 0.1, to: 0.35, sampleRate: 48_000), 0.001
+        )
+    }
+
     /// A refused document leaves nothing behind: no engine was built, and the
     /// caller still has a working default to fall back on.
     func testARefusedDocumentDoesNotDisturbTheDefaultVoice() {

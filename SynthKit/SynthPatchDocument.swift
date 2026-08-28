@@ -114,17 +114,55 @@ public enum SynthPatchDocument {
             )
         }
 
-        let envelope: Envelope
+        let patch = try decode(version: probe.version, from: data, using: decoder)
+        try validate(patch)
+        return patch
+    }
+
+    /*
+     Forward migration, dispatched on the document's own version.
+
+     One case today, and that is the point. Without this branch, `patch(from:)`
+     would admit every version from 1 to the current one and then hand all of
+     them to the *current* shape's decoder — correct while there is only one
+     shape, and quietly wrong the moment someone bumps `currentVersion` with a
+     changed layout, because every patch already on a user's disk would start
+     failing to load and nothing here would have objected.
+
+     The plan is explicit that persisted formats are versioned from day one
+     *with* forward migrations, and `SchemaMigrator` honours that literally for
+     the store. This is the same obligation for the format SYN002 is about to
+     fill a personal library with. Adding version 2 now forces whoever does it
+     to say what happens to version 1, instead of letting the trap be walked
+     into silently.
+    */
+    private static func decode(
+        version: Int, from data: Data, using decoder: JSONDecoder
+    ) throws -> SynthPatch {
+        switch version {
+        case 1:
+            return try decodeVersion1(from: data, using: decoder)
+        default:
+            // Unreachable: `patch(from:)` has already rejected anything outside
+            // 1…currentVersion. Present so raising `currentVersion` without
+            // adding a case here fails loudly rather than mis-reading old
+            // documents.
+            throw SynthPatchDocumentError.malformed(
+                reason: "no reader for patch format version \(version)."
+            )
+        }
+    }
+
+    private static func decodeVersion1(
+        from data: Data, using decoder: JSONDecoder
+    ) throws -> SynthPatch {
         do {
-            envelope = try decoder.decode(Envelope.self, from: data)
+            return try decoder.decode(Envelope.self, from: data).patch
         } catch let error as DecodingError {
             throw SynthPatchDocumentError.malformed(reason: readable(error))
         } catch {
             throw SynthPatchDocumentError.malformed(reason: String(describing: error))
         }
-
-        try validate(envelope.patch)
-        return envelope.patch
     }
 
     private static func readable(_ error: DecodingError) -> String {

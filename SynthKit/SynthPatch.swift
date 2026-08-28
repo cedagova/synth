@@ -21,9 +21,14 @@ import Foundation
 /// "serialise, load, and get byte-identical parameters back" is a property of
 /// the type rather than a hope about the encoder.
 public struct SynthPatch: Codable, Equatable, Sendable {
-    /// Document format version. Increment it for any change to the shape of
-    /// the serialised form; a reader refuses anything newer than it
-    /// understands rather than guessing.
+    /// Document format version.
+    ///
+    /// Increment it for any change to the shape of the serialised form. A
+    /// reader refuses anything newer than it understands rather than guessing,
+    /// and reads older documents through `SynthPatchDocument`'s
+    /// version-dispatched decode — so raising this number without adding a
+    /// reader for the version it replaces fails loudly instead of silently
+    /// refusing every patch already on a user's disk.
     public static let currentVersion = 1
 
     /// Oscillators per voice, fixed by the architecture.

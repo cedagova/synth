@@ -86,7 +86,9 @@ extern float synth_patch_wavetables[SYNTH_WAVETABLE_BANK_COUNT]
 #define SYNTH_CONTROL_BLOCK_FRAMES 16
 
 #define SYNTH_DELAY_MAX_SECONDS 1.0
-#define SYNTH_DELAY_MAX_FRAMES ((int32_t)(SYNTH_DELAY_MAX_SECONDS * SYNTH_PATCH_MAX_SAMPLE_RATE) + 2)
+/// Integer arithmetic rather than a folded double, so this is a constant
+/// expression rather than a variable-length array the compiler forgives.
+#define SYNTH_DELAY_MAX_FRAMES (96000 + 2)
 
 /// 40 ms of modulated delay at the maximum rate, rounded up to a power of two.
 #define SYNTH_CHORUS_MAX_FRAMES 4096
@@ -98,21 +100,12 @@ extern float synth_patch_wavetables[SYNTH_WAVETABLE_BANK_COUNT]
 /// Longest comb (1617 frames at 44.1 kHz) scaled to the maximum sample rate.
 #define SYNTH_REVERB_COMB_MAX_FRAMES 3600
 #define SYNTH_REVERB_ALLPASS_MAX_FRAMES 1280
-#define SYNTH_REVERB_PREDELAY_MAX_FRAMES ((int32_t)(0.1 * SYNTH_PATCH_MAX_SAMPLE_RATE) + 2)
+/// 100 ms at the maximum rate the effect buffers are sized for.
+#define SYNTH_REVERB_PREDELAY_MAX_FRAMES (9600 + 2)
 
 /// Above this the soft limiter starts bending; below it the voice is exactly
 /// linear, so the engine's mixer arithmetic still holds.
 #define SYNTH_LIMIT_KNEE 0.8f
-
-/// Output magnitude below which a silent-input effect chain counts as decayed.
-/// -140 dBFS: far below anything audible, and far below the 24-bit floor an
-/// export could carry.
-#define SYNTH_EFFECT_SILENCE 1.0e-7f
-
-/// Consecutive silent frames before the chain is allowed to stop running.
-/// Roughly 40 ms at 48 kHz: a generous margin, so a reverb passing through
-/// zero cannot be mistaken for one that has finished.
-#define SYNTH_EFFECT_IDLE_FRAMES 2048
 
 /// How the per-sample loop reads one oscillator.
 enum {
@@ -287,26 +280,6 @@ struct SynthPatchVoiceState {
     /// Position inside the current control block, carried across render calls
     /// so buffer chopping cannot change the result.
     int32_t controlPhase;
-
-    /*
-     Effect-chain idling.
-
-     A per-sound effect chain is not cheap — eight comb filters and four
-     allpasses per line, before the delay and the chorus — and it would
-     otherwise run at full cost on every line of an eighteen-line score for the
-     whole piece, including the lines that are not playing. These two fields
-     let the chain stop once it has genuinely decayed: `effectSilentFrames`
-     counts consecutive frames with silent input *and* output below the
-     threshold, and `effectsIdle` latches when enough of them have passed. Any
-     non-silent input clears both immediately.
-
-     Counted in frames rather than in render calls on purpose. The engine
-     splits a buffer wherever a note starts, so a call-based counter would idle
-     at a different moment depending on how the host chopped time, and the
-     render would stop being independent of the buffer size.
-     */
-    int32_t effectSilentFrames;
-    int32_t effectsIdle;
 
     /// Free-running LFOs, shared by every voice that does not retrigger.
     double  freeLFOPhase[SYNTH_PATCH_LFO_COUNT];

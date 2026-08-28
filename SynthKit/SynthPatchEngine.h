@@ -64,9 +64,18 @@ extern "C" {
 /// Simultaneous notes one patch may sound. Matches the engine's own ceiling.
 #define SYNTH_PATCH_MAX_VOICES 32
 
-/// Highest sample rate the preallocated delay lines are sized for. A patch
-/// asked to prepare above this clamps its delay times rather than reading past
-/// its own buffers.
+/*
+ Highest sample rate the preallocated effect buffers are sized for.
+
+ A voice prepared above this still renders at the device's real rate — pitch,
+ envelopes, LFOs and the filter all follow it exactly — but the effect chain's
+ buffer lengths are derived from this cap instead. Above it the reverb's room
+ and the maximum delay time are slightly shorter than the patch asked for.
+
+ The alternative would be worse in a specific way: every reverb comb would
+ saturate to the same maximum length, and eight identical combs ring like one
+ comb rather than sounding like a room.
+ */
 #define SYNTH_PATCH_MAX_SAMPLE_RATE 96000.0
 
 #pragma mark - Enumerated parameters

@@ -73,10 +73,22 @@ public final class RenderProgram: @unchecked Sendable {
         Int64((Double(frame) * 1_000_000.0 / sampleRate).rounded())
     }
 
-    public init(
+    /// Every line through one sound. The signature increments 002 and 003 used.
+    public convenience init(
         timeline: PerformanceTimeline,
         sampleRate: Double,
         voiceProvider: LineVoiceProvider = SynthPatchVoiceProvider()
+    ) throws {
+        try self.init(
+            timeline: timeline, sampleRate: sampleRate, voices: .uniform(voiceProvider)
+        )
+    }
+
+    /// Each line through the sound `voices` names for it (REQ-006).
+    public init(
+        timeline: PerformanceTimeline,
+        sampleRate: Double,
+        voices: LineVoiceAssignment
     ) throws {
         self.sampleRate = sampleRate
         self.lineCount = timeline.lines.count
@@ -96,6 +108,11 @@ public final class RenderProgram: @unchecked Sendable {
         builtVoices.reserveCapacity(timeline.lines.count)
 
         var lastFrame: Int64 = 0
+        /// The longest tail any line's own sound asked for. With per-line
+        /// assignment this is a maximum over the lines rather than one
+        /// provider's figure, so a single long-release sound on one line is not
+        /// truncated by a short one on another.
+        var longestTailSeconds: Double = 0
 
         for (lineIndex, line) in timeline.lines.enumerated() {
             guard synth_engine_reserve_line(
@@ -143,7 +160,10 @@ public final class RenderProgram: @unchecked Sendable {
                 if end > lastFrame { lastFrame = end }
             }
 
-            let voice = voiceProvider.makeVoice(sampleRate: sampleRate)
+            let lineProvider = voices(line.id)
+            longestTailSeconds = max(longestTailSeconds, lineProvider.releaseTailSeconds)
+
+            let voice = lineProvider.makeVoice(sampleRate: sampleRate)
             var vtable = voice.vtable
             synth_engine_set_line_voice(engine, Int32(lineIndex), &vtable)
             builtVoices.append(voice)
@@ -154,7 +174,7 @@ public final class RenderProgram: @unchecked Sendable {
         // later and then add room for the release tail.
         let timelineEnd = Self.frame(forMicroseconds: timeline.totalMicroseconds, sampleRate: sampleRate)
         self.releaseTailSeconds = min(
-            max(voiceProvider.releaseTailSeconds, 0), Self.maximumReleaseTailSeconds)
+            max(longestTailSeconds, 0), Self.maximumReleaseTailSeconds)
         let tail = Int64((self.releaseTailSeconds * sampleRate).rounded())
         self.totalFrames = max(timelineEnd, lastFrame) + tail
         synth_engine_set_total_frames(engine, self.totalFrames)

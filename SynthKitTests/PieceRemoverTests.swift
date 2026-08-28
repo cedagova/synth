@@ -164,10 +164,18 @@ final class PieceRemoverTests: XCTestCase {
                        "A failed removal must leave the library byte-identical")
     }
 
-    /// The library has no dependent stores yet — presets arrive in increment
-    /// 004 — and removal must work exactly the same in the meantime.
-    func testTheShippedStoreHasNoDependentsYetAndStillRemoves() throws {
-        XCTAssertTrue(store.dependentStores.isEmpty)
+    /// Every opened store carries the preset cascade, whether or not its caller
+    /// asked for one (REQ-003).
+    ///
+    /// This replaces the increment-001 assertion that the list was empty. That
+    /// one was true only because presets did not exist; now that they do, the
+    /// property worth pinning is the opposite one — that a store *cannot* be
+    /// opened without its presets attached, so "removing a piece removes its
+    /// presets" is not a property of call sites.
+    func testEveryOpenedStoreCarriesThePresetCascade() throws {
+        XCTAssertEqual(store.dependentStores.count, 1)
+        XCTAssertEqual(store.dependentStores.first?.dependentDescription, "presets")
+        XCTAssertTrue(store.dependentStores.first is PresetLibrary)
 
         let piece = try importScore(named: "prelude.musicxml", workTitle: "Prelude in C")
         try store.makeRemover().remove(piece)

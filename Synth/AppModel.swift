@@ -186,9 +186,10 @@ final class AppModel {
     /// Disk work runs off the main actor so launch stays responsive.
     private static func openStore(appVersion: String) async throws -> LibraryStore {
         try await Task.detached(priority: .userInitiated) {
-            // Increment 004 adds its preset store to `dependentStores` here, and
-            // piece removal cascades to it with no other change.
-            try LibraryStore.open(appVersion: appVersion, dependentStores: [])
+            // The preset store registers itself inside `open`, in both the
+            // piece-removal cascade (REQ-003) and the sound-deletion embed hook
+            // (REQ-029), so no call site can open a store without them.
+            try LibraryStore.open(appVersion: appVersion)
         }.value
     }
 }

@@ -35,6 +35,21 @@ public enum StoreError: Error, Equatable, Sendable {
     /// no longer matches this build's schema, which is loud rather than a
     /// silently vanishing piece.
     case pieceRowUnreadable(id: String)
+
+    /// A `sounds` row could not be decoded into a `SoundEntry` — a missing
+    /// column, a category this build does not know, a patch document it cannot
+    /// read, or a row whose recorded format version disagrees with the document
+    /// it describes. Loud for the same reason as `pieceRowUnreadable`: a sound
+    /// the owner made must never quietly disappear from the list.
+    ///
+    /// **Reading is all-or-nothing, and the wording says so.** `entry(from:)`
+    /// throws on the first row it cannot decode, and every listing goes through
+    /// it, so one bad row stops the whole library being listed rather than
+    /// costing one sound. That is the intended design — silently dropping the
+    /// row is the failure this case exists to prevent — but it means the
+    /// recovery text must not reassure the owner that their other sounds are
+    /// fine while they are staring at an empty list.
+    case soundRowUnreadable(id: String, reason: String)
 }
 
 extension StoreError: LocalizedError {
@@ -67,6 +82,8 @@ extension StoreError: LocalizedError {
             return "Synth's library database has no readable schema version."
         case .pieceRowUnreadable(let id):
             return "Synth could not read the library entry \(id); its stored form does not match this version of Synth."
+        case .soundRowUnreadable(let id, let reason):
+            return "Synth could not read the sound \(id), so it cannot list your sound library. \(reason)"
         }
     }
 
@@ -90,6 +107,8 @@ extension StoreError: LocalizedError {
             return "The library database may be damaged. Restore it from a backup."
         case .pieceRowUnreadable:
             return "Update Synth to the newest version you have used with this library, or restore the library from a backup."
+        case .soundRowUnreadable:
+            return "No sounds can be listed until that entry is dealt with. Update Synth to the newest version you have used with this library, or restore the library from a backup."
         }
     }
 }

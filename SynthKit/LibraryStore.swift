@@ -19,6 +19,13 @@ public final class LibraryStore: @unchecked Sendable {
     /// enable and intensity the transport exposes (REQ-012).
     public let preferences: PreferenceStore
 
+    /// The sound library: the shipped collection plus the owner's own sounds
+    /// (REQ-017, REQ-019, REQ-023).
+    ///
+    /// Present from the first launch, because the shipped half is app content
+    /// and needs nothing written to be there.
+    public let sounds: SoundLibrary
+
     /// Stores whose rows belong to a piece and must go when it does.
     ///
     /// Empty in this build: presets, the one dependent REQ-003 names, arrive in
@@ -39,6 +46,7 @@ public final class LibraryStore: @unchecked Sendable {
         container: AppContainer,
         database: SQLiteDatabase,
         dependentStores: [PieceDependentStore],
+        soundDependentStores: [SoundDependentStore],
         schemaVersion: Int,
         migrationOutcome: MigrationOutcome,
         fileManager: FileManager
@@ -48,6 +56,7 @@ public final class LibraryStore: @unchecked Sendable {
         self.pieces = PieceCatalog(database: database)
         self.pieceContent = DirectoryPieceContentStore(directoryURL: container.piecesURL)
         self.preferences = PreferenceStore(database: database)
+        self.sounds = SoundLibrary(database: database, dependentStores: soundDependentStores)
         self.dependentStores = dependentStores
         self.schemaVersion = schemaVersion
         self.migrationOutcome = migrationOutcome
@@ -66,11 +75,16 @@ public final class LibraryStore: @unchecked Sendable {
     ///     their rows inside every piece-removal transaction. A factory rather
     ///     than a ready store because a dependent needs the connection this
     ///     call is what creates.
+    ///   - soundDependentStores: the same shape for sounds, and the opposite
+    ///     meaning. Deleting a sound must not delete these rows; they are told
+    ///     first so they can embed a copy of it and keep working (REQ-029).
+    ///     Increment 004's preset store registers here.
     public static func open(
         container: AppContainer? = nil,
         appVersion: String,
         fileManager: FileManager = .default,
-        dependentStores: [@Sendable (SQLiteDatabase) -> PieceDependentStore] = []
+        dependentStores: [@Sendable (SQLiteDatabase) -> PieceDependentStore] = [],
+        soundDependentStores: [@Sendable (SQLiteDatabase) -> SoundDependentStore] = []
     ) throws -> LibraryStore {
         let resolved: AppContainer
         if let container {
@@ -97,6 +111,7 @@ public final class LibraryStore: @unchecked Sendable {
                 container: resolved,
                 database: database,
                 dependentStores: dependentStores.map { $0(database) },
+                soundDependentStores: soundDependentStores.map { $0(database) },
                 schemaVersion: version,
                 migrationOutcome: outcome,
                 fileManager: fileManager

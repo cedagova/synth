@@ -61,7 +61,15 @@ final class PreferenceStoreTests: XCTestCase {
 
         XCTAssertEqual(outcome.previousVersion, 2)
         XCTAssertEqual(outcome.currentVersion, SchemaMigrator.latestVersion)
-        XCTAssertEqual(outcome.appliedMigrationNames, ["create_preferences"])
+        // Every step from 3 onwards, whatever later leaves have added since.
+        // Naming only `create_preferences` here would make this test fail on
+        // the next additive migration while proving nothing more about the one
+        // it is actually about.
+        XCTAssertEqual(
+            outcome.appliedMigrationNames,
+            SchemaMigrator.migrations.filter { $0.version > 2 }.map(\.name)
+        )
+        XCTAssertTrue(outcome.appliedMigrationNames.contains("create_preferences"))
         XCTAssertTrue(try database.tableExists(PreferenceStore.tableName))
         XCTAssertEqual(try database.scalarInt("SELECT COUNT(*) FROM pieces;"), 1)
         XCTAssertEqual(

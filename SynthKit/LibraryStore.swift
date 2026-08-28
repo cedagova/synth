@@ -26,12 +26,19 @@ public final class LibraryStore: @unchecked Sendable {
     /// and needs nothing written to be there.
     public let sounds: SoundLibrary
 
+    /// The per-piece presets and line renames (REQ-005, REQ-024, REQ-029).
+    ///
+    /// Built here rather than by the caller, and registered here in both
+    /// dependent lists, because REQ-003 and REQ-029 must hold for *every*
+    /// opened store — not only for the ones whose caller remembered to pass it
+    /// in. A store that could be opened without its presets attached would make
+    /// "removing a piece removes its presets" a property of call sites.
+    public let presets: PresetLibrary
+
     /// Stores whose rows belong to a piece and must go when it does.
     ///
-    /// Empty in this build: presets, the one dependent REQ-003 names, arrive in
-    /// increment 004. That leaf adds its store to `open`'s `dependentStores`
-    /// and changes nothing else — the cascade, its ordering, and its
-    /// all-or-nothing transaction already exist here.
+    /// Always contains `presets`, plus anything the caller added. The cascade,
+    /// its ordering, and its all-or-nothing transaction are `PieceRemover`'s.
     public let dependentStores: [PieceDependentStore]
 
     /// Schema version in effect after `open` finished migrating.
@@ -56,8 +63,18 @@ public final class LibraryStore: @unchecked Sendable {
         self.pieces = PieceCatalog(database: database)
         self.pieceContent = DirectoryPieceContentStore(directoryURL: container.piecesURL)
         self.preferences = PreferenceStore(database: database)
-        self.sounds = SoundLibrary(database: database, dependentStores: soundDependentStores)
-        self.dependentStores = dependentStores
+
+        // Presets first, because both dependent lists below have to contain it:
+        // deleting a piece deletes its presets (REQ-003) and deleting a sound
+        // embeds a copy into every preset using it (REQ-029). The two hooks
+        // look alike and mean opposite things, which is why they are separate
+        // protocols — and why one object conforms to both.
+        let presets = PresetLibrary(database: database)
+        self.presets = presets
+        self.sounds = SoundLibrary(
+            database: database, dependentStores: [presets] + soundDependentStores
+        )
+        self.dependentStores = [presets] + dependentStores
         self.schemaVersion = schemaVersion
         self.migrationOutcome = migrationOutcome
         self.fileManager = fileManager
@@ -74,11 +91,12 @@ public final class LibraryStore: @unchecked Sendable {
     ///   - dependentStores: built once the database exists, and asked to delete
     ///     their rows inside every piece-removal transaction. A factory rather
     ///     than a ready store because a dependent needs the connection this
-    ///     call is what creates.
+    ///     call is what creates. The preset store is always registered; these
+    ///     are additions to it.
     ///   - soundDependentStores: the same shape for sounds, and the opposite
     ///     meaning. Deleting a sound must not delete these rows; they are told
     ///     first so they can embed a copy of it and keep working (REQ-029).
-    ///     Increment 004's preset store registers here.
+    ///     The preset store is always registered here too.
     public static func open(
         container: AppContainer? = nil,
         appVersion: String,
@@ -156,6 +174,31 @@ public final class LibraryStore: @unchecked Sendable {
     /// Every piece in the library, ready for the list to filter and order.
     public func allPieces() throws -> [PieceRecord] {
         try pieces.allPieces()
+    }
+
+    /// This piece's lines, with the owner's renames applied (REQ-005).
+    public func lineInventory(for score: CompiledScore) throws -> LineInventory {
+        try presets.inventory(for: score)
+    }
+
+    /// The preset to play this piece with — created on first open, reconciled
+    /// on every later one (REQ-007).
+    public func activePreset(for score: CompiledScore) throws -> Preset {
+        try presets.activePreset(
+            for: try lineInventory(for: score), palette: try sounds.allSounds()
+        )
+    }
+
+    /// The active preset resolved into per-line sounds and mixer state, ready
+    /// to hand to a `PlaybackEngine`.
+    ///
+    /// The one call opening a piece needs: it creates the initial preset if
+    /// there is none, dereferences every live sound reference, uses embedded
+    /// copies verbatim, and flags anything that could not be found.
+    public func openActivePreset(for score: CompiledScore) throws -> PresetPerformance {
+        let inventory = try lineInventory(for: score)
+        let preset = try presets.activePreset(for: inventory, palette: try sounds.allSounds())
+        return try PresetPerformance.resolve(preset, inventory: inventory, library: sounds)
     }
 
     /// When the current schema version was recorded, as stored ISO 8601 text.

@@ -60,7 +60,10 @@ public final class PlaybackEngine: @unchecked Sendable {
     // MARK: Stored state
 
     private let avEngine = AVAudioEngine()
-    private let voiceProvider: LineVoiceProvider
+
+    /// Which sound each line renders with. Replaceable, because REQ-006 lets
+    /// the owner change a line's sound while the piece is open.
+    private var voices: LineVoiceAssignment
 
     private var sourceNode: AVAudioSourceNode?
     private var program: RenderProgram?
@@ -88,8 +91,14 @@ public final class PlaybackEngine: @unchecked Sendable {
         case lostWithNoFallback(previousDeviceName: String)
     }
 
-    public init(voiceProvider: LineVoiceProvider = SynthPatchVoiceProvider()) {
-        self.voiceProvider = voiceProvider
+    /// Every line through one sound. The signature increments 002 and 003 used.
+    public convenience init(voiceProvider: LineVoiceProvider = SynthPatchVoiceProvider()) {
+        self.init(voices: .uniform(voiceProvider))
+    }
+
+    /// Each line through the sound `voices` names for it (REQ-006).
+    public init(voices: LineVoiceAssignment) {
+        self.voices = voices
     }
 
     deinit {
@@ -120,6 +129,37 @@ public final class PlaybackEngine: @unchecked Sendable {
         }
     }
 
+    /// Change which sound each line plays (REQ-006).
+    ///
+    /// Rebuilds the program, because a voice is allocated once per line when
+    /// the program is built and the render thread only ever sees the resulting
+    /// C vtable. Stopping the graph first is the synchronisation edge that
+    /// publishes the new voices, exactly as `load(timeline:)` does.
+    ///
+    /// **The playhead and the whole mix are carried across**, so changing one
+    /// line's sound mid-piece resumes where it was and leaves every strip's
+    /// volume, pan, mute and solo where the owner put them. Calling this on its
+    /// own is therefore safe: it changes sounds and nothing else. Applying a
+    /// *different preset's* mixer state is a separate act — that is
+    /// `PresetPerformance.apply(to:)`, which calls this and then writes the new
+    /// preset's strips over the carried ones.
+    ///
+    /// This is the *assignment* path. Editing the patch of a sound already
+    /// assigned goes through `SynthPatchLiveVoices` instead and needs no
+    /// rebuild — which is why REQ-018's live editing stays audible while the
+    /// piece plays.
+    public func setVoices(_ newVoices: LineVoiceAssignment) throws {
+        let wasRunning = avEngine.isRunning
+        avEngine.stop()
+
+        voices = newVoices
+        try rebuildProgramAndGraph()
+
+        if wasRunning, case .realtime = mode {
+            try startAVEngine()
+        }
+    }
+
     /// Sample rate the graph currently renders at.
     public var sampleRate: Double {
         switch mode {
@@ -142,6 +182,52 @@ public final class PlaybackEngine: @unchecked Sendable {
         try rebuildProgramAndGraph()
     }
 
+    /// Everything about a rebuild that must survive it.
+    ///
+    /// Mixer state is addressed **by `ScoreLineID`, not by index**, so a rebuild
+    /// cannot transpose one line's strip onto another's even if line order ever
+    /// changed underneath it.
+    private struct CarriedState {
+        let microseconds: Int64
+        let wasPlaying: Bool
+        let mixerByLine: [ScoreLineID: LineMixerState]
+        let masterGain: Float
+    }
+
+    private func captureState() -> CarriedState {
+        var mixerByLine: [ScoreLineID: LineMixerState] = [:]
+        if let program {
+            for (index, lineID) in program.lineIDs.enumerated() {
+                guard let strip = mixer(forLineAt: index) else { continue }
+                mixerByLine[lineID] = LineMixerState(
+                    volume: Double(strip.gain),
+                    pan: Double(strip.pan),
+                    isMuted: strip.isMuted,
+                    isSoloed: strip.isSoloed
+                )
+            }
+        }
+        return CarriedState(
+            microseconds: playbackPositionMicroseconds,
+            wasPlaying: transportState == .playing,
+            mixerByLine: mixerByLine,
+            masterGain: masterGain
+        )
+    }
+
+    private func restore(_ carried: CarriedState) {
+        guard let program else { return }
+        for (index, lineID) in program.lineIDs.enumerated() {
+            guard let state = carried.mixerByLine[lineID],
+                  let strip = mixer(forLineAt: index) else { continue }
+            strip.gain = Float(state.volume)
+            strip.pan = Float(state.pan)
+            strip.isMuted = state.isMuted
+            strip.isSoloed = state.isSoloed
+        }
+        masterGain = carried.masterGain
+    }
+
     /// Rebuild the program at the current rate and reconnect the graph.
     ///
     /// A program stores event positions in frames, so it belongs to exactly one
@@ -149,9 +235,16 @@ public final class PlaybackEngine: @unchecked Sendable {
     /// user picking another output, entering offline rendering — therefore ends
     /// up here, on one path, with the playhead carried across in microseconds
     /// so it survives the rate change.
+    ///
+    /// **The mix is carried across too**, and that is not cosmetic. A rebuild
+    /// allocates a fresh C engine, whose strips start at unity, centred and
+    /// unmuted; before increment 004 nothing ever set them to anything else, so
+    /// the reset was invisible. Now that the owner's volume, pan, mute and solo
+    /// are real state, losing them because a pair of headphones was unplugged
+    /// would be a plain defect — REQ-015 asks a device change to be graceful,
+    /// and silently discarding the mix is not.
     private func rebuildProgramAndGraph() throws {
-        let carriedMicroseconds = playbackPositionMicroseconds
-        let wasPlaying = transportState == .playing
+        let carried = captureState()
 
         let rate: Double
         switch mode {
@@ -171,18 +264,19 @@ public final class PlaybackEngine: @unchecked Sendable {
             program = try RenderProgram(
                 timeline: timeline,
                 sampleRate: rate,
-                voiceProvider: voiceProvider
+                voices: voices
             )
         } else {
             program = nil
         }
 
         rebuildGraph(sampleRate: rate)
+        restore(carried)
 
-        if let program, carriedMicroseconds > 0 {
-            let frame = RenderProgram.frame(forMicroseconds: carriedMicroseconds, sampleRate: rate)
+        if let program, carried.microseconds > 0 {
+            let frame = RenderProgram.frame(forMicroseconds: carried.microseconds, sampleRate: rate)
             synth_engine_seek(program.engine, frame)
-            if wasPlaying { synth_engine_play(program.engine) }
+            if carried.wasPlaying { synth_engine_play(program.engine) }
         }
     }
 
@@ -681,7 +775,22 @@ public final class PlaybackEngine: @unchecked Sendable {
         voiceProvider: LineVoiceProvider = SynthPatchVoiceProvider(),
         configure: (PlaybackEngine) -> Void = { _ in }
     ) throws -> RenderedAudio {
-        let engine = PlaybackEngine(voiceProvider: voiceProvider)
+        try renderTimelineOffline(
+            timeline,
+            sampleRate: sampleRate,
+            voices: .uniform(voiceProvider),
+            configure: configure
+        )
+    }
+
+    /// The same, with each line through the sound `voices` names for it.
+    public static func renderTimelineOffline(
+        _ timeline: PerformanceTimeline,
+        sampleRate: Double = 48_000,
+        voices: LineVoiceAssignment,
+        configure: (PlaybackEngine) -> Void = { _ in }
+    ) throws -> RenderedAudio {
+        let engine = PlaybackEngine(voices: voices)
         try engine.setRenderMode(.offline(sampleRate: sampleRate))
         try engine.load(timeline: timeline)
         configure(engine)

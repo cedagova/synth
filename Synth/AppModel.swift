@@ -114,6 +114,10 @@ final class AppModel {
     func openPlayback(for piece: PieceRecord) {
         guard let store else { return }
         if playback?.piece.id == piece.id { return }
+        // Play-through belongs to the piece that was open, not to the studio's
+        // sound. Leaving it on would hand the incoming piece's lines away
+        // before it had ever played its own preset.
+        studio?.editor.stopPlayingPieceThroughSound()
         playback?.close()
         playback = PlaybackModel(
             piece: piece,
@@ -136,6 +140,15 @@ final class AppModel {
         guard let store else { return }
         if studio == nil {
             let editor = SoundEditorModel(store: store, playbackChannel: playbackChannel)
+            editor.onPlayThroughChanged = { [weak self] isPlayingThrough in
+                self?.playback?.setPlayingThroughEditedSound(isPlayingThrough)
+            }
+            // REQ-018 on an assigned line: an edit reaches every line of the
+            // open piece that plays this sound, while it plays, and nothing
+            // else.
+            editor.onPatchEdited = { [weak self] soundID, patch in
+                self?.playback?.assignment.publishEditedSound(id: soundID, patch: patch)
+            }
             studio = SoundStudioModel(store: store, editor: editor)
         }
         isStudioShowing = true
@@ -186,9 +199,10 @@ final class AppModel {
     /// Disk work runs off the main actor so launch stays responsive.
     private static func openStore(appVersion: String) async throws -> LibraryStore {
         try await Task.detached(priority: .userInitiated) {
-            // Increment 004 adds its preset store to `dependentStores` here, and
-            // piece removal cascades to it with no other change.
-            try LibraryStore.open(appVersion: appVersion, dependentStores: [])
+            // The preset store registers itself inside `open`, in both the
+            // piece-removal cascade (REQ-003) and the sound-deletion embed hook
+            // (REQ-029), so no call site can open a store without them.
+            try LibraryStore.open(appVersion: appVersion)
         }.value
     }
 }

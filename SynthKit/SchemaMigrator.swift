@@ -159,6 +159,60 @@ public enum SchemaMigrator {
                 END;
                 """
             )
+        },
+        Migration(version: 5, name: "create_presets") { database in
+            // Per-piece presets and line renames (REQ-005, REQ-024, REQ-029).
+            // Purely additive: nothing here touches `pieces`, `preferences` or
+            // `sounds`, so a store this step migrated still opens with every
+            // earlier record intact, and reverting this build leaves the store
+            // openable — the two extra tables are simply unread.
+            //
+            // The preset *document* lives in the row for the same reason a
+            // patch does: name, active flag and content then change in one
+            // atomic transaction instead of a row write plus a file write that
+            // can half-fail. It is also what makes auto-save (REQ-024) a single
+            // statement rather than a two-phase commit.
+            //
+            // Two constraints here are load-bearing rather than decorative:
+            //
+            // * `presets_one_active_per_piece` is a *partial* unique index, so
+            //   "exactly one preset is active" is a property of the database
+            //   rather than of the code that remembers to clear the old flag.
+            // * The `piece_id` foreign key has deliberately **no** ON DELETE
+            //   CASCADE. REQ-003's cascade is `PresetLibrary`'s explicit
+            //   `PieceDependentStore` hook, and leaving the key strict means a
+            //   removal that somehow skipped that hook aborts loudly inside the
+            //   transaction instead of orphaning presets. The failure mode is a
+            //   refused removal with everything intact, which is the one this
+            //   store is allowed to have.
+            try database.executeScript(
+                """
+                CREATE TABLE presets (
+                    id TEXT PRIMARY KEY,
+                    piece_id TEXT NOT NULL REFERENCES pieces (id),
+                    name TEXT NOT NULL,
+                    is_active INTEGER NOT NULL CHECK (is_active IN (0, 1)),
+                    document_version INTEGER NOT NULL,
+                    document TEXT NOT NULL,
+                    revision INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                ) STRICT;
+
+                CREATE INDEX presets_piece ON presets (piece_id);
+
+                CREATE UNIQUE INDEX presets_one_active_per_piece
+                    ON presets (piece_id) WHERE is_active = 1;
+
+                CREATE TABLE line_names (
+                    piece_id TEXT NOT NULL REFERENCES pieces (id),
+                    line_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (piece_id, line_id)
+                ) STRICT;
+                """
+            )
         }
     ]
 

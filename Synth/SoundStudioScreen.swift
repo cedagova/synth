@@ -65,9 +65,17 @@ struct SoundStudioScreen: View {
                     + "its own copy of the sound, so nothing you have already made will change."
                 )
             }
+
+            // The status bar is a row of this stack, not a `safeAreaInset`.
+            // The library screen can use an inset because its content is one
+            // `List` that knows how to inset its own scroll view; this screen
+            // is a fixed split, and the capture from the frozen candidate
+            // showed the list's last row drawn straight through the bar's
+            // translucent background.
+            Divider()
+            StudioStatusBar(model: model)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .safeAreaInset(edge: .bottom) { StudioStatusBar(model: model) }
         .alert(
             currentAlert?.title ?? "",
             isPresented: alertBinding,
@@ -616,6 +624,5 @@ private struct StudioStatusBar: View {
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.bar)
-        .overlay(alignment: .top) { Divider() }
     }
 }

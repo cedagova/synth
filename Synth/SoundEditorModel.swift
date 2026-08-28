@@ -123,7 +123,23 @@ final class SoundEditorModel {
     /// place that does.
     var lastSavedDescription: String? {
         guard let entry, entry.origin == .user, !entry.updatedAt.isEmpty else { return nil }
-        return "Last saved \(entry.updatedAt)"
+        return "Last saved \(Self.readableTimestamp(entry.updatedAt))"
+    }
+
+    /// "2026-08-28T09:39:18Z" as "2026-08-28 09:39 UTC".
+    ///
+    /// Sliced rather than formatted. The store writes ISO 8601 in UTC and
+    /// nothing here should turn that into a locale's idea of a date: the same
+    /// string has to mean the same instant to whoever reads it, and a
+    /// `DateFormatter` would make the app's own evidence depend on where the
+    /// machine thinks it is. Anything that is not the expected shape is shown
+    /// exactly as stored rather than mangled.
+    static func readableTimestamp(_ stored: String) -> String {
+        guard stored.count >= 16, stored.hasSuffix("Z") else { return stored }
+        let date = stored.prefix(10)
+        let time = stored.dropFirst(11).prefix(5)
+        guard stored[stored.index(stored.startIndex, offsetBy: 10)] == "T" else { return stored }
+        return "\(date) \(time) UTC"
     }
 
     var isAuditionRunning: Bool { audition.isRunning }

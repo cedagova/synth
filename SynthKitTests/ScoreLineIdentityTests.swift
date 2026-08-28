@@ -71,6 +71,69 @@ final class ScoreLineIdentityTests: XCTestCase {
         XCTAssertEqual(Set(ids).count, 3)
     }
 
+    // MARK: Uniqueness within a compiled score
+
+    /// A preset key that two different lines share would make one line's sound
+    /// follow the other. Two parts declaring the same `id` is a malformed
+    /// file, but the compiler must still hand back distinct identities.
+    func testTwoPartsSharingAnIdentifierStillProduceDistinctLines() throws {
+        func part(id: String, name: String, pitch: String) -> String {
+            #"<score-part id="\#(id)"><part-name>\#(name)</part-name></score-part>"#
+        }
+        let xml = #"<?xml version="1.0"?><score-partwise version="4.0"><part-list>"#
+            + part(id: "P1", name: "Flute", pitch: "C5")
+            + part(id: "P1", name: "Oboe", pitch: "E4")
+            + "</part-list>"
+            + #"<part id="P1"><measure number="1">"#
+            + "<attributes><divisions>4</divisions><time><beats>4</beats>"
+            + "<beat-type>4</beat-type></time></attributes>"
+            + "<note><pitch><step>C</step><octave>5</octave></pitch><duration>16</duration>"
+            + "<voice>1</voice></note></measure></part>"
+            + #"<part id="P1"><measure number="1">"#
+            + "<note><pitch><step>E</step><octave>4</octave></pitch><duration>16</duration>"
+            + "<voice>1</voice></note></measure></part>"
+            + "</score-partwise>"
+
+        let score = try ScoreCompiler().compile(pieceID: "clash", musicXML: Data(xml.utf8))
+
+        XCTAssertEqual(score.lines.count, 2)
+        XCTAssertEqual(Set(score.lines.map(\.id)).count, 2, "the two lines must not share a key")
+        XCTAssertTrue(score.report.mentions(kind: "duplicate part identifier"))
+    }
+
+    /// A voice that crosses staves becomes one line per staff. That is a
+    /// decision, so it has to appear in the report rather than just happen.
+    func testAVoiceCrossingStavesIsSplitAndSaidSo() throws {
+        let xml = #"<?xml version="1.0"?><score-partwise version="4.0">"#
+            + #"<part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>"#
+            + #"<part id="P1"><measure number="1">"#
+            + "<attributes><divisions>4</divisions><staves>2</staves>"
+            + "<time><beats>4</beats><beat-type>4</beat-type></time></attributes>"
+            + "<note><pitch><step>C</step><octave>5</octave></pitch><duration>8</duration>"
+            + "<voice>1</voice><staff>1</staff></note>"
+            + "<note><pitch><step>C</step><octave>3</octave></pitch><duration>8</duration>"
+            + "<voice>1</voice><staff>2</staff></note>"
+            + "</measure></part></score-partwise>"
+
+        let score = try ScoreCompiler().compile(pieceID: "crossing", musicXML: Data(xml.utf8))
+
+        XCTAssertEqual(score.lines.map(\.staff), [1, 2])
+        XCTAssertEqual(Set(score.lines.map(\.voice)), ["1"])
+        let entry = try XCTUnwrap(
+            score.report.entries.first { $0.kind == "voice split across staves" }
+        )
+        XCTAssertEqual(entry.category, .structuralFallback)
+        XCTAssertEqual(entry.occurrenceCount, 2, "one per resulting line")
+    }
+
+    func testAnOrdinaryTwoStaffPianoPartIsNotReportedAsCrossingStaves() throws {
+        let score = try ScoreCompiler().compile(
+            pieceID: "fugue",
+            musicXML: MusicXMLScoreFixtures.keyboardFugueExposition()
+        )
+        XCTAssertFalse(score.report.mentions(kind: "voice split across staves"))
+    }
+
     // MARK: Default names
 
     func testASingleLinePartIsNamedAfterTheInstrumentAlone() {

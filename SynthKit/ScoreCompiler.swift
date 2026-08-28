@@ -234,6 +234,10 @@ private struct Compilation {
 
     var partNames: [String: String] = [:]
 
+    /// Part identifiers already claimed, so no two parts can mint the same
+    /// line identity.
+    var usedPartIDs: Set<String> = []
+
     struct LineKey: Hashable {
         let partIndex: Int
         let partID: String
@@ -282,12 +286,15 @@ private struct Compilation {
         let playbackMeasures = buildPlaybackMeasures(expanded, sourceMeasures: sourceMeasures)
         let tempoMap = buildTempoMap(playbackMeasures, sourceMeasures: sourceMeasures)
 
+        let lines = buildLines()
+        reportVoicesSplitAcrossStaves(lines)
+
         return CompiledScore(
             pieceID: pieceID,
             contentSHA256: contentSHA256,
             ticksPerQuarter: ticksPerQuarter,
             workTitle: root.child("work")?.childText("work-title") ?? root.childText("movement-title"),
-            lines: buildLines(),
+            lines: lines,
             sourceMeasures: sourceMeasures,
             playbackMeasures: playbackMeasures,
             tempoMap: tempoMap,
@@ -359,7 +366,7 @@ private struct Compilation {
     // MARK: Part reading
 
     private mutating func readPart(_ part: MusicXMLElement, partIndex: Int) {
-        let partID = part.attribute("id") ?? "P\(partIndex + 1)"
+        let partID = effectivePartID(of: part, partIndex: partIndex)
         var state = PartState(divisions: 1)
 
         for (measureIndex, measure) in part.childrenNamed("measure").enumerated() {
@@ -372,6 +379,35 @@ private struct Compilation {
                 state: &state
             )
         }
+    }
+
+    /// The identifier this part's lines are derived from, guaranteed unique
+    /// within the score.
+    ///
+    /// `ScoreLineID` is the key a preset is stored against, and it is built
+    /// from `(partID, staff, voice)`. A file with two `<part id="P2">`
+    /// elements — or an id-less part whose positional fallback happens to
+    /// collide with a real id — would otherwise mint one identifier for two
+    /// different lines, and one line's sound would silently follow the other.
+    /// Uniqueness here is what stops that.
+    private mutating func effectivePartID(of part: MusicXMLElement, partIndex: Int) -> String {
+        let declared = part.attribute("id") ?? "P\(partIndex + 1)"
+        guard usedPartIDs.contains(declared) else {
+            usedPartIDs.insert(declared)
+            return declared
+        }
+
+        let disambiguated = "\(declared)#\(partIndex + 1)"
+        usedPartIDs.insert(disambiguated)
+        partNames[disambiguated] = partNames[declared]
+        report.record(
+            .structuralFallback,
+            kind: "duplicate part identifier",
+            at: ScoreLocation(partID: declared, partName: partNames[declared]),
+            detail: "two parts share the identifier “\(declared)”; this one is treated as "
+                + "“\(disambiguated)” so their lines stay distinct"
+        )
+        return disambiguated
     }
 
     /// Everything that carries forward from one measure to the next inside one
@@ -1082,6 +1118,32 @@ private struct Compilation {
                     lineCount: lineCountByPart[key.partID] ?? 1
                 ),
                 notes: notes
+            )
+        }
+    }
+
+    /// Records the one place the compiler quietly changes what the score
+    /// means: a voice that crosses between staves.
+    ///
+    /// A line is `(part, staff, voice)`, so a pianist's right hand that dips
+    /// into the bass staff for two bars arrives as two lines the owner will be
+    /// asked to assign separately. Splitting is the safer reading — merging
+    /// would guess that two staves' voice 1 are one player — but it is a
+    /// decision, and a decision the owner cannot see is exactly what REQ-014
+    /// exists to prevent.
+    private mutating func reportVoicesSplitAcrossStaves(_ lines: [ScoreLine]) {
+        var stavesByVoice: [String: Set<Int>] = [:]
+        for line in lines {
+            stavesByVoice["\(line.partID)\u{1F}\(line.voice)", default: []].insert(line.staff)
+        }
+
+        for line in lines where (stavesByVoice["\(line.partID)\u{1F}\(line.voice)"]?.count ?? 0) > 1 {
+            report.record(
+                .structuralFallback,
+                kind: "voice split across staves",
+                at: ScoreLocation(partID: line.partID, partName: line.partName),
+                detail: "voice \(line.voice) appears on more than one staff and becomes one line "
+                    + "per staff, so each can be assigned its own sound"
             )
         }
     }

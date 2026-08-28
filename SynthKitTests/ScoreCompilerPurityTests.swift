@@ -4,16 +4,64 @@ import XCTest
 /// The purity invariant PLY001 has to hold: compilation reads no clock, draws
 /// no random numbers, and consults no environment.
 ///
-/// Two independent guards, in the same shape as the no-network baseline:
+/// Three independent guards, because each one alone has a hole:
 ///
-/// 1. behaviour — the same bytes compile to the same model, repeatedly and
-///    under conditions that would expose a hidden dependency; and
-/// 2. source — no file in the compiler even mentions a nondeterministic API.
+/// 1. **frozen model digests** — the exact SHA-256 of `canonicalData()` for
+///    three fixtures. This is the only guard that spans process launches, and
+///    it is the one the acceptance criterion actually asks for;
+/// 2. **behaviour** — the same bytes compile to the same model under repeat,
+///    interleaved and concurrent use; and
+/// 3. **source** — no file in the compiler even mentions a nondeterministic
+///    API.
 ///
-/// The behavioural guard alone would pass a compiler that only reads the clock
-/// once a day; the source guard alone would pass one that hides the call
-/// behind a helper. Together they are hard to defeat by accident.
+/// Why (1) has to exist: Swift seeds `Hasher` **once per process**, so
+/// `Dictionary` and `Set` iteration order is stable within a run and varies
+/// only between launches. Every in-process byte-equality check on this
+/// branch — here and in `ScoreCompilerTests` — would therefore pass a
+/// compiler whose output came straight out of an unsorted dictionary.
+/// A digest a fresh test process must reproduce is what closes that.
 final class ScoreCompilerPurityTests: XCTestCase {
+    /// The canonical model bytes each fixture must always produce.
+    ///
+    /// These are not magic constants to re-record when they fail. They fail
+    /// for exactly two reasons:
+    ///
+    /// - the model gained, lost or reordered a field, in which case the new
+    ///   digests are correct and the change is deliberate; or
+    /// - something nondeterministic reached the output path, in which case the
+    ///   digest will differ between launches rather than consistently, and
+    ///   the fix is to sort it.
+    ///
+    /// Tell them apart by running the suite twice in two processes: a
+    /// deliberate change gives the same wrong digest twice.
+    private static let frozenModelDigests: [String: String] = [
+        "repeatsVoltasAndDaCapo": "1e183de8f7940725b5fbdb6d791c0450aeed99f39d16282cb0f90bbbf368b266",
+        "keyboardFugueExposition": "a2d5cef0a066a541e4213204f282942254a5d45cdfd7995d97928364159f73ce",
+        "tempoChangesAndFermata": "bc3ca2f1b71cd8d1bdaeb7a1d5cdc761209722845608891d00cf580b5cac6145"
+    ]
+
+    func testTheCompiledModelBytesAreFrozenAcrossProcesses() throws {
+        let fixtures: [(name: String, data: Data)] = [
+            ("repeatsVoltasAndDaCapo", MusicXMLScoreFixtures.repeatsVoltasAndDaCapo()),
+            ("keyboardFugueExposition", MusicXMLScoreFixtures.keyboardFugueExposition()),
+            ("tempoChangesAndFermata", MusicXMLScoreFixtures.tempoChangesAndFermata())
+        ]
+
+        let compiler = ScoreCompiler()
+        for fixture in fixtures {
+            let score = try compiler.compile(pieceID: "frozen", musicXML: fixture.data)
+            let digest = MusicXMLImporter.sha256Hex(try score.canonicalData())
+            XCTAssertEqual(
+                digest,
+                Self.frozenModelDigests[fixture.name],
+                "\(fixture.name): canonical model bytes changed. If the model was changed "
+                    + "deliberately, run the suite twice and update this digest only when both "
+                    + "runs agree; if the two runs disagree, something unsorted reached the "
+                    + "output path."
+            )
+        }
+    }
+
     /// Every source file that makes up the compilation path.
     private static let compilerSourceFiles = [
         "MusicXMLDocument.swift",
@@ -89,8 +137,12 @@ final class ScoreCompilerPurityTests: XCTestCase {
     }
 
     /// Compiling the same bytes many times in a row, interleaved with other
-    /// compilations, must not drift. A cache keyed on something mutable, or a
-    /// dictionary iterated without sorting, would show up here.
+    /// compilations, must not drift.
+    ///
+    /// In-process only — a hash seed is shared by everything in one launch, so
+    /// this catches a mutable cache or state leaking between calls, and
+    /// `testTheCompiledModelBytesAreFrozenAcrossProcesses` is what catches
+    /// unsorted output.
     func testRepeatedInterleavedCompilationsNeverDrift() throws {
         let compiler = ScoreCompiler()
         let quartet = MusicXMLScoreFixtures.stringQuartetMovement()
@@ -110,7 +162,8 @@ final class ScoreCompilerPurityTests: XCTestCase {
 
     /// Two compilers, used from different tasks at the same time, must agree.
     /// `ScoreCompiler` is `Sendable` and holds nothing; this is what that
-    /// claim means in practice.
+    /// claim means in practice. Also in-process — task groups share the
+    /// launch, and therefore the hash seed.
     func testConcurrentCompilationsAgree() async throws {
         let data = MusicXMLScoreFixtures.orchestralExcerpt(partCount: 6, measureCount: 8)
         let expected = try ScoreCompiler().compile(pieceID: "p", musicXML: data).canonicalData()

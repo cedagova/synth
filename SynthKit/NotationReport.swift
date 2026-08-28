@@ -152,13 +152,10 @@ struct NotationReportCollector {
         let location: ScoreLocation
         let detail: String?
         var count: Int
-        /// Insertion order, so the fold is stable before sorting.
-        let sequence: Int
     }
 
     private var findings: [Key: Accumulated] = [:]
     private var overflowKinds: Set<Key> = []
-    private var nextSequence = 0
 
     /// Records one occurrence.
     mutating func record(
@@ -176,13 +173,7 @@ struct NotationReportCollector {
             overflowKinds.insert(key)
             return
         }
-        findings[key] = Accumulated(
-            location: location,
-            detail: detail,
-            count: 1,
-            sequence: nextSequence
-        )
-        nextSequence += 1
+        findings[key] = Accumulated(location: location, detail: detail, count: 1)
     }
 
     /// The finished report, canonically ordered.

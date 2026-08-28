@@ -220,6 +220,14 @@ struct ScoreStructureExpander {
     /// The forward-repeat measure is entered exactly once per pass, so its own
     /// play count *is* the pass number. Outside any repeat, everything is
     /// pass 1.
+    ///
+    /// One consequence worth naming, because conventions differ on it: a
+    /// `D.C.` or `D.S.` clears the repeat stack, so the pass after a jump is
+    /// pass 1 and a volta pair on that pass plays the **first** ending and
+    /// skips the second. That is the "senza repetizione" reading — the jump
+    /// pass is not a repeat, so it takes the ending the piece starts with.
+    /// In practice a `Fine` almost always ends the piece before any volta is
+    /// reached again; this is the behaviour when one does not.
     private func currentPass(repeatStack: [Int], playCount: [Int]) -> Int {
         guard let start = repeatStack.last else { return 1 }
         return max(1, playCount[start])

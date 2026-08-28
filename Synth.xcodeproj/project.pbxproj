@@ -59,6 +59,7 @@
 			publicHeaders = (
 				SynthKit.h,
 				SynthAudioCore.h,
+				SynthPatchEngine.h,
 			);
 			target = AA00000000000000000011 /* SynthKit */;
 		};

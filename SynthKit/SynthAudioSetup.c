@@ -18,22 +18,10 @@
 #include <math.h>
 #include <mach/mach_time.h>
 
-static int32_t synth_tables_ready = 0;
-
-void synth_audio_core_prepare_tables(void) {
-    if (synth_tables_ready) { return; }
-    for (int32_t i = 0; i < SYNTH_SINE_TABLE_SIZE; i++) {
-        synth_sine_table[i] = (float)sin(2.0 * M_PI * (double)i / (double)SYNTH_SINE_TABLE_SIZE);
-    }
-    synth_tables_ready = 1;
-}
-
 SynthRenderEngine *synth_engine_create(int32_t lineCount,
                                        int32_t maximumFrameCount,
                                        double sampleRate) {
     if (lineCount < 0 || maximumFrameCount <= 0 || sampleRate <= 0.0) { return NULL; }
-
-    synth_audio_core_prepare_tables();
 
     SynthRenderEngine *engine = (SynthRenderEngine *)calloc(1, sizeof(SynthRenderEngine));
     if (engine == NULL) { return NULL; }

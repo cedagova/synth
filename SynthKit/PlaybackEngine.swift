@@ -88,7 +88,7 @@ public final class PlaybackEngine: @unchecked Sendable {
         case lostWithNoFallback(previousDeviceName: String)
     }
 
-    public init(voiceProvider: LineVoiceProvider = DefaultSynthVoiceProvider()) {
+    public init(voiceProvider: LineVoiceProvider = SynthPatchVoiceProvider()) {
         self.voiceProvider = voiceProvider
     }
 
@@ -678,7 +678,7 @@ public final class PlaybackEngine: @unchecked Sendable {
     public static func renderTimelineOffline(
         _ timeline: PerformanceTimeline,
         sampleRate: Double = 48_000,
-        voiceProvider: LineVoiceProvider = DefaultSynthVoiceProvider(),
+        voiceProvider: LineVoiceProvider = SynthPatchVoiceProvider(),
         configure: (PlaybackEngine) -> Void = { _ in }
     ) throws -> RenderedAudio {
         let engine = PlaybackEngine(voiceProvider: voiceProvider)

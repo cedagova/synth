@@ -115,15 +115,25 @@ public final class SoundAuditionEngine: @unchecked Sendable {
     // MARK: The keyboard
 
     /// Press a key. `velocity` is MIDI's 1…127.
+    ///
+    /// **A key already down is not struck again.** The held set is the
+    /// authority, and it is here rather than in the editor's model because
+    /// this is where a note-on becomes audible: an on-screen key has two
+    /// activation paths and something has to be the one place that decides a
+    /// press has already happened. Returns false when the note was already
+    /// held or when the queue refused it.
     @discardableResult
     public func noteOn(_ midiNoteNumber: Int, velocity: Int = 96) -> Bool {
+        guard !heldNotes.contains(midiNoteNumber) else { return false }
         heldNotes.insert(midiNoteNumber)
         return live.post(.noteOn(note: midiNoteNumber, velocity: velocity))
     }
 
+    /// Let a key up. A key that was not down releases nothing, so a stray
+    /// release cannot cut a note somebody else is holding.
     @discardableResult
     public func noteOff(_ midiNoteNumber: Int) -> Bool {
-        heldNotes.remove(midiNoteNumber)
+        guard heldNotes.remove(midiNoteNumber) != nil else { return false }
         return live.post(.noteOff(note: midiNoteNumber))
     }
 

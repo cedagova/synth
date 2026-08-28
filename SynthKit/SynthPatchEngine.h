@@ -406,6 +406,14 @@ void synth_patch_prepare_tables(void);
  All three are **single-producer**: one control thread at a time per voice. The
  Swift side (`SynthPatchLiveVoices`) is what enforces that, and it also
  serialises them against a voice being released.
+
+ They are also **exclusive of `prepare`**. Re-preparing a voice at a new sample
+ rate rewrites its whole parameter state and discards anything staged for the
+ old rate; a publish crossing it would be racing that rewrite. Every path in
+ this app satisfies this by construction — a voice is prepared while the graph
+ is being built, on the same main thread that later publishes — but a caller
+ that moves engine construction off the main thread must say so out loud rather
+ than discover it.
 */
 
 /// Publish a complete replacement patch to a voice that may be rendering.

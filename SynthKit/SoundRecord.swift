@@ -143,6 +143,25 @@ public struct SoundEntry: Equatable, Sendable, Identifiable {
         SynthPatchVoiceProvider(patch: patch)
     }
 
+    /// What VoiceOver says a row in the sound list is.
+    ///
+    /// Here rather than inside a `View` for the reason `PieceDisplay` gives: a
+    /// sentence assembled only inside a `body` cannot be tested, and a list row
+    /// is exactly where that matters — an `AXOutline` does not vend its rows to
+    /// a walk from inside the same process, so this string is not observable
+    /// from the app's own smoke run and has to be asserted here instead.
+    ///
+    /// One sentence, not three labels: "Warm Analog Pad, Pads, one of Synth's
+    /// own sounds, read-only" rather than a name followed by an anonymous lock.
+    public var accessibilityDescription: String {
+        switch origin {
+        case .shipped:
+            return "\(name), \(category.displayName), one of Synth's own sounds, read-only"
+        case .user:
+            return "\(name), \(category.displayName), your sound"
+        }
+    }
+
     /// Ordering the library lists in: category, then name, then identity.
     ///
     /// Identity last so two sounds sharing a name still have a stable order —

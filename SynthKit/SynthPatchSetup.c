@@ -683,17 +683,38 @@ void synth_patch_derive(SynthPatchDerived *derived,
 void synth_patch_voice_update_rate(SynthPatchVoiceState *state, double sampleRate) {
     SynthPatchDerived derived;
     synth_patch_derive(&derived, &state->config, sampleRate);
+
+    /* The rate is set here, on the control thread, and nowhere else.
+       `synth_patch_voice_install` deliberately does not write it: install also
+       runs on the render thread when a published patch is taken up, and a plain
+       `double` written there and read by `synth_patch_voice_publish` here would
+       be a data race — a value-benign one, since publish only proceeds when the
+       two are already equal, but a race all the same and one a sanitiser would
+       be right to flag. Keeping the write on one thread removes it rather than
+       explaining it. */
+    state->sampleRate = derived.sampleRate;
     synth_patch_voice_install(state, &derived);
 
     synth_patch_biquad_clear(&state->equalizer.low);
     synth_patch_biquad_clear(&state->equalizer.mid);
     synth_patch_biquad_clear(&state->equalizer.high);
 
-    /* Anything staged for the old rate describes geometry this voice no longer
-       has. Drop it rather than let the render thread install it. */
-    const int32_t shared = atomic_load_explicit(&state->liveShared, memory_order_relaxed);
-    atomic_store_explicit(&state->liveShared, shared & SYNTH_LIVE_INDEX_MASK,
-                          memory_order_relaxed);
+    /*
+     Anything staged for the old rate describes geometry this voice no longer
+     has. Drop it rather than let the render thread install it.
+
+     One atomic AND rather than a load followed by a store. The two-step version
+     looks equivalent and is not: a `publish` or an `adopt` landing between the
+     load and the store would be clobbered, and with it the invariant that
+     `liveShared & 3`, `liveWriteIndex` and `liveReadIndex` are always three
+     distinct slots. That permutation is the whole reason the triple buffer is
+     safe; once two of them coincide the render thread can read a half-written
+     snapshot. No shipped path reaches this concurrently today — see the header
+     — but the fix costs one instruction and the failure it prevents would be
+     close to undebuggable.
+    */
+    atomic_fetch_and_explicit(&state->liveShared, SYNTH_LIVE_INDEX_MASK,
+                              memory_order_acq_rel);
 }
 
 #pragma mark - Live editing
@@ -702,10 +723,11 @@ int32_t synth_patch_voice_publish(SynthPatchVoiceState *state,
                                   const SynthPatchConfig *config,
                                   double sampleRate) {
     if (state == NULL || config == NULL) { return 0; }
-    /* `sampleRate` is written only by `synth_patch_voice_update_rate`, which is
-       control-thread and never concurrent with this, so reading it here is a
-       plain read rather than a race. A mismatch means the caller is holding a
-       voice from a graph that has been rebuilt underneath it. */
+    /* `state->sampleRate` is written only by `synth_patch_voice_update_rate`,
+       which is control-thread and, per the header, exclusive of this call — so
+       reading it here is a plain read rather than a race. A mismatch means the
+       caller is holding a voice from a graph that has been rebuilt underneath
+       it. */
     if (sampleRate != state->sampleRate) { return 0; }
 
     SynthPatchConfig sanitized = *config;

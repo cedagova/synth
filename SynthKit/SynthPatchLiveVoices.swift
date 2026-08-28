@@ -126,11 +126,26 @@ public final class SynthPatchLiveVoices: @unchecked Sendable {
     /// from its timeline through the render engine. Returns false when a queue
     /// was full, which a caller should report — a note-off that never arrives
     /// is a note that never stops.
+    /// How many events have been posted through this channel.
+    ///
+    /// The counterpart to `adoptionsTakenUp`, and for the same reason: it lets
+    /// a caller prove that one key press produced exactly one note-on rather
+    /// than assume it. An on-screen key has two activation paths, and "the
+    /// note sounded" is not the same claim as "the note sounded once".
+    public var postedEventCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return posted
+    }
+
+    private var posted = 0
+
     @discardableResult
     public func post(_ event: LiveEvent) -> Bool {
         lock.lock()
         defer { lock.unlock() }
 
+        posted += 1
         var delivered = true
         for address in voices.keys {
             guard let pointer = UnsafeMutableRawPointer(bitPattern: address) else { continue }

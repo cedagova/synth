@@ -123,11 +123,30 @@ private struct ParameterNumberControl: View {
 
     var body: some View {
         HStack(spacing: 8) {
+            // A stock `Slider`, left as one.
+            //
+            // Wrapping it in `.accessibilityElement()` with a hand-written
+            // adjustable action was tried, so that VoiceOver would read the
+            // cutoff as "3 kilohertz" rather than as "0.725" — SwiftUI's own
+            // value for a slider is its position along its travel, and
+            // `.accessibilityValue` does not displace it. Driving the running
+            // app showed that cure to be worse than the complaint: the control
+            // stopped being an `AXSlider` at all and became an `AXUnknown`,
+            // losing the role that tells an assistive client it is adjustable
+            // in the first place.
+            //
+            // So the slider stays a slider — labelled, hinted, adjustable by
+            // the arrow keys, reading its position — and the field beside it is
+            // where the value is stated in the units the parameter is in. The
+            // pair is what makes a parameter both findable by ear and legible;
+            // the field is also the half that is keyboard-reachable with Full
+            // Keyboard Access off.
             Slider(value: sliderBinding, in: 0...1)
                 .controlSize(.small)
                 .accessibilityLabel(parameter.accessibilityLabel)
                 .accessibilityValue(parameter.spokenValue(for: .number(number)))
-                .accessibilityHint(parameter.detail)
+                .accessibilityHint(parameter.detail
+                                   + " The field beside this slider states the value.")
 
             TextField("", text: $draft)
                 .textFieldStyle(.roundedBorder)
@@ -240,6 +259,7 @@ private struct ParameterToggleControl: View {
             .toggleStyle(.switch)
             .controlSize(.small)
             .accessibilityLabel(parameter.accessibilityLabel)
+            .accessibilityValue(parameter.displayText(for: .flag(flag)))
             .accessibilityHint(parameter.detail)
 
             Spacer(minLength: 0)

@@ -14,6 +14,18 @@ import SynthKit
 /// every shortcut permanently dead. Availability lives on the window's own
 /// controls, which are ordinary views and update correctly, and every model
 /// action below already refuses to act when it does not apply.
+///
+/// **Every shortcut here avoids one already spoken for.** The Sounds menu is
+/// the last one in the bar, so it loses every collision silently: the item
+/// stays in the menu, looks enabled, and its key simply never arrives. Driving
+/// the running app found four of these — ⇧⌘R behind Playback's Show Notation
+/// Report, ⌘T behind Go to Time, ⇧⌘Z behind Redo (SwiftUI dropped the key
+/// entirely rather than register it), and ⌥⌘↑ behind Go to Start. One of them
+/// was worse than dead: ⇧⌘⌫ was consumed by Edit's ⌘⌫ Remove Selected Piece,
+/// because AppKit matches the delete character loosely across Shift, so
+/// pressing it in the studio armed a *piece* removal that would surface the
+/// next time the owner went back to the library. `menu-bar.txt` in the smoke
+/// evidence is the dump this set was checked against.
 struct SoundCommands: Commands {
     let model: AppModel
 
@@ -39,12 +51,12 @@ struct SoundCommands: Commands {
             Button("Rename Sound…") {
                 model.studio?.beginRename()
             }
-            .keyboardShortcut("r", modifiers: [.command, .shift])
+            .keyboardShortcut("r", modifiers: .command)
 
             Button("Delete Sound…") {
                 model.studio?.requestDeletionOfSelection()
             }
-            .keyboardShortcut(.delete, modifiers: [.command, .shift])
+            .keyboardShortcut(.delete, modifiers: [.command, .option])
 
             Divider()
 
@@ -56,7 +68,7 @@ struct SoundCommands: Commands {
             Button("Revert Sound") {
                 model.studio?.editor.revert()
             }
-            .keyboardShortcut("z", modifiers: [.command, .shift])
+            .keyboardShortcut("z", modifiers: [.command, .option])
 
             Divider()
 
@@ -67,12 +79,12 @@ struct SoundCommands: Commands {
             Button("Select Next Sound") {
                 model.studio?.selectNextSound()
             }
-            .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+            .keyboardShortcut(.downArrow, modifiers: [.command, .shift])
 
             Button("Select Previous Sound") {
                 model.studio?.selectPreviousSound()
             }
-            .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+            .keyboardShortcut(.upArrow, modifiers: [.command, .shift])
 
             Button("Find in Sounds") {
                 model.studio?.requestSearchFocus()
@@ -84,7 +96,7 @@ struct SoundCommands: Commands {
             Button("Play Test Chord") {
                 model.studio?.editor.playTestChord()
             }
-            .keyboardShortcut("t", modifiers: .command)
+            .keyboardShortcut("t", modifiers: [.command, .option])
 
             Button("All Test Notes Off") {
                 model.studio?.editor.releaseEverything()

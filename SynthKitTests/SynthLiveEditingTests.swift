@@ -581,3 +581,188 @@ final class SynthLiveEditingTests: XCTestCase {
         )
     }
 }
+
+/// Issue #19: the two things a test keyboard has to get right, at the layer
+/// that owns them.
+///
+/// The editor's on-screen key has two activation paths — a `Button`, which is
+/// what the keyboard and VoiceOver reach, and a drag gesture, which is what
+/// gives press-and-hold. A pointer click runs both, and driving the running app
+/// showed that striking the note twice. The view arbitrates between them, but
+/// the *authority* on whether a key is already down is here, in the audition
+/// engine, because this is where a note-on becomes audible.
+@MainActor
+final class SoundAuditionKeyboardTests: XCTestCase {
+    private func makeEngine() -> (SoundAuditionEngine, SynthPatchLiveVoices) {
+        let live = SynthPatchLiveVoices(patch: .defaultVoice)
+        return (SoundAuditionEngine(live: live), live)
+    }
+
+    /// One press, one release, nothing left holding — and exactly two events.
+    func testOnePressAndReleaseStrikesTheNoteExactlyOnce() {
+        let (engine, live) = makeEngine()
+
+        XCTAssertTrue(engine.noteOn(60, velocity: 100))
+        XCTAssertEqual(engine.soundingNotes, [60])
+        XCTAssertEqual(live.postedEventCount, 1)
+
+        XCTAssertTrue(engine.noteOff(60))
+        XCTAssertTrue(engine.soundingNotes.isEmpty)
+        XCTAssertEqual(live.postedEventCount, 2)
+    }
+
+    /// The failure the view was showing: two activation paths, one key.
+    func testAKeyAlreadyDownIsNotStruckAgain() {
+        let (engine, live) = makeEngine()
+
+        XCTAssertTrue(engine.noteOn(60, velocity: 100))
+        XCTAssertFalse(engine.noteOn(60, velocity: 100), "The second press should be refused.")
+        XCTAssertEqual(live.postedEventCount, 1, "A held key was struck twice.")
+        XCTAssertEqual(engine.soundingNotes, [60])
+    }
+
+    /// A stray release cannot cut a note nobody pressed — which is what a
+    /// trailing release from the wrong activation path would otherwise be.
+    func testReleasingAKeyThatIsNotHeldDoesNothing() {
+        let (engine, live) = makeEngine()
+
+        XCTAssertFalse(engine.noteOff(60))
+        XCTAssertEqual(live.postedEventCount, 0)
+
+        engine.noteOn(60)
+        engine.noteOff(60)
+        XCTAssertFalse(engine.noteOff(60), "A second release should be refused.")
+        XCTAssertEqual(live.postedEventCount, 2)
+    }
+
+    func testAllNotesOffClearsEveryHeldKey() {
+        let (engine, live) = makeEngine()
+
+        for note in [48, 60, 64, 67] { engine.noteOn(note) }
+        XCTAssertEqual(engine.soundingNotes, [48, 60, 64, 67])
+
+        engine.allNotesOff()
+        XCTAssertTrue(engine.soundingNotes.isEmpty)
+        XCTAssertEqual(live.postedEventCount, 5)
+
+        // …and the keys are free to be pressed again afterwards.
+        XCTAssertTrue(engine.noteOn(60))
+    }
+}
+
+/// Issue #19, from review: re-enabling an effect must not replay what was left
+/// in its buffer.
+///
+/// `isEnabled` is a live parameter now, and installing a published patch
+/// deliberately does not clear the effect buffers — that is what stops an
+/// ordinary parameter move from clicking, and `testAnEditDoesNotClearTheEffect\
+/// Tail` is the test of it. The `false → true` transition is the exception: a
+/// disabled effect stops being written but keeps its contents, so switching a
+/// delay back on would otherwise return audio from whenever it was last on.
+final class SynthEffectResumeTests: XCTestCase {
+    private func loudDelayPatch(delayEnabled: Bool) -> SynthPatch {
+        var patch = SynthPatch(
+            identifier: "test.resume",
+            name: "Resume",
+            oscillators: [
+                SynthPatch.Oscillator(type: .analog, analogShape: .saw, level: 1.0),
+                SynthPatch.Oscillator(),
+                SynthPatch.Oscillator()
+            ],
+            amplitudeEnvelope: SynthPatch.Envelope(
+                attackSeconds: 0.001, decaySeconds: 0.01,
+                sustainLevel: 1.0, releaseSeconds: 0.01, curve: 0),
+            outputLevel: 0.5
+        )
+        patch.delay = SynthPatch.Delay(
+            isEnabled: delayEnabled, timeSeconds: 0.3,
+            feedback: 0.0, mix: 1.0, dampening: 0.0)
+        return patch
+    }
+
+    func testSwitchingADelayBackOnDoesNotReplayItsOldBuffer() {
+        let live = SynthPatchLiveVoices(patch: loudDelayPatch(delayEnabled: true))
+        let harness = SynthVoiceHarness(live: live)
+
+        // Fill the delay line with a loud note, then let it fall silent.
+        harness.noteOn(60, velocity: 120)
+        _ = harness.render(seconds: 0.1)
+        harness.noteOff(60)
+        _ = harness.render(seconds: 0.05)
+
+        // Off. The line stops being written and keeps whatever is in it.
+        live.apply(loudDelayPatch(delayEnabled: false))
+        let whileOff = harness.render(seconds: 0.5)
+        XCTAssertLessThan(
+            AudioRenderFixtures.peak(whileOff), 0.02,
+            "A disabled delay should not be audible at all."
+        )
+
+        // Back on, with nothing playing. Anything audible now is a ghost.
+        live.apply(loudDelayPatch(delayEnabled: true))
+        let afterResume = harness.render(seconds: 0.6)
+
+        XCTAssertLessThan(
+            AudioRenderFixtures.peak(afterResume), 1e-4,
+            "Re-enabling the delay replayed \(AudioRenderFixtures.peak(afterResume)) of audio "
+                + "from before it was switched off."
+        )
+    }
+
+    /// The same for the reverb, whose buffers are the largest and whose ghost
+    /// would be the longest.
+    func testSwitchingAReverbBackOnDoesNotReplayItsOldBuffer() {
+        func patch(reverbEnabled: Bool) -> SynthPatch {
+            var patch = loudDelayPatch(delayEnabled: false)
+            patch.reverb = SynthPatch.Reverb(
+                isEnabled: reverbEnabled, roomSize: 0.9,
+                dampening: 0.1, mix: 1.0, preDelaySeconds: 0.05)
+            return patch
+        }
+
+        let live = SynthPatchLiveVoices(patch: patch(reverbEnabled: true))
+        let harness = SynthVoiceHarness(live: live)
+
+        harness.noteOn(60, velocity: 120)
+        _ = harness.render(seconds: 0.1)
+        harness.noteOff(60)
+        _ = harness.render(seconds: 0.05)
+
+        live.apply(patch(reverbEnabled: false))
+        _ = harness.render(seconds: 0.3)
+
+        live.apply(patch(reverbEnabled: true))
+        let afterResume = harness.render(seconds: 0.5)
+
+        XCTAssertLessThan(
+            AudioRenderFixtures.peak(afterResume), 1e-4,
+            "Re-enabling the reverb replayed audio from before it was switched off."
+        )
+    }
+
+    /// …and the narrowness matters: an ordinary parameter move on an effect
+    /// that stays on must still leave its tail alone.
+    func testAnEffectThatStaysOnKeepsItsTailAcrossAParameterChange() {
+        var patch = loudDelayPatch(delayEnabled: true)
+        patch.delay.feedback = 0.6
+
+        let live = SynthPatchLiveVoices(patch: patch)
+        let harness = SynthVoiceHarness(live: live)
+
+        harness.noteOn(60, velocity: 120)
+        _ = harness.render(seconds: 0.1)
+        harness.noteOff(60)
+        _ = harness.render(seconds: 0.05)
+
+        // Move the mix — the effect stays enabled throughout.
+        var quieter = patch
+        quieter.delay.mix = 0.8
+        live.apply(quieter)
+
+        let tail = harness.render(seconds: 0.5)
+        XCTAssertGreaterThan(
+            AudioRenderFixtures.peak(tail), 0.01,
+            "Changing a delay's mix cleared its line; only enabling it should."
+        )
+    }
+}

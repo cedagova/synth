@@ -41,23 +41,33 @@ struct SoundStudioScreen: View {
                 Divider()
                 SoundEditorPane(model: model.editor, duplicateToEdit: duplicateToEdit)
             }
+            // The destructive confirmation is attached *here* rather than
+            // beside the failure alert below, and that is not cosmetic. Both
+            // presentations on one view meant neither of them appeared:
+            // driving the app showed the Delete command running, the model's
+            // `pendingDeletion` set, and `NSApp.windows` reporting no sheet and
+            // no panel at all. One presentation per view, and both work.
+            //
+            // An alert rather than a `confirmationDialog` for the same reason
+            // the piece library's works: it is the presentation this screen
+            // already raises for failures, and it is the conventional shape for
+            // a destructive confirmation on macOS.
+            .alert(
+                model.pendingDeletion.map { "Delete “\($0.name)” from your sounds?" } ?? "",
+                isPresented: deletionConfirmationBinding,
+                presenting: model.pendingDeletion
+            ) { entry in
+                Button("Delete Sound", role: .destructive) { model.confirmDeletion(of: entry) }
+                Button("Cancel", role: .cancel) { model.cancelDeletion() }
+            } message: { entry in
+                Text(
+                    "This permanently removes “\(entry.name)”. Anything that was using it keeps "
+                    + "its own copy of the sound, so nothing you have already made will change."
+                )
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .safeAreaInset(edge: .bottom) { StudioStatusBar(model: model) }
-        .confirmationDialog(
-            model.pendingDeletion.map { "Delete “\($0.name)” from your sounds?" } ?? "",
-            isPresented: deletionConfirmationBinding,
-            titleVisibility: .visible,
-            presenting: model.pendingDeletion
-        ) { entry in
-            Button("Delete Sound", role: .destructive) { model.confirmDeletion(of: entry) }
-            Button("Cancel", role: .cancel) { model.cancelDeletion() }
-        } message: { entry in
-            Text(
-                "This permanently removes “\(entry.name)”. Anything that was using it keeps its "
-                + "own copy of the sound, so nothing you have already made will change."
-            )
-        }
         .alert(
             currentAlert?.title ?? "",
             isPresented: alertBinding,
@@ -169,7 +179,7 @@ private struct SoundRow: View {
         .padding(.vertical, 2)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(Self.spoken(entry))
+        .accessibilityLabel(entry.accessibilityDescription)
         .contextMenu {
             Button("Duplicate") { model.duplicate(entry) }
             Button("Rename…") { model.beginRename(of: entry) }
@@ -190,17 +200,6 @@ private struct SoundRow: View {
                 model.requestDeletionOfSelection()
             }
             .disabled(!entry.isEditable)
-        }
-    }
-
-    /// One sentence, so VoiceOver says what a sound is rather than reading a
-    /// name and then an anonymous lock.
-    static func spoken(_ entry: SoundEntry) -> String {
-        switch entry.origin {
-        case .shipped:
-            return "\(entry.name), \(entry.category.displayName), one of Synth's own sounds, read-only"
-        case .user:
-            return "\(entry.name), \(entry.category.displayName), your sound"
         }
     }
 }
@@ -312,9 +311,18 @@ private struct SoundEditorPane: View {
         }
     }
 
+    /// **A plain `VStack`, not a `LazyVStack`.**
+    ///
+    /// A lazy stack only builds the panels that are on screen, and a control
+    /// that has not been built is not in the accessibility tree and is not in
+    /// the keyboard's focus ring. Driving the running app showed exactly that:
+    /// with a lazy stack, only Oscillator 1 and 2 existed and the other thirteen
+    /// panels were unreachable by anything but scrolling to them with a mouse
+    /// first. REQ-027 is about reaching every control, so every control has to
+    /// exist. The panels are collapsible for anyone who wants the shorter page.
     private var panels: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 10) {
                 ForEach(SynthParameter.groups, id: \.name) { group in
                     ParameterPanel(
                         title: group.name,
@@ -355,7 +363,10 @@ private struct EditorHeader: View {
                     Button { duplicateToEdit() } label: {
                         Label("Duplicate to Edit", systemImage: "plus.square.on.square")
                     }
-                    .keyboardShortcut(.defaultAction)
+                    // No `.defaultAction`: the studio has a search field and a
+                    // hundred numeric fields, and Return in any of them has to
+                    // mean "commit what I typed" rather than "make a copy".
+                    // ⇧⌘D does the same thing from the keyboard.
                     .accessibilityLabel("Duplicate this sound to edit it")
                     .accessibilityHint("Synth's own sounds cannot be changed. This makes a copy "
                                        + "of your own and leaves the original as it is.")
@@ -367,9 +378,11 @@ private struct EditorHeader: View {
                     Button { model.save() } label: {
                         Label("Save", systemImage: "square.and.arrow.down")
                     }
-                    .keyboardShortcut("s", modifiers: .command)
+                    // ⌘S belongs to the menu item; declaring it here as well
+                    // gives AppKit two claims on one key.
                     .disabled(!model.hasUnsavedChanges)
                     .accessibilityLabel("Save this sound")
+                    .accessibilityHint("Also on the Sounds menu, as Command-S.")
                 }
             }
 
@@ -460,13 +473,18 @@ private struct TestKeyboard: View {
                 }
             }
 
+            // No label on the row itself: a label on a container is inherited
+            // by every child, and driving the running app showed all
+            // twenty-five keys reading back as "Test keyboard, two octaves from
+            // C3" instead of as the notes they are. `children: .contain` keeps
+            // the grouping without taking the keys' own names away.
             HStack(spacing: 2) {
                 ForEach(0..<Self.noteCount, id: \.self) { offset in
                     let note = Self.lowestNote + offset
                     KeyButton(note: note, model: model)
                 }
             }
-            .accessibilityLabel("Test keyboard, two octaves from C3")
+            .accessibilityElement(children: .contain)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -477,14 +495,34 @@ private struct KeyButton: View {
     let note: Int
     @Bindable var model: SoundEditorModel
 
+    /// Set by the drag gesture on mouse-down, so the `Button` action that
+    /// follows on mouse-up knows the pointer already played this note.
+    ///
+    /// **A key has two activation paths and a pointer click runs both.** The
+    /// `Button` is what the keyboard and VoiceOver activate; the drag gesture
+    /// is what gives press-and-hold, so a note can be sustained while a knob is
+    /// moved. Both are needed. But driving the app showed a plain click firing
+    /// each of them, which struck the note twice — a blip from the gesture's
+    /// press and release, then a half-second note from the button — on the very
+    /// first thing an owner tries, and sounding like an engine fault rather
+    /// than a routing one.
+    ///
+    /// A pointer press always delivers `onChanged` on mouse-down, before the
+    /// button's action on mouse-up, so this flag is always set in time. It is
+    /// cleared on the next main-actor turn rather than in `onEnded`, because
+    /// `onEnded` runs *before* the button action and clearing there would let
+    /// the second note through again.
+    @State private var pointerIsPlaying = false
+
     private var isBlack: Bool { [1, 3, 6, 8, 10].contains(note % 12) }
     private var isSounding: Bool { model.soundingNotes.contains(note) }
 
     var body: some View {
         Button {
-            // A click plays and releases, because a `Button` has no press-and-
-            // hold. Holding is the drag gesture below; this is what the
-            // keyboard and VoiceOver activate.
+            // Keyboard and VoiceOver only. A `Button` has no press-and-hold, so
+            // this plays and releases; the pointer's press-and-hold is the
+            // gesture below, and this stands aside when that already ran.
+            guard !pointerIsPlaying else { return }
             model.noteOn(note)
             Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(500))
@@ -510,8 +548,15 @@ private struct KeyButton: View {
         // rather than waiting for movement.
         .simultaneousGesture(
             DragGesture(minimumDistance: 0)
-                .onChanged { _ in model.noteOn(note) }
-                .onEnded { _ in model.noteOff(note) }
+                .onChanged { _ in
+                    pointerIsPlaying = true
+                    model.noteOn(note)
+                }
+                .onEnded { _ in
+                    model.noteOff(note)
+                    // After the button action for this click, not before it.
+                    Task { @MainActor in pointerIsPlaying = false }
+                }
         )
         .accessibilityLabel(Self.name(of: note))
         .accessibilityValue(isSounding ? "Sounding" : "")

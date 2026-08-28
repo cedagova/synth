@@ -132,6 +132,57 @@ static inline int32_t synth_patch_mipmap(float frequency) {
 
 #pragma mark - Clearing
 
+/*
+ Silence one effect's memory.
+
+ Called only when an effect is switched back on, and that narrowness is the
+ point. Not clearing on an ordinary parameter move is what stops a cutoff or a
+ mix drag from clicking, and the effect tail surviving an edit is a property
+ worth having. But a *disabled* effect stops being written while keeping its
+ last contents, so switching delay back on would otherwise replay whatever was
+ in the line — an echo of a chord played minutes ago, at full mix, with no
+ relationship to what is sounding now. That is not a tail, it is a ghost.
+
+ The cost is a few tens of thousands of float stores on the render thread, once
+ per toggle. Bounded, allocation-free, and the same work `synth_patch_voice_clear`
+ already does from the `reset` callback on every seek.
+*/
+static void synth_patch_clear_chorus(SynthChorusState *chorus) {
+    for (int32_t index = 0; index < SYNTH_CHORUS_MAX_FRAMES; index++) {
+        chorus->buffer[index] = 0.0f;
+    }
+    chorus->writeIndex = 0;
+    chorus->lfoPhase = 0.0;
+}
+
+static void synth_patch_clear_delay(SynthDelayState *delay) {
+    for (int32_t index = 0; index < delay->lengthFrames; index++) {
+        delay->buffer[index] = 0.0f;
+    }
+    delay->writeIndex = 0;
+    delay->dampingState = 0.0f;
+}
+
+static void synth_patch_clear_reverb(SynthReverbState *reverb) {
+    for (int32_t comb = 0; comb < SYNTH_REVERB_COMB_COUNT; comb++) {
+        for (int32_t index = 0; index < reverb->combLength[comb]; index++) {
+            reverb->comb[comb][index] = 0.0f;
+        }
+        reverb->combIndex[comb] = 0;
+        reverb->combStore[comb] = 0.0f;
+    }
+    for (int32_t allpass = 0; allpass < SYNTH_REVERB_ALLPASS_COUNT; allpass++) {
+        for (int32_t index = 0; index < reverb->allpassLength[allpass]; index++) {
+            reverb->allpass[allpass][index] = 0.0f;
+        }
+        reverb->allpassIndex[allpass] = 0;
+    }
+    for (int32_t index = 0; index < reverb->preDelayLength; index++) {
+        reverb->preDelay[index] = 0.0f;
+    }
+    reverb->preDelayIndex = 0;
+}
+
 void synth_patch_voice_clear(SynthPatchVoiceState *state) {
     state->sustainPedalDown = 0;
     state->controlPhase = 0;
@@ -167,35 +218,9 @@ void synth_patch_voice_clear(SynthPatchVoiceState *state) {
     /* Only the frames each effect can actually reach are cleared. Reads are
        wrapped inside those lengths, so anything beyond them is unreachable and
        clearing it would only make a seek more expensive. */
-    for (int32_t index = 0; index < SYNTH_CHORUS_MAX_FRAMES; index++) {
-        state->chorus.buffer[index] = 0.0f;
-    }
-    state->chorus.writeIndex = 0;
-    state->chorus.lfoPhase = 0.0;
-
-    for (int32_t index = 0; index < state->delay.lengthFrames; index++) {
-        state->delay.buffer[index] = 0.0f;
-    }
-    state->delay.writeIndex = 0;
-    state->delay.dampingState = 0.0f;
-
-    for (int32_t comb = 0; comb < SYNTH_REVERB_COMB_COUNT; comb++) {
-        for (int32_t index = 0; index < state->reverb.combLength[comb]; index++) {
-            state->reverb.comb[comb][index] = 0.0f;
-        }
-        state->reverb.combIndex[comb] = 0;
-        state->reverb.combStore[comb] = 0.0f;
-    }
-    for (int32_t allpass = 0; allpass < SYNTH_REVERB_ALLPASS_COUNT; allpass++) {
-        for (int32_t index = 0; index < state->reverb.allpassLength[allpass]; index++) {
-            state->reverb.allpass[allpass][index] = 0.0f;
-        }
-        state->reverb.allpassIndex[allpass] = 0;
-    }
-    for (int32_t index = 0; index < state->reverb.preDelayLength; index++) {
-        state->reverb.preDelay[index] = 0.0f;
-    }
-    state->reverb.preDelayIndex = 0;
+    synth_patch_clear_chorus(&state->chorus);
+    synth_patch_clear_delay(&state->delay);
+    synth_patch_clear_reverb(&state->reverb);
 
     state->equalizer.low.x1 = 0.0f;  state->equalizer.low.x2 = 0.0f;
     state->equalizer.low.y1 = 0.0f;  state->equalizer.low.y2 = 0.0f;
@@ -224,8 +249,13 @@ static inline void synth_patch_load_biquad(SynthBiquad *biquad, const float coef
 
 void synth_patch_voice_install(SynthPatchVoiceState *state,
                                const SynthPatchDerived *derived) {
+    /* Which effects are being switched back on, decided before the new config
+       overwrites the old one. */
+    const int32_t chorusResumed = !state->config.chorus.isEnabled && derived->config.chorus.isEnabled;
+    const int32_t delayResumed  = !state->config.delay.isEnabled  && derived->config.delay.isEnabled;
+    const int32_t reverbResumed = !state->config.reverb.isEnabled && derived->config.reverb.isEnabled;
+
     state->config = derived->config;
-    state->sampleRate = derived->sampleRate;
     state->filterCutoffCeiling = derived->filterCutoffCeiling;
     state->activeVoiceLimit = derived->activeVoiceLimit;
 
@@ -277,6 +307,11 @@ void synth_patch_voice_install(SynthPatchVoiceState *state,
     state->reverb.feedback = derived->reverbFeedback;
     state->reverb.damping  = derived->reverbDamping;
     state->reverb.mix      = derived->reverbMix;
+
+    /* Last, so each clear runs against the geometry it is clearing. */
+    if (chorusResumed) { synth_patch_clear_chorus(&state->chorus); }
+    if (delayResumed)  { synth_patch_clear_delay(&state->delay); }
+    if (reverbResumed) { synth_patch_clear_reverb(&state->reverb); }
 }
 
 /// Take the most recently published patch, if there is one. Render thread.

@@ -59,6 +59,16 @@ public struct SynthPatchVoiceProvider: LineVoiceProvider {
     /// comb loop. Both are estimates of an exponential decay, deliberately
     /// generous, because too long only makes an export slightly longer while
     /// too short truncates the sound.
+    ///
+    /// **`RenderProgram` reads this once, when it is built.** A patch published
+    /// live afterwards does not extend the program's total frames, so editing a
+    /// much longer release or a much bigger room into a sound *while a piece is
+    /// playing through it* can leave the last note's tail cut where the
+    /// original patch's tail ended. That is inherent to changing a sound
+    /// without rebuilding the program — the rebuild is the thing this whole
+    /// mechanism exists to avoid — and it costs the end of the last note of a
+    /// preview, never a stored patch or an export, both of which build a fresh
+    /// program from the patch as it then is.
     public var releaseTailSeconds: Double {
         let patch = currentPatch
         var tail = patch.amplitudeEnvelope.releaseSeconds

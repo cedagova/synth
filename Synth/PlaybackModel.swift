@@ -222,6 +222,19 @@ final class PlaybackModel {
     /// and responsive from the first frame — which is what "long pieces must
     /// not block" means in practice.
     func prepare() async {
+        // **Preparing twice would stop the music.**
+        //
+        // This runs from the transport screen's `.task`, and that screen is now
+        // re-created every time the sound studio is opened over the piece and
+        // closed again. Compiling and realizing a second time is wasted work;
+        // handing the result to `PlaybackEngine.load` is worse than wasted,
+        // because loading a program stops the graph and rewinds. A piece that
+        // is already prepared is already prepared.
+        if case .ready = loadState {
+            startTicking()
+            return
+        }
+
         loadState = .preparing(.compiling)
         startTicking()
 

@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(SynthAudioCore)
+import SynthAudioCore
+#endif
 
 /// One complete sound: every parameter of the REQ-016 synthesis architecture,
 /// in the form the library stores and the editor edits.
@@ -31,14 +34,19 @@ public struct SynthPatch: Codable, Equatable, Sendable {
     /// refusing every patch already on a user's disk.
     public static let currentVersion = 1
 
+    // The architecture's fixed counts, read from the render core rather than
+    // repeated here. They are the same numbers either way, and writing them
+    // twice would be a footgun: a mismatch would clamp silently on the C side
+    // while this file validated against the wrong range.
+
     /// Oscillators per voice, fixed by the architecture.
-    public static let oscillatorCount = 3
+    public static let oscillatorCount = Int(SYNTH_PATCH_OSCILLATOR_COUNT)
     /// LFOs per voice, fixed by the architecture.
-    public static let lfoCount = 2
+    public static let lfoCount = Int(SYNTH_PATCH_LFO_COUNT)
     /// Modulation matrix slots, fixed by the architecture.
-    public static let modulationSlotCount = 8
+    public static let modulationSlotCount = Int(SYNTH_PATCH_MOD_SLOT_COUNT)
     /// Highest polyphony one sound may use.
-    public static let maximumPolyphony = 32
+    public static let maximumPolyphony = Int(SYNTH_PATCH_MAX_VOICES)
 
     // MARK: Identity
 

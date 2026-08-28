@@ -20,7 +20,9 @@ import SynthKit
 /// stays in the menu, looks enabled, and its key simply never arrives. Driving
 /// the running app found four of these — ⇧⌘R behind Playback's Show Notation
 /// Report, ⌘T behind Go to Time, ⇧⌘Z behind Redo (SwiftUI dropped the key
-/// entirely rather than register it), and ⌥⌘↑ behind Go to Start. One of them
+/// entirely rather than register it), and ⇧⌘↑/⇧⌘↓ behind the Library's ⌘↑/⌘↓
+/// Select Previous/Next Piece — the same loose Shift matching AppKit applies to
+/// non-character key equivalents. One of them
 /// was worse than dead: ⇧⌘⌫ was consumed by Edit's ⌘⌫ Remove Selected Piece,
 /// because AppKit matches the delete character loosely across Shift, so
 /// pressing it in the studio armed a *piece* removal that would surface the
@@ -76,15 +78,20 @@ struct SoundCommands: Commands {
             // navigation takes over once a row is selected, but nothing gets
             // you into the list from the search field unless Full Keyboard
             // Access is on; these always do (REQ-027).
+            // Control rather than Shift, because AppKit matches a
+            // non-character key equivalent loosely across Shift: ⇧⌘↑ was
+            // consumed by the Library menu's ⌘↑ Select Previous Piece, exactly
+            // as ⇧⌘⌫ was consumed by its ⌘⌫. Option is respected but ⌥⌘↑ is
+            // Playback's Go to Start, so the pair uses Control.
             Button("Select Next Sound") {
                 model.studio?.selectNextSound()
             }
-            .keyboardShortcut(.downArrow, modifiers: [.command, .shift])
+            .keyboardShortcut(.downArrow, modifiers: [.command, .control])
 
             Button("Select Previous Sound") {
                 model.studio?.selectPreviousSound()
             }
-            .keyboardShortcut(.upArrow, modifiers: [.command, .shift])
+            .keyboardShortcut(.upArrow, modifiers: [.command, .control])
 
             Button("Find in Sounds") {
                 model.studio?.requestSearchFocus()

@@ -16,6 +16,13 @@
 
 #include "SampleVoiceEngine.h"
 
+/// Low shelf corner, in hertz. Body and weight, below the fundamental of most
+/// orchestral writing so it moves the instrument's weight rather than its tune.
+#define SAMPLE_TONE_LOW_HERTZ 250.0
+
+/// High shelf corner, in hertz. Air, bow noise and hammer attack.
+#define SAMPLE_TONE_HIGH_HERTZ 4000.0
+
 #pragma mark - Envelope stages
 
 enum {
@@ -116,9 +123,46 @@ struct SampleVoiceState {
     uint64_t randomState;
     uint64_t randomSeed;
 
+    /*
+     INS003's customization, one relaxed atomic per field.
+
+     Individually atomic rather than double-buffered behind a pointer swap: each
+     is one naturally aligned word, so no value can tear, and the only thing a
+     split update costs is that two fields of one edit may land a buffer apart.
+     `SynthAudioCore.h` already states that contract for gain and pan and calls
+     the result inaudible; a shelf gain and a vibrato depth four milliseconds
+     out of step with each other is the same size of disagreement.
+    */
+    _Atomic float customToneLowGain;
+    _Atomic float customToneHighGain;
+    _Atomic float customDynamicsResponse;
+    _Atomic float customAttackSecondsAdded;
+    _Atomic float customReleaseScale;
+    _Atomic float customVibratoDepthCents;
+    _Atomic float customVibratoRateHz;
+    _Atomic float customTuningRatio;
+    _Atomic int64_t customizationAdoptions;
+
     _Atomic int64_t stolenSlots;
     _Atomic int64_t unmappedNotes;
     _Atomic int32_t peakSlots;
+
+    /*
+     Render thread only: the shelving filters and the vibrato oscillator.
+
+     One pair of one-pole states for the whole voice rather than one per slot.
+     Tone is a property of the instrument, so it belongs on the voice's summed
+     output — filtering every slot separately would cost 128 filters to produce
+     the same answer.
+    */
+    float toneLowState;
+    float toneHighState;
+    /// One-pole coefficients for the shelf corners, derived in `prepare`.
+    float toneLowCoefficient;
+    float toneHighCoefficient;
+
+    /// Vibrato phase in 0…1, advanced once per frame for the whole voice.
+    float vibratoPhase;
 };
 
 #pragma mark - The vtable's five callbacks

@@ -396,13 +396,13 @@ final class PresetMixerLiveTests: XCTestCase {
         let timeline = PerformanceRealizer().realize(score, settings: .literal)
 
         let frozen = try PlaybackEngine.renderTimelineOffline(
-            timeline, voices: performance.voiceAssignment
+            timeline, voices: performance.voiceAssignment()
         ) { performance.applyMixer(to: $0) }
 
         var byLine: [ScoreLineID: any LineVoiceProvider] = [:]
         for line in performance.lines {
             byLine[line.lineID] = SynthPatchVoiceProvider(
-                live: SynthPatchLiveVoices(patch: line.patch)
+                live: SynthPatchLiveVoices(patch: try XCTUnwrap(line.patch))
             )
         }
         let live = try PlaybackEngine.renderTimelineOffline(
@@ -477,7 +477,7 @@ final class PresetMixerLiveTests: XCTestCase {
     /// the state the panel's controls are used in.
     private func playingEngine(for score: CompiledScore) throws -> PlaybackEngine {
         let performance = try store.openActivePreset(for: score)
-        let engine = PlaybackEngine(voices: performance.voiceAssignment)
+        let engine = PlaybackEngine(voices: performance.voiceAssignment())
         try engine.setRenderMode(.offline(sampleRate: Self.sampleRate))
         try engine.load(
             timeline: PerformanceRealizer().realize(score, settings: .literal)

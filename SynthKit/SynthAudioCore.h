@@ -190,10 +190,29 @@ void synth_engine_set_line_pan(SynthRenderEngine *engine, int32_t lineIndex, flo
 void synth_engine_set_line_muted(SynthRenderEngine *engine, int32_t lineIndex, int32_t muted);
 void synth_engine_set_line_soloed(SynthRenderEngine *engine, int32_t lineIndex, int32_t soloed);
 
+/*
+ How much of this line reaches the shared room, 0…1 (D7's per-line room send).
+
+ **One hall for the whole mix, not one per line.** Every line sends into the
+ same room and the room answers once, which is both the sound an orchestra
+ makes and the affordable arrangement: eighteen private reverbs would be
+ eighteen different acoustics and three orders of magnitude more delay memory.
+ The room is fixed — there is no size or damping control — because D7's set is
+ a send, and a full reverb section would be the sampler-editor drift the issue
+ rules out.
+
+ The send is post-fader and post-mute, so silencing a line silences it in the
+ room too. Zero on every line until something asks otherwise, and the whole bus
+ is skipped while that is true, so a mix that does not use the room costs
+ exactly what it did before the room existed.
+ */
+void synth_engine_set_line_room_send(SynthRenderEngine *engine, int32_t lineIndex, float send);
+
 float   synth_engine_line_gain(const SynthRenderEngine *engine, int32_t lineIndex);
 float   synth_engine_line_pan(const SynthRenderEngine *engine, int32_t lineIndex);
 int32_t synth_engine_line_muted(const SynthRenderEngine *engine, int32_t lineIndex);
 int32_t synth_engine_line_soloed(const SynthRenderEngine *engine, int32_t lineIndex);
+float   synth_engine_line_room_send(const SynthRenderEngine *engine, int32_t lineIndex);
 
 /// Applies to the summed mix, after per-line gain and pan.
 void  synth_engine_set_master_gain(SynthRenderEngine *engine, float gain);

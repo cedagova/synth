@@ -203,7 +203,8 @@ public final class PlaybackEngine: @unchecked Sendable {
                     volume: Double(strip.gain),
                     pan: Double(strip.pan),
                     isMuted: strip.isMuted,
-                    isSoloed: strip.isSoloed
+                    isSoloed: strip.isSoloed,
+                    roomSend: Double(strip.roomSend)
                 )
             }
         }
@@ -224,6 +225,7 @@ public final class PlaybackEngine: @unchecked Sendable {
             strip.pan = Float(state.pan)
             strip.isMuted = state.isMuted
             strip.isSoloed = state.isSoloed
+            strip.roomSend = Float(state.roomSend)
         }
         masterGain = carried.masterGain
     }
@@ -444,6 +446,14 @@ public final class PlaybackEngine: @unchecked Sendable {
         public var isSoloed: Bool {
             get { synth_engine_line_soloed(engine, index) != 0 }
             nonmutating set { synth_engine_set_line_soloed(engine, index, newValue ? 1 : 0) }
+        }
+
+        /// How much of this line reaches the shared room, 0…1 (D7's per-line
+        /// room send). Zero — completely dry — until something asks otherwise,
+        /// and the engine skips the whole bus while every line is at zero.
+        public var roomSend: Float {
+            get { synth_engine_line_room_send(engine, index) }
+            nonmutating set { synth_engine_set_line_room_send(engine, index, newValue) }
         }
 
         public var decibels: Float {

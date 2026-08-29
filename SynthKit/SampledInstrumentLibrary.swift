@@ -56,13 +56,48 @@ public final class SampledInstrumentLibrary: @unchecked Sendable {
     }
 
     /// The provider for one instrument, loading it if this is the first ask.
+    ///
+    /// `customization` is bounded to what the loaded files genuinely support
+    /// before it reaches the render core (REQ-021), so a control the instrument
+    /// cannot honestly offer has no effect here even when a stored variant asks
+    /// for one.
     public func provider(
         for available: AvailableInstrument,
         articulation: URL? = nil,
-        renderSeed: UInt64? = nil
+        renderSeed: UInt64? = nil,
+        customization: InstrumentCustomization = .asRecorded,
+        live: SampledInstrumentLiveVoices? = nil
     ) throws -> SampledInstrumentVoiceProvider {
         let instrument = try instrument(for: available, articulation: articulation)
-        return SampledInstrumentVoiceProvider(instrument: instrument, renderSeed: renderSeed)
+        let capabilities = InstrumentCapabilities(
+            features: instrument.features,
+            coverage: available.coverage,
+            alternateArticulationCount: available.alternateSFZURLs.count
+        )
+        return SampledInstrumentVoiceProvider(
+            instrument: instrument,
+            renderSeed: renderSeed,
+            customization: capabilities.bounded(customization),
+            live: live
+        )
+    }
+
+    /// What one installed instrument can be customized with, measured from the
+    /// files on disk.
+    ///
+    /// Loads the instrument if it is not already loaded, because the answer is
+    /// a measurement of its regions rather than a claim from the catalog — which
+    /// is exactly the invariant issue #24 states: capability gating comes from
+    /// asset facts, never from a per-library switch.
+    public func capabilities(
+        for available: AvailableInstrument, articulation: URL? = nil
+    ) throws -> InstrumentCapabilities {
+        let instrument = try instrument(for: available, articulation: articulation)
+        return InstrumentCapabilities(
+            features: instrument.features,
+            coverage: available.coverage,
+            alternateArticulationCount: available.alternateSFZURLs.count
+        )
     }
 
     /// The loaded instrument behind one SFZ file, shared across callers.

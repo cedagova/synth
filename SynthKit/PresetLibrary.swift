@@ -401,13 +401,31 @@ public final class PresetLibrary: @unchecked Sendable, PieceDependentStore, Soun
         }
     }
 
-    /// Replaces one line's volume, pan, mute and solo. Auto-saved.
+    /// Replaces one line's volume, pan, mute, solo and room send. Auto-saved.
     @discardableResult
     public func setMixer(
         _ mixer: LineMixerState, forLine lineID: ScoreLineID, in preset: Preset
     ) throws -> Preset {
         try mutateLine(lineID, in: preset) { line in
             line.mixer = mixer
+        }
+    }
+
+    /// Records the owner's answer to "your instrument is missing — do you want
+    /// to hear something meanwhile?" (issue #24). Auto-saved.
+    ///
+    /// **Only the owner's own answer reaches this.** Nothing infers it, nothing
+    /// sets it as a convenience, and the default is `false`, so a line whose
+    /// instrument is absent stays silent until a person says otherwise. That is
+    /// the whole gate: a substitution the owner did not ask for is the state
+    /// this leaf exists to prevent, and the only way to reach `true` is a
+    /// button they pressed.
+    @discardableResult
+    public func setAcceptsSubstitution(
+        _ accepts: Bool, forLine lineID: ScoreLineID, in preset: Preset
+    ) throws -> Preset {
+        try mutateLine(lineID, in: preset) { line in
+            line.acceptsSubstitution = accepts
         }
     }
 

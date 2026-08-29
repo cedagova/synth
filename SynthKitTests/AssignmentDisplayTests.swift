@@ -128,7 +128,7 @@ final class AssignmentDisplayTests: XCTestCase {
                              mixer: LineMixerState(volume: 0.5, pan: -0.6))
         XCTAssertEqual(
             AssignmentDisplay.spokenStrip(line),
-            "Soprano, Bright Lead. Volume 6.0 decibels down, pan 60 percent left."
+            "Soprano, Bright Lead. Volume 6.0 decibels down, pan 60 percent left, dry, no room."
         )
     }
 
@@ -137,7 +137,7 @@ final class AssignmentDisplayTests: XCTestCase {
                              mixer: LineMixerState(isMuted: true))
         XCTAssertEqual(
             AssignmentDisplay.spokenStrip(line),
-            "Bass, Deep Sub, muted. Volume unity, pan centre."
+            "Bass, Deep Sub, muted. Volume unity, pan centre, dry, no room."
         )
     }
 
@@ -146,12 +146,12 @@ final class AssignmentDisplayTests: XCTestCase {
             lineID: ScoreLineID(rawValue: "p1.s1.v1"),
             name: "Tenor",
             source: .embedded(originalSoundID: "s9", name: "Doomed"),
-            patch: .defaultVoice,
+            content: .synth(.defaultVoice),
             mixer: .neutral
         )
         XCTAssertEqual(
             AssignmentDisplay.spokenStrip(line),
-            "Tenor, Doomed, embedded copy. Volume unity, pan centre."
+            "Tenor, Doomed, embedded copy. Volume unity, pan centre, dry, no room."
         )
     }
 
@@ -160,16 +160,19 @@ final class AssignmentDisplayTests: XCTestCase {
     /// The engine's rule, restated: mute wins over solo, and while anything is
     /// soloed every line that is not is silent. `LineMixerRenderTests` proves
     /// the engine behaves this way; this proves the panel says so.
+    ///
+    /// About *routing*, which is what the mixer decides. Whether a routed line
+    /// then produces sound is a separate question, below.
     func testMuteWinsOverSoloJustAsTheEngineHasIt() {
         let line = Self.line(named: "L", soundNamed: "S",
                              mixer: LineMixerState(isMuted: true, isSoloed: true))
-        XCTAssertFalse(AssignmentDisplay.isAudible(line, whileSoloing: true))
+        XCTAssertFalse(AssignmentDisplay.isRouted(line, whileSoloing: true))
     }
 
     func testAnUnsoloedLineIsSilentWhileAnythingIsSoloed() {
         let plain = Self.line(named: "L", soundNamed: "S", mixer: .neutral)
-        XCTAssertTrue(AssignmentDisplay.isAudible(plain, whileSoloing: false))
-        XCTAssertFalse(AssignmentDisplay.isAudible(plain, whileSoloing: true))
+        XCTAssertTrue(AssignmentDisplay.isRouted(plain, whileSoloing: false))
+        XCTAssertFalse(AssignmentDisplay.isRouted(plain, whileSoloing: true))
     }
 
     func testTheSummaryCountsWhatIsHeard() {
@@ -190,6 +193,62 @@ final class AssignmentDisplayTests: XCTestCase {
         lines[2] = Self.line(named: "3", soundNamed: "S", mixer: LineMixerState(isSoloed: true))
         XCTAssertEqual(AssignmentDisplay.audibleLineCount(lines), 1)
         XCTAssertEqual(AssignmentDisplay.mixSummary(lines), "4 lines · 1 soloed · 1 heard")
+    }
+
+    /// **The summary must not count a line as heard while the panel is telling
+    /// the owner it is silent.**
+    ///
+    /// A line whose instrument is not downloaded is routed — nothing muted it
+    /// and nothing is soloed over it — and produces nothing, because issue #24
+    /// requires exactly that. Folding it into "heard" made this sentence
+    /// contradict the banner directly above it, which the review caught in the
+    /// PR's own screenshot: six lines, one flagged silent, "6 heard".
+    func testTheSummaryDoesNotCountASilentLineAsHeard() {
+        var lines = (1...6).map {
+            Self.line(named: "\($0)", soundNamed: "S", mixer: .neutral)
+        }
+        lines[4] = Self.silentLine(named: "5")
+
+        XCTAssertTrue(
+            AssignmentDisplay.isRouted(lines[4], whileSoloing: false),
+            "Nothing muted it and nothing is soloed over it"
+        )
+        XCTAssertFalse(
+            AssignmentDisplay.isHeard(lines[4], whileSoloing: false),
+            "…and it is still producing nothing"
+        )
+        XCTAssertEqual(AssignmentDisplay.audibleLineCount(lines), 5)
+        XCTAssertEqual(AssignmentDisplay.silentLineCount(lines), 1)
+        XCTAssertEqual(AssignmentDisplay.mixSummary(lines), "6 lines · 1 silent · 5 heard")
+    }
+
+    /// A muted line that is *also* silent is counted once, as muted.
+    ///
+    /// It is not routed, so it is not one of the lines this leaf's new count is
+    /// about: the owner turned it off, which is a different fact from the app
+    /// having nothing to play.
+    func testAMutedSilentLineIsCountedAsMutedRatherThanTwice() {
+        var lines = (1...3).map {
+            Self.line(named: "\($0)", soundNamed: "S", mixer: .neutral)
+        }
+        lines[1] = Self.silentLine(named: "2", mixer: LineMixerState(isMuted: true))
+
+        XCTAssertEqual(AssignmentDisplay.silentLineCount(lines), 0)
+        XCTAssertEqual(AssignmentDisplay.audibleLineCount(lines), 2)
+        XCTAssertEqual(AssignmentDisplay.mixSummary(lines), "3 lines · 1 muted · 2 heard")
+    }
+
+    /// Once the owner accepts a stand-in, the line is heard again — and the
+    /// summary says so, because the stand-in really is sounding.
+    func testAcceptingAStandInPutsTheLineBackIntoTheHeardCount() {
+        var lines = (1...3).map {
+            Self.line(named: "\($0)", soundNamed: "S", mixer: .neutral)
+        }
+        lines[1] = Self.silentLine(named: "2")
+        XCTAssertEqual(AssignmentDisplay.mixSummary(lines), "3 lines · 1 silent · 2 heard")
+
+        lines[1] = Self.substitutedLine(named: "2")
+        XCTAssertEqual(AssignmentDisplay.mixSummary(lines), "3 lines · 3 heard")
     }
 
     func testTheSummaryIsHonestAboutAnEmptyPiece() {
@@ -222,6 +281,46 @@ final class AssignmentDisplayTests: XCTestCase {
 
     // MARK: Fixtures
 
+    /// A line whose instrument is not downloaded: routed, flagged, and
+    /// producing nothing.
+    private static func silentLine(
+        named name: String, mixer: LineMixerState = .neutral
+    ) -> ResolvedLine {
+        let reference = InstrumentReference(
+            libraryID: "l", instrumentID: "i", libraryName: "L", instrumentName: "I"
+        )
+        return ResolvedLine(
+            lineID: ScoreLineID(rawValue: "piece.\(name)"),
+            name: name,
+            source: .instrumentNotInstalled(soundID: reference.soundID, reference: reference),
+            content: .instrument(InstrumentVariant(reference: reference)),
+            instrumentResolution: .notInThisVersion(reference: reference),
+            advice: [.notDownloaded(instrumentName: "I", libraryName: "L")],
+            mixer: mixer
+        )
+    }
+
+    /// The same line after the owner has accepted a stand-in: routed, flagged,
+    /// and audibly playing something.
+    private static func substitutedLine(named name: String) -> ResolvedLine {
+        let reference = InstrumentReference(
+            libraryID: "l", instrumentID: "i", libraryName: "L", instrumentName: "I"
+        )
+        return ResolvedLine(
+            lineID: ScoreLineID(rawValue: "piece.\(name)"),
+            name: name,
+            source: .instrumentNotInstalled(soundID: reference.soundID, reference: reference),
+            content: .instrument(InstrumentVariant(reference: reference)),
+            instrumentResolution: .notInThisVersion(reference: reference),
+            advice: [.substituted(instrumentName: "I", substituteName: "Nylon Pluck")],
+            acceptsSubstitution: true,
+            substitute: LineSubstitute(
+                soundID: "builtin.pluck", name: "Nylon Pluck", patch: .defaultVoice
+            ),
+            mixer: .neutral
+        )
+    }
+
     private static func line(
         named name: String, soundNamed soundName: String, mixer: LineMixerState
     ) -> ResolvedLine {
@@ -229,7 +328,7 @@ final class AssignmentDisplayTests: XCTestCase {
             lineID: ScoreLineID(rawValue: "piece.\(name)"),
             name: name,
             source: .library(soundID: "sound.\(soundName)", name: soundName),
-            patch: .defaultVoice,
+            content: .synth(.defaultVoice),
             mixer: mixer
         )
     }

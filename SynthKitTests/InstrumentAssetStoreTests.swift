@@ -55,15 +55,20 @@ final class InstrumentAssetStoreTests: XCTestCase {
         )
         atFive.close()
 
-        // Now open with this build's full chain.
+        // Now open with this build's full chain. INS003 added `add_sound_kind`
+        // behind this step, so the chain from an increment-004 store is both of
+        // increment 005's migrations rather than one.
         let atSix = try SQLiteDatabase.open(at: container.databaseURL)
         try atSix.executeScript("PRAGMA foreign_keys = ON;")
         defer { atSix.close() }
         let outcomeSix = try SchemaMigrator.migrate(atSix, appVersion: "increment-005")
 
         XCTAssertEqual(outcomeSix.previousVersion, 5)
-        XCTAssertEqual(outcomeSix.currentVersion, 6)
-        XCTAssertEqual(outcomeSix.appliedMigrationNames, ["create_installed_instrument_libraries"])
+        XCTAssertEqual(outcomeSix.currentVersion, SchemaMigrator.latestVersion)
+        XCTAssertEqual(
+            outcomeSix.appliedMigrationNames,
+            ["create_installed_instrument_libraries", "add_sound_kind"]
+        )
 
         // Everything increment 004 wrote is exactly where it was.
         XCTAssertEqual(try atSix.scalarInt("SELECT count(*) FROM pieces;"), 1)

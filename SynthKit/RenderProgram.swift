@@ -31,6 +31,23 @@ public final class RenderProgram: @unchecked Sendable {
     private let voices: [LineVoiceInstance]
     private var isDestroyed = false
 
+    /// Lines whose sound meant to build a voice and could not, so they render
+    /// silence nobody asked for.
+    ///
+    /// **Empty in every normal run, and the program has to be able to say so
+    /// when it is not.** A sampler's voice is one small allocation, so this only
+    /// moves under real memory exhaustion — but when it does, the owner assigned
+    /// a cello and is hearing nothing. INS002 deliberately chose silence over
+    /// quietly substituting a synth patch there, because an unasked-for
+    /// substitute is the end state issue #24 gates; recording which lines it
+    /// happened to is what lets INS003 flag them instead of leaving the owner to
+    /// discover it by listening.
+    ///
+    /// Deliberately *not* the same as "this line renders silence": a line whose
+    /// instrument is not downloaded is quiet on purpose and carries its own
+    /// sentence already.
+    public let unbuiltVoiceLineIDs: [ScoreLineID]
+
     /// How long this program's voices may ring after the last scheduled note
     /// ends, taken from the sound itself.
     ///
@@ -107,6 +124,7 @@ public final class RenderProgram: @unchecked Sendable {
         var builtVoices: [LineVoiceInstance] = []
         builtVoices.reserveCapacity(timeline.lines.count)
 
+        var unbuilt: [ScoreLineID] = []
         var lastFrame: Int64 = 0
         /// The longest tail any line's own sound asked for. With per-line
         /// assignment this is a maximum over the lines rather than one
@@ -167,7 +185,9 @@ public final class RenderProgram: @unchecked Sendable {
             var vtable = voice.vtable
             synth_engine_set_line_voice(engine, Int32(lineIndex), &vtable)
             builtVoices.append(voice)
+            if voice.didFailToBuild { unbuilt.append(line.id) }
         }
+        self.unbuiltVoiceLineIDs = unbuilt
 
         // The timeline's own total can fall short of the last sounding note —
         // a final chord rings past the last bar line — so take whichever is

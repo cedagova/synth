@@ -27,11 +27,15 @@ final class SampledVoiceHarness {
     /// also exercises rendering across a block boundary.
     private let blockFrames = 500
 
-    init(_ available: AvailableInstrument, sampleRate: Double = 44_100, renderSeed: UInt64? = nil)
-        throws {
+    init(
+        _ available: AvailableInstrument,
+        sampleRate: Double = 44_100,
+        renderSeed: UInt64? = nil,
+        customization: InstrumentCustomization = .asRecorded
+    ) throws {
         self.sampleRate = sampleRate
         self.provider = try SampledInstrumentVoiceProvider(
-            available: available, renderSeed: renderSeed
+            available: available, renderSeed: renderSeed, customization: customization
         )
         self.instance = provider.makeVoice(sampleRate: sampleRate)
         self.vtable = instance.vtable

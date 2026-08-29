@@ -29,6 +29,9 @@ public enum AssignmentDisplay {
     /// What one press of Pan Left or Pan Right moves.
     public static let panStep: Double = 0.1
 
+    /// What one press of More Room or Less Room moves (D7).
+    public static let roomSendStep: Double = 0.1
+
     /// The fader position for a stored linear gain.
     public static func decibels(forVolume volume: Double) -> Double {
         guard volume > 0 else { return minimumDecibels }
@@ -93,7 +96,52 @@ public enum AssignmentDisplay {
         case .missing:
             return "That sound is no longer in your library, so this line is playing "
                 + "Synth's default voice."
+        case .instrumentNotInstalled:
+            // Deliberately silent here: `LineInstrumentAdvice` already writes
+            // the sentence for this case, and it says considerably more than
+            // this function could — which library to download, and what the
+            // line is doing meanwhile. Two notes on one strip would be one
+            // note too many.
+            return nil
         }
+    }
+
+    // MARK: The instrument flags (issue #24)
+
+    /// Every sentence a line's flags contribute, in order.
+    ///
+    /// One string per flag rather than one joined paragraph, so the panel can
+    /// draw each with its own badge and VoiceOver reads them as separate
+    /// statements rather than as a run-on.
+    public static func adviceNotes(_ line: ResolvedLine) -> [String] {
+        line.advice.map(\.explanation)
+    }
+
+    /// The label for the button that accepts a substitute on this line, or nil
+    /// when there is nothing to offer.
+    public static func substitutionOffer(_ line: ResolvedLine) -> String? {
+        guard line.canOfferSubstitution, let substitute = line.substitute else { return nil }
+        return "Play “\(substitute.name)” here meanwhile"
+    }
+
+    /// The label for the button that takes a substitute back off a line.
+    public static func substitutionWithdrawal(_ line: ResolvedLine) -> String? {
+        guard line.acceptsSubstitution, let substitute = line.substitute else { return nil }
+        return "Stop playing “\(substitute.name)” here"
+    }
+
+    // MARK: Room send (D7)
+
+    /// `Dry`, `Room 40%` — the short form a strip has room for.
+    public static func roomSendText(_ send: Double) -> String {
+        let percent = Int((send * 100).rounded())
+        return percent <= 0 ? "Dry" : "Room \(percent)%"
+    }
+
+    /// …and the long form VoiceOver reads.
+    public static func spokenRoomSend(_ send: Double) -> String {
+        let percent = Int((send * 100).rounded())
+        return percent <= 0 ? "dry, no room" : "\(percent) percent to the room"
     }
 
     // MARK: A whole strip
@@ -101,22 +149,36 @@ public enum AssignmentDisplay {
     /// One sentence for one mixer strip.
     ///
     /// Built on `ResolvedLine.accessibilityDescription`, which ASN001 wrote for
-    /// exactly this, plus the two values a strip has that a line does not.
+    /// exactly this, plus the values a strip has that a line does not.
     public static func spokenStrip(_ line: ResolvedLine) -> String {
         "\(line.accessibilityDescription). Volume \(spokenVolume(line.mixer.volume)), "
-            + "pan \(spokenPan(line.mixer.pan))."
+            + "pan \(spokenPan(line.mixer.pan)), \(spokenRoomSend(line.mixer.roomSend))."
     }
 
     // MARK: The mix as a whole
 
-    /// True when this line reaches the output: mute wins over solo, and an
+    /// True when this line is routed to the output: mute wins over solo, and an
     /// unsoloed line is silent while anything is soloed.
     ///
-    /// The engine's rule, restated here so the panel can say how many lines are
-    /// actually being heard without asking the render thread.
-    public static func isAudible(_ line: ResolvedLine, whileSoloing isSoloing: Bool) -> Bool {
+    /// The engine's rule, restated here so the panel can say how the mixer is
+    /// set without asking the render thread. **Routed is not the same as
+    /// heard** — see `isHeard` below — and the two were the same thing only
+    /// while every line had a sound it could actually play.
+    public static func isRouted(_ line: ResolvedLine, whileSoloing isSoloing: Bool) -> Bool {
         if line.mixer.isMuted { return false }
         return isSoloing ? line.mixer.isSoloed : true
+    }
+
+    /// True when this line is producing sound.
+    ///
+    /// **Routed *and* able to play.** A line whose instrument is not
+    /// downloaded is routed — nothing is muted and nothing is soloed over it —
+    /// and produces nothing, because issue #24 requires exactly that rather
+    /// than a substitute the owner did not ask for. Counting it as heard was
+    /// this summary telling the owner six lines were sounding while the banner
+    /// directly above it named one of them as silent.
+    public static func isHeard(_ line: ResolvedLine, whileSoloing isSoloing: Bool) -> Bool {
+        isRouted(line, whileSoloing: isSoloing) && !line.isSilent
     }
 
     public static func isSoloing(_ lines: [ResolvedLine]) -> Bool {
@@ -125,11 +187,25 @@ public enum AssignmentDisplay {
 
     public static func audibleLineCount(_ lines: [ResolvedLine]) -> Int {
         let soloing = isSoloing(lines)
-        return lines.count { isAudible($0, whileSoloing: soloing) }
+        return lines.count { isHeard($0, whileSoloing: soloing) }
     }
 
-    /// `4 lines · 1 soloed · 1 heard`. The one line that says whether what the
-    /// owner is hearing is what they think they are hearing.
+    /// Lines that are routed but producing nothing, because the sound they were
+    /// given is not available to play.
+    public static func silentLineCount(_ lines: [ResolvedLine]) -> Int {
+        let soloing = isSoloing(lines)
+        return lines.count { isRouted($0, whileSoloing: soloing) && $0.isSilent }
+    }
+
+    /// `4 lines · 1 soloed · 1 heard`, and `6 lines · 1 silent · 5 heard` when a
+    /// line is routed and has nothing to play.
+    ///
+    /// **The one line that says whether what the owner is hearing is what they
+    /// think they are hearing** — which is why the silent count is here and not
+    /// only on the line. Until increment 005 a routed line always sounded, so
+    /// "heard" and "routed" were the same number; a line whose instrument is
+    /// missing is deliberately routed and deliberately silent, and folding it
+    /// into "heard" made this sentence contradict the banner above it.
     public static func mixSummary(_ lines: [ResolvedLine]) -> String {
         guard !lines.isEmpty else { return "No lines." }
 
@@ -138,6 +214,8 @@ public enum AssignmentDisplay {
         if soloed > 0 { parts.append("\(soloed) soloed") }
         let muted = lines.count { $0.mixer.isMuted }
         if muted > 0 { parts.append("\(muted) muted") }
+        let silent = silentLineCount(lines)
+        if silent > 0 { parts.append("\(silent) silent") }
         parts.append("\(audibleLineCount(lines)) heard")
         return parts.joined(separator: " · ")
     }

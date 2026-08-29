@@ -67,7 +67,7 @@ final class PresetRenderTests: XCTestCase {
         let performance = try store.openActivePreset(for: score)
         return try PlaybackEngine.renderTimelineOffline(
             timeline(score),
-            voices: performance.voiceAssignment
+            voices: performance.voiceAssignment()
         ) { engine in
             performance.applyMixer(to: engine)
         }
@@ -510,7 +510,7 @@ final class PresetRenderTests: XCTestCase {
         let realized = timeline(score)
 
         let builtThatWay = try PlaybackEngine.renderTimelineOffline(
-            realized, voices: target.voiceAssignment
+            realized, voices: target.voiceAssignment()
         ) { $0.play() }
 
         let engine = PlaybackEngine()

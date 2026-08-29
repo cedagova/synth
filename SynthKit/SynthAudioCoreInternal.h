@@ -30,6 +30,70 @@
 /// Fraction of a block's real-time deadline that counts as an overload.
 #define SYNTH_OVERLOAD_DEADLINE_FRACTION 0.85
 
+#pragma mark - The room
+
+/*
+ One shared room for the whole mix (D7's per-line room send, REQ-021).
+
+ **Shared rather than per line, because that is what a room is.** Every line
+ sends into one hall and the hall answers once, which is the sound an orchestra
+ makes and also the cheap answer: eighteen private reverbs would be eighteen
+ different halls, three orders of magnitude more delay memory, and a mix in
+ which nothing shares an acoustic. It lives beside `masterGain` for the same
+ reason — it is a property of the mix, not of any one sound.
+
+ Freeverb's mono topology, run twice with the published stereo spread, so the
+ hall has a width rather than arriving down the middle. The tunings are the
+ published values scaled to the render rate: they are mutually prime lengths
+ chosen so the combs do not reinforce each other into a metallic ring, and
+ `SynthPatchEngineInternal.h` uses the same ones for the per-patch reverb.
+
+ **It costs nothing until a line sends to it.** `synth_audio_core_render` skips
+ the whole bus while every line's send is zero, which is every piece nobody has
+ sent to the room — so REQ-013's budget is unchanged for a mix that does not
+ use this.
+*/
+#define SYNTH_ROOM_COMB_COUNT 8
+#define SYNTH_ROOM_ALLPASS_COUNT 4
+/// Longest comb (1617 frames at 44.1 kHz) scaled to the maximum sample rate,
+/// plus the stereo spread.
+#define SYNTH_ROOM_COMB_MAX_FRAMES 3648
+#define SYNTH_ROOM_ALLPASS_MAX_FRAMES 1280
+/// Highest rate the room's delay lines are sized for. Above this the room is
+/// slightly smaller than it would otherwise be, which is a far better answer
+/// than eight combs saturating to one length and ringing.
+#define SYNTH_ROOM_MAX_SAMPLE_RATE 96000.0
+
+/// How much of a line at full send reaches the hall. A send of 1 is "as much
+/// as this line's own signal", so the wet return is scaled to sit under the
+/// dry rather than swamping it.
+#define SYNTH_ROOM_RETURN_GAIN 0.36f
+
+/// Feedback and damping of the fixed hall. Around two seconds of decay at
+/// 44.1 kHz, dark enough to sit behind an orchestra rather than in front of it.
+#define SYNTH_ROOM_FEEDBACK 0.88f
+#define SYNTH_ROOM_DAMPING 0.42f
+
+/// How long the hall keeps being rendered after the last send reaches zero, in
+/// seconds.
+///
+/// Long enough to cover the decay above. Without it, pulling the last send down
+/// would stop rendering the room mid-tail and cut a ringing hall off with a
+/// step — the one audible artefact this bus could introduce, and it would
+/// happen precisely while the owner was moving the control.
+#define SYNTH_ROOM_TAIL_SECONDS 2.5
+
+typedef struct {
+    float   comb[2][SYNTH_ROOM_COMB_COUNT][SYNTH_ROOM_COMB_MAX_FRAMES];
+    int32_t combIndex[2][SYNTH_ROOM_COMB_COUNT];
+    int32_t combLength[2][SYNTH_ROOM_COMB_COUNT];
+    float   combStore[2][SYNTH_ROOM_COMB_COUNT];
+
+    float   allpass[2][SYNTH_ROOM_ALLPASS_COUNT][SYNTH_ROOM_ALLPASS_MAX_FRAMES];
+    int32_t allpassIndex[2][SYNTH_ROOM_ALLPASS_COUNT];
+    int32_t allpassLength[2][SYNTH_ROOM_ALLPASS_COUNT];
+} SynthRoomState;
+
 #pragma mark - Program
 
 typedef struct {
@@ -58,6 +122,9 @@ typedef struct {
     _Atomic float   pan;
     _Atomic int32_t muted;
     _Atomic int32_t soloed;
+    /// How much of this line reaches the shared room, 0…1. Zero for every line
+    /// until the owner asks for otherwise (D7).
+    _Atomic float   roomSend;
 
     /* Render thread only. */
     int32_t nextEventIndex;
@@ -76,6 +143,15 @@ struct SynthRenderEngine {
 
     /// One line's mono output for one sub-block.
     float   *scratchMono;
+
+    /// Everything every line sent to the room this block, before the hall.
+    /// Allocated with the engine, so the render thread never sizes it.
+    float   *scratchRoom;
+
+    /// The shared hall. Heap-allocated because it is about a third of a
+    /// megabyte and `SynthRenderEngine` is not.
+    SynthRoomState *room;
+
     int32_t  maximumFrameCount;
 
     double  sampleRate;
@@ -109,6 +185,8 @@ struct SynthRenderEngine {
     float   declickGain;
     float   declickTarget;
     float   declickStep;
+    /// Frames of hall still to render after the last send reached zero.
+    int64_t roomTailFrames;
     /// Set when a discontinuity is waiting for the fade-out to finish.
     int32_t pendingDiscontinuity;
     int64_t pendingSeekFrame;
@@ -119,5 +197,14 @@ struct SynthRenderEngine {
     /// mach_absolute_time units to nanoseconds.
     double  timebaseScale;
 };
+
+#pragma mark - Room construction
+
+/// Size the hall's delay lines for `sampleRate` and clear them.
+///
+/// Control thread only, and defined in `SynthAudioSetup.c` beside the rest of
+/// the construction — the same split that lets `RealtimeSafetyTests` scan the
+/// render core as a whole file.
+void synth_room_prepare(SynthRoomState *room, double sampleRate);
 
 #endif /* SYNTH_AUDIO_CORE_INTERNAL_H */

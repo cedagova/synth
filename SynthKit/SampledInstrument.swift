@@ -397,6 +397,24 @@ public struct SampledInstrumentFeatures: Sendable, Equatable {
     /// harp's string noise — rather than only fading the note out.
     public let hasReleaseTriggers: Bool
 
+    /// True when at least one sounding region follows the key it is played at
+    /// (`pitch_keytrack` above zero).
+    ///
+    /// **The asset fact behind INS003's pitch controls.** A patch whose every
+    /// region pins its sample to the recorded pitch — a General MIDI style
+    /// percussion map is the case in the curated set — has no pitch for a
+    /// tuning offset or a vibrato to move, so `InstrumentCapabilities` disables
+    /// both rather than offering a control that changes nothing audible.
+    public let isPitched: Bool
+
+    /// True when at least one sounding region actually stops on note-off.
+    ///
+    /// False for an instrument made entirely of one-shots, where the sample
+    /// always plays to its end whatever the notated duration — a cymbal, a
+    /// snare. Release shaping has nothing to act on there, so it is disabled
+    /// rather than shown doing nothing.
+    public let respondsToNoteOff: Bool
+
     /// True when any region loops, so a long note can be held indefinitely
     /// rather than running out of sample.
     public let hasSustainLoops: Bool
@@ -454,6 +472,12 @@ public struct SampledInstrumentFeatures: Sendable, Equatable {
         let attacks = regions.filter { $0.trigger == Int32(SampleRegionTriggerAttack.rawValue) }
         self.hasReleaseTriggers = regions.contains {
             $0.trigger == Int32(SampleRegionTriggerRelease.rawValue)
+        }
+        self.isPitched = attacks.contains { $0.pitchKeytrack > 0 }
+        // A one-shot ignores note-off by definition — `sample_voice_release_slots`
+        // skips it — so an instrument made only of one-shots never releases.
+        self.respondsToNoteOff = attacks.contains {
+            $0.loopMode != Int32(SampleLoopModeOneShot.rawValue)
         }
         self.hasSustainLoops = regions.contains { region in
             if region.loopMode == Int32(SampleLoopModeContinuous.rawValue)

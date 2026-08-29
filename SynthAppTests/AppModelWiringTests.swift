@@ -98,6 +98,87 @@ final class AppModelWiringTests: XCTestCase {
         try XCTUnwrap(model.store, "The store should be open")
     }
 
+    /// Installs one real catalog instrument into this test's own container.
+    ///
+    /// **A real catalog entry with placeholder bytes, not a fake catalog.** The
+    /// store resolves an instrument by asking this build's catalog where its
+    /// SFZ lives and then looking on disk, so writing the files that entry
+    /// names is the whole of what a download does as far as everything above
+    /// the transfer is concerned. Which is what this test needs: an instrument
+    /// the capability gate will actually measure, because a customization
+    /// control is offered only on an instrument there is something to measure.
+    @discardableResult
+    private func installFixtureCello() throws -> InstrumentReference {
+        let library = try XCTUnwrap(InstrumentCatalog.library(withIdentifier: "vsco2-ce"))
+        let coverage = try XCTUnwrap(
+            library.coverage.first { $0.identifier == "vsco2.cello.section" }
+        )
+        let root = try store().instruments.stagingArea
+            .installedURL(forLibraryID: library.identifier)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        try Self.mono16BitWave(seconds: 0.25).write(to: root.appending(path: "cello.wav"))
+        for path in coverage.allSFZPaths {
+            let url = root.appending(path: path)
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            try """
+                <group> ampeg_attack=0 ampeg_release=0.2
+                <region> sample=cello.wav lokey=36 hikey=72 pitch_keycenter=57
+                """.write(to: url, atomically: true, encoding: .utf8)
+        }
+
+        try store().instruments.recordInstall(of: library)
+        XCTAssertTrue(
+            try store().instruments.resolve(InstrumentReference(library: library, coverage: coverage))
+                .isPlayable,
+            "The fixture install should resolve as playable"
+        )
+        return InstrumentReference(library: library, coverage: coverage)
+    }
+
+    /// A quarter-second 44.1 kHz mono sine as a canonical RIFF/WAVE file.
+    ///
+    /// Written by hand rather than borrowed from `SynthKitTests`: that target's
+    /// fixtures are not visible from a host-application test bundle, and this is
+    /// forty lines against a format that has not changed since 1991.
+    private static func mono16BitWave(seconds: Double, hertz: Double = 220) -> Data {
+        let sampleRate = 44_100
+        let frames = Int(Double(sampleRate) * seconds)
+
+        var samples = Data(capacity: frames * 2)
+        for frame in 0..<frames {
+            let value = sin(2 * .pi * hertz * Double(frame) / Double(sampleRate)) * 0.4
+            let quantised = Int16(max(-32_768, min(32_767, (value * 32_767).rounded())))
+            withUnsafeBytes(of: quantised.littleEndian) { samples.append(contentsOf: $0) }
+        }
+
+        func chunk(_ identifier: String, _ payload: Data) -> Data {
+            var out = Data(identifier.utf8)
+            withUnsafeBytes(of: UInt32(payload.count).littleEndian) { out.append(contentsOf: $0) }
+            out.append(payload)
+            if payload.count % 2 == 1 { out.append(0) }
+            return out
+        }
+
+        var format = Data()
+        for value in [UInt16(1), UInt16(1)] {           // PCM, one channel
+            withUnsafeBytes(of: value.littleEndian) { format.append(contentsOf: $0) }
+        }
+        for value in [UInt32(sampleRate), UInt32(sampleRate * 2)] {  // rate, byte rate
+            withUnsafeBytes(of: value.littleEndian) { format.append(contentsOf: $0) }
+        }
+        for value in [UInt16(2), UInt16(16)] {          // block align, bit depth
+            withUnsafeBytes(of: value.littleEndian) { format.append(contentsOf: $0) }
+        }
+
+        let body = Data("WAVE".utf8) + chunk("fmt ", format) + chunk("data", samples)
+        var file = Data("RIFF".utf8)
+        withUnsafeBytes(of: UInt32(body.count).littleEndian) { file.append(contentsOf: $0) }
+        return file + body
+    }
+
     private func patch(cutoff: Double) -> SynthPatch {
         SynthPatch(
             identifier: "ignored.by.the.library",
@@ -222,16 +303,15 @@ final class AppModelWiringTests: XCTestCase {
     /// `InstrumentAssignmentTests`. Neither of those can see `AppModel`, which
     /// is the gap this file exists to close.
     func testEditingAnAssignedVariantReachesThatLineOfTheOpenPiece() async throws {
+        // Installed first: a customization control is offered only on an
+        // instrument there is something to measure, so a variant of a library
+        // the owner has not downloaded is correctly inert — which is a
+        // different claim, proved in `InstrumentAssignmentTests`.
         let playback = try await openPreparedPiece()
+        let reference = try installFixtureCello()
         let assignment = playback.assignment
         let line = try XCTUnwrap(assignment.lines.first).lineID
 
-        let reference = InstrumentReference(
-            libraryID: "vsco2-ce",
-            instrumentID: "vsco2.cello.section",
-            libraryName: "VSCO 2 Community Edition",
-            instrumentName: "Cello section"
-        )
         let variant = try store().sounds.createVariant(
             InstrumentVariant(reference: reference), named: "Darker Cello", in: .strings
         )
@@ -252,6 +332,10 @@ final class AppModelWiringTests: XCTestCase {
             "A variant must open in the instrument editor, not the synth one"
         )
         XCTAssertTrue(studio.isEditingInstrument)
+        XCTAssertTrue(
+            studio.instrumentEditor.isSupported(.toneLow),
+            "The instrument is installed, so its tone controls are live"
+        )
 
         studio.instrumentEditor.setValue(-6, for: .toneLow)
 
@@ -259,6 +343,35 @@ final class AppModelWiringTests: XCTestCase {
         XCTAssertEqual(
             try XCTUnwrap(resolved.variant).customization.toneLowDecibels, -6, accuracy: 0.001,
             "The customization edit must reach the open piece's line through AppModel's wiring"
+        )
+    }
+
+    /// …and an edit to a variant no line plays leaves the piece alone.
+    func testEditingAVariantNoLineUsesLeavesTheOpenPieceAlone() async throws {
+        let playback = try await openPreparedPiece()
+        let reference = try installFixtureCello()
+        let assignment = playback.assignment
+        let line = try XCTUnwrap(assignment.lines.first).lineID
+
+        let assigned = try store().sounds.createVariant(
+            InstrumentVariant(reference: reference), named: "Assigned Cello", in: .strings
+        )
+        let unrelated = try store().sounds.createVariant(
+            InstrumentVariant(reference: reference), named: "Unrelated Cello", in: .strings
+        )
+        assignment.refreshFromStore()
+        assignment.assign(soundID: assigned.id, toLine: line)
+
+        model.openSoundStudio()
+        let studio = try XCTUnwrap(model.studio)
+        studio.reload()
+        studio.selection = unrelated.id
+        studio.instrumentEditor.setValue(9, for: .toneHigh)
+
+        let resolved = try XCTUnwrap(assignment.lines.first { $0.lineID == line })
+        XCTAssertEqual(
+            try XCTUnwrap(resolved.variant).customization.toneHighDecibels, 0, accuracy: 0.001,
+            "Editing a variant this line does not play must not change what it plays"
         )
     }
 

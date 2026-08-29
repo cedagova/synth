@@ -120,6 +120,20 @@ public struct AudioExporter: Sendable {
         guard totalFrames > 0 else { throw AudioExportError.nothingToRender }
 
         let writer = AudioFileWriter(settings: request.settings, frameCount: totalFrames)
+
+        // Refused here, before a byte is staged, because the alternative is a
+        // header whose 32-bit size words saturate while the file keeps going —
+        // a file that reports success and then decodes wrong somewhere else.
+        // The exact length is already known, so this costs nothing.
+        guard !writer.exceedsContainerLimit else {
+            throw AudioExportError.tooLongForContainer(
+                format: request.settings.format,
+                minutes: Int((Double(totalFrames) / request.settings.sampleRate.hertz / 60).rounded()),
+                byteCount: writer.totalByteCount,
+                limitByteCount: AudioFileWriter.maximumFileByteCount
+            )
+        }
+
         let file = try staging.open(with: opener)
         defer { try? file.close() }
 
@@ -400,6 +414,12 @@ public enum AudioExportError: Error, Equatable {
     /// The graph stopped producing frames before the program's own length.
     case renderStopped(atFrame: Int64, expectedFrames: Int64)
 
+    /// The render would not fit in a WAV or AIFF container, whose size fields
+    /// are 32-bit. Refused before anything is written.
+    case tooLongForContainer(
+        format: AudioExportFormat, minutes: Int, byteCount: Int64, limitByteCount: Int64
+    )
+
     /// The ownership guard fired: the engine was touched from a second thread.
     /// Structurally unreachable; present so that it cannot become reachable
     /// silently.
@@ -425,6 +445,11 @@ extension AudioExportError: LocalizedError {
             return "Synth could not save the finished export to \(Self.display(path)). \(reason)"
         case .renderStopped(let frame, let expected):
             return "The render stopped after \(frame) of \(expected) frames."
+        case .tooLongForContainer(let format, let minutes, _, _):
+            return """
+                This piece is about \(minutes) minutes long, which is more audio than a \
+                \(format.displayName) file can hold at this sample rate and depth.
+                """
         case .engineCrossedThreads:
             return "The export's audio engine was used from more than one thread."
         }
@@ -447,6 +472,12 @@ extension AudioExportError: LocalizedError {
             return "Check that the folder still exists and export again. Nothing was written."
         case .renderStopped, .engineCrossedThreads:
             return "Try the export again. Nothing was written."
+        case .tooLongForContainer:
+            return """
+                Both WAV and AIFF store their length in 32 bits, so neither can go past \
+                4 GB. Choose a lower sample rate or 16-bit depth and export again. \
+                Nothing was written.
+                """
         }
     }
 
@@ -471,6 +502,10 @@ extension AudioExportError: LocalizedError {
 /// external drive as well as to the owner's Documents folder. It is also what
 /// `Data.write(options: .atomic)` does, which is why a save panel's grant
 /// covers it.
+///
+/// The price of being a sibling is that the staged name has to fit in the same
+/// `NAME_MAX` the destination does, with the marker and the UUID on top.
+/// `AudioExportNaming` owns both names for that reason.
 struct AudioExportStaging {
     let destination: URL
     let stagedURL: URL
@@ -496,10 +531,12 @@ struct AudioExportStaging {
             )
         }
 
-        // Dot-prefixed and uniquely named: invisible in Finder, and two exports
-        // of the same piece at once cannot collide on it.
-        let name = ".\(self.destination.lastPathComponent).synth-partial-\(UUID().uuidString)"
-        self.stagedURL = directory.appending(path: name)
+        // `AudioExportNaming` owns both this name and the one the save panel
+        // suggests, so the app cannot suggest a destination whose staged
+        // sibling is too long for the filesystem to create.
+        self.stagedURL = directory.appending(
+            path: AudioExportNaming.stagedFileName(for: self.destination.lastPathComponent)
+        )
     }
 
     func open(with opener: StagingFileOpening) throws -> AppendableFile {

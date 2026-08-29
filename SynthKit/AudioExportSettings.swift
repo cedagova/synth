@@ -121,11 +121,37 @@ public struct AudioExportSettings: Sendable, Equatable, Codable {
     }
 }
 
-/// A file name derived from a piece and a preset, safe on every filesystem.
+/// File names an export uses: the one it suggests, and the hidden sibling it
+/// stages the bytes in.
+///
+/// **Both live here, because they have to agree.** The staged name wraps the
+/// destination's own name, so its length is the destination's length plus a
+/// fixed overhead — and if the suggested name and the staged name derive their
+/// limits separately, the app can suggest a name in its own save panel whose
+/// staged sibling is then too long for the filesystem to create. Every bound
+/// below is computed from `maximumFileNameBytes`, once.
 public enum AudioExportNaming {
     /// Characters a file name may not contain, plus the ones that make a name
     /// awkward rather than illegal.
     private static let forbidden = CharacterSet(charactersIn: "/\\:?%*|\"<>\u{0}")
+
+    /// The longest file name every macOS filesystem accepts, in bytes
+    /// (`NAME_MAX`). Bytes, not characters: a title in Greek or Japanese
+    /// reaches it in a third of the characters an English one does.
+    public static let maximumFileNameBytes = 255
+
+    /// What `stagedFileName(for:)` adds around a destination's own name:
+    /// the leading dot, the `.synth-partial-` marker, and a UUID.
+    static let stagedNameOverheadBytes = 1 + ".synth-partial-".utf8.count + 36
+
+    /// The longest destination name whose staged sibling still fits.
+    ///
+    /// 203 bytes. Anything the app itself suggests is capped here, so the
+    /// staged file for a suggestion is never truncated; a longer name the owner
+    /// typed themselves is still exported, because the staged name truncates
+    /// its embedded copy rather than refusing.
+    public static let maximumSuggestedNameBytes =
+        maximumFileNameBytes - stagedNameOverheadBytes
 
     /// `"Prelude in C — Chamber.wav"`, with the preset dropped when it is the
     /// only one and the piece already says everything.
@@ -140,14 +166,39 @@ public enum AudioExportNaming {
             let preset = sanitized(presetName)
             if !preset.isEmpty { stem += " — \(preset)" }
         }
-        // Leave room for the extension inside the 255-byte limit every macOS
-        // filesystem imposes, measured in bytes because the title may be
-        // anything the owner's score named it.
-        let limit = 250 - format.fileExtension.utf8.count
-        while stem.utf8.count > limit, !stem.isEmpty { stem.removeLast() }
+        let limit = maximumSuggestedNameBytes - format.fileExtension.utf8.count - 1  // the dot
+        stem = truncated(stem, toByteCount: max(0, limit))
         stem = stem.trimmingCharacters(in: .whitespaces)
         if stem.isEmpty { stem = "Untitled piece" }
         return "\(stem).\(format.fileExtension)"
+    }
+
+    /// The hidden sibling an export stages its bytes in, for a destination
+    /// called `destinationName`.
+    ///
+    /// Dot-prefixed so it is invisible in Finder, and uniquely suffixed so two
+    /// exports of one piece at once cannot collide. **The UUID carries the
+    /// uniqueness; the embedded destination name is only there to make a
+    /// leftover file self-explaining**, so it is the part that gives way when
+    /// the total would exceed `NAME_MAX`.
+    public static func stagedFileName(
+        for destinationName: String, uniqueSuffix: String = UUID().uuidString
+    ) -> String {
+        let overhead = 1 + ".synth-partial-".utf8.count + uniqueSuffix.utf8.count
+        let room = max(0, maximumFileNameBytes - overhead)
+        let embedded = truncated(destinationName, toByteCount: room)
+        return ".\(embedded).synth-partial-\(uniqueSuffix)"
+    }
+
+    /// `text` shortened to at most `byteCount` UTF-8 bytes, never splitting a
+    /// character.
+    static func truncated(_ text: String, toByteCount byteCount: Int) -> String {
+        guard text.utf8.count > byteCount else { return text }
+        var shortened = text
+        while shortened.utf8.count > byteCount, !shortened.isEmpty {
+            shortened.removeLast()
+        }
+        return shortened
     }
 
     static func sanitized(_ text: String) -> String {

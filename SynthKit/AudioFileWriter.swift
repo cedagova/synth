@@ -15,6 +15,15 @@ import Foundation
 /// REQ-026's "equal to live playback" is a claim about samples, and a codec
 /// would make it a claim about a codec instead.
 ///
+/// **Both containers describe their sizes in 32-bit words**, so neither can
+/// describe a file past 4 GiB — a little under two hours at the top setting
+/// this app offers. `exceedsContainerLimit` says so before a byte is written,
+/// and `AudioExporter` refuses rather than emitting a header that would lie
+/// about the length of the file underneath it. Saturating the size fields and
+/// writing anyway was the first shape of this, and it was wrong for exactly the
+/// reason the rest of the export is careful: it produces a file the owner only
+/// discovers is broken by opening it somewhere else.
+///
 /// The only difference between the two is byte order and the chunk grammar.
 /// WAV is RIFF: little-endian, sizes as `UInt32`, a `fmt ` chunk and a `data`
 /// chunk. AIFF is IFF: big-endian, an 80-bit IEEE 754 extended sample rate, a
@@ -30,7 +39,28 @@ public struct AudioFileWriter {
 
     /// Total size of the finished file, header included.
     public var totalByteCount: Int64 {
-        Int64(header().count) + settings.payloadByteCount(frameCount: frameCount)
+        Int64(headerByteCount) + settings.payloadByteCount(frameCount: frameCount)
+    }
+
+    /// The largest file either container can honestly describe.
+    ///
+    /// RIFF's size field, WAVE's `data` size, IFF's `FORM` size and AIFF's
+    /// `SSND` size are all `UInt32`, so this is the same number for both.
+    public static let maximumFileByteCount = Int64(UInt32.max)
+
+    /// True when this render would not fit in the container.
+    ///
+    /// Known before the render starts, because `RenderProgram.totalFrames` is,
+    /// which is what lets the export refuse without touching the disk.
+    public var exceedsContainerLimit: Bool { totalByteCount > Self.maximumFileByteCount }
+
+    /// Size of the header, without building it — the sizes inside it do not
+    /// change its length.
+    var headerByteCount: Int {
+        switch settings.format {
+        case .wav: return 44      // "RIFF" + size + "WAVE" + fmt (8+16) + "data" + size
+        case .aiff: return 54     // "FORM" + size + "AIFF" + COMM (8+18) + SSND (8+8)
+        }
     }
 
     // MARK: Header
@@ -63,12 +93,12 @@ public struct AudioFileWriter {
         body.appendLittle(UInt32(fmt.count))
         body.append(fmt)
         body.append(Data("data".utf8))
-        body.appendLittle(UInt32(clampToUInt32(payload)))
+        body.appendLittle(sizeField(payload))
 
         var file = Data("RIFF".utf8)
         // RIFF size counts everything after this field: "WAVE", both chunk
         // headers, the fmt payload, and the samples.
-        file.appendLittle(UInt32(clampToUInt32(Int64(body.count) + payload)))
+        file.appendLittle(sizeField(Int64(body.count) + payload))
         file.append(body)
         return file
     }
@@ -80,7 +110,7 @@ public struct AudioFileWriter {
 
         var comm = Data()
         comm.appendBig(UInt16(channels))
-        comm.appendBig(UInt32(clampToUInt32(frameCount)))  // numSampleFrames
+        comm.appendBig(sizeField(frameCount))              // numSampleFrames
         comm.appendBig(UInt16(bits))
         comm.append(Self.extended80(settings.sampleRate.hertz))
 
@@ -94,12 +124,12 @@ public struct AudioFileWriter {
         body.appendBig(UInt32(comm.count))
         body.append(comm)
         body.append(Data("SSND".utf8))
-        body.appendBig(UInt32(clampToUInt32(ssndPayload)))
+        body.appendBig(sizeField(ssndPayload))
         body.appendBig(UInt32(0))                          // offset
         body.appendBig(UInt32(0))                          // blockSize
 
         var file = Data("FORM".utf8)
-        file.appendBig(UInt32(clampToUInt32(Int64(body.count) + payload)))
+        file.appendBig(sizeField(Int64(body.count) + payload))
         file.append(body)
         return file
     }
@@ -131,8 +161,15 @@ public struct AudioFileWriter {
         return Data(bytes)
     }
 
-    private func clampToUInt32(_ value: Int64) -> UInt32 {
-        UInt32(min(max(0, value), Int64(UInt32.max)))
+    /// One of the container's 32-bit size words.
+    ///
+    /// Saturating rather than trapping, and unreachable either way:
+    /// `AudioExporter` refuses an export whose `exceedsContainerLimit` is true
+    /// before the header is built, so nothing that reaches here can overflow.
+    /// That guard is the correctness; this is only what keeps a future caller
+    /// that forgets it from crashing.
+    private func sizeField(_ value: Int64) -> UInt32 {
+        UInt32(min(max(0, value), Self.maximumFileByteCount))
     }
 
     // MARK: Samples

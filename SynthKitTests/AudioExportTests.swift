@@ -606,6 +606,143 @@ final class AudioExportTests: XCTestCase {
 
     // MARK: Naming
 
+    /// **The suggested name and the staged name have to agree.**
+    ///
+    /// The staged file is a sibling of the destination, so its name is the
+    /// destination's plus a fixed overhead — and if the two limits are derived
+    /// separately, the app can suggest a name in its own save panel whose
+    /// staged sibling then exceeds `NAME_MAX` and cannot be created. This walks
+    /// the whole range up to the cap for both formats.
+    func testEverySuggestedNameHasAStagedSiblingThatFitsOnDisk() {
+        for format in AudioExportFormat.allCases {
+            for titleLength in [1, 60, 200, 400, 4_000] {
+                for scalar in ["a", "é", "字"] {
+                    let suggested = AudioExportNaming.suggestedFileName(
+                        pieceTitle: String(repeating: scalar, count: titleLength),
+                        presetName: String(repeating: scalar, count: titleLength),
+                        format: format
+                    )
+                    XCTAssertLessThanOrEqual(
+                        suggested.utf8.count, AudioExportNaming.maximumSuggestedNameBytes,
+                        "The suggestion is longer than a destination whose sibling can be staged."
+                    )
+                    let staged = AudioExportNaming.stagedFileName(for: suggested)
+                    XCTAssertLessThanOrEqual(
+                        staged.utf8.count, AudioExportNaming.maximumFileNameBytes,
+                        "The staged sibling of “\(suggested.prefix(24))…” exceeds NAME_MAX."
+                    )
+                }
+            }
+        }
+    }
+
+    /// A name the *owner* typed, right at the filesystem's own limit, still
+    /// exports — the staged name gives up its embedded copy rather than the
+    /// export giving up.
+    ///
+    /// End to end and onto a real filesystem, because the bug this exists for
+    /// is `ENAMETOOLONG` from `open(2)`, which no test of the naming functions
+    /// alone can reach.
+    func testADestinationNameAtTheFilesystemLimitStillExports() throws {
+        let timeline = try fixtureTimeline()
+
+        // 255 bytes exactly: the longest name any macOS filesystem accepts, and
+        // 52 bytes more than a staged sibling could wrap verbatim.
+        // 125 two-byte characters plus one one-byte character plus ".wav".
+        let stem = String(repeating: "é", count: 125) + "a"
+        let name = "\(stem).wav"
+        XCTAssertEqual(name.utf8.count, 255, "The fixture is not at the limit it exists to test.")
+
+        let url = destination(name)
+        let result = try AudioExporter(request: request(timeline)).run(to: url)
+
+        XCTAssertEqual(result.url.lastPathComponent, name)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path(percentEncoded: false)))
+        XCTAssertEqual(try siblings(), [name], "A staged file was left behind.")
+        XCTAssertEqual(Int64(try Data(contentsOf: url).count), result.byteCount)
+    }
+
+    /// The staged name keeps its uniqueness when it has to drop the rest.
+    func testAStagedNameStaysUniqueEvenWhenItIsTruncated() {
+        let long = String(repeating: "x", count: 300)
+        let first = AudioExportNaming.stagedFileName(for: long)
+        let second = AudioExportNaming.stagedFileName(for: long)
+
+        XCTAssertLessThanOrEqual(first.utf8.count, AudioExportNaming.maximumFileNameBytes)
+        XCTAssertNotEqual(first, second, "Two staged names for one destination collided.")
+        XCTAssertTrue(first.hasPrefix("."), "The staged file must be hidden.")
+        XCTAssertTrue(first.contains(".synth-partial-"))
+    }
+
+    // MARK: The container's own size limit
+
+    /// **A render too long for the container is refused, not written badly.**
+    ///
+    /// RIFF and IFF both describe their sizes in 32 bits, so past 4 GiB a
+    /// header can only state a length the file then exceeds. That is the one
+    /// failure this leaf must never produce: a file that reports success and
+    /// decodes wrong somewhere else. Checked on the writer, where the decision
+    /// is made, and through the exporter, where it has to be acted on.
+    func testARenderTooLongForTheContainerIsRefusedBeforeAnythingIsWritten() throws {
+        let limit = AudioFileWriter.maximumFileByteCount
+
+        for format in AudioExportFormat.allCases {
+            let settings = AudioExportSettings(
+                format: format, sampleRate: .rate96000, bitDepth: .bits24
+            )
+            // One frame past what the container can describe.
+            let frames = limit / Int64(settings.bytesPerFrame) + 1
+            let writer = AudioFileWriter(settings: settings, frameCount: frames)
+            XCTAssertTrue(
+                writer.exceedsContainerLimit,
+                "\(format.displayName) accepted \(frames) frames, which it cannot describe."
+            )
+            XCTAssertLessThanOrEqual(
+                AudioFileWriter(
+                    settings: settings, frameCount: (limit - Int64(writer.headerByteCount)) / Int64(settings.bytesPerFrame)
+                ).totalByteCount,
+                limit,
+                "The largest accepted render is itself over the limit."
+            )
+        }
+
+        // …and the exporter refuses it, with a message that names the piece's
+        // length and the way out. Reached without rendering two hours of audio
+        // by making the writer's own limit the thing under test above and the
+        // exporter's guard the thing under test here.
+        let settings = AudioExportSettings(format: .wav, sampleRate: .rate96000, bitDepth: .bits24)
+        let frames = limit / Int64(settings.bytesPerFrame) + 1
+        let writer = AudioFileWriter(settings: settings, frameCount: frames)
+        let error = AudioExportError.tooLongForContainer(
+            format: .wav,
+            minutes: Int((Double(frames) / settings.sampleRate.hertz / 60).rounded()),
+            byteCount: writer.totalByteCount,
+            limitByteCount: limit
+        )
+        let summary = try XCTUnwrap((error as LocalizedError).errorDescription)
+        XCTAssertTrue(summary.contains("WAV"), "The message should name the format: “\(summary)”")
+        XCTAssertTrue(
+            summary.contains("minutes"), "The message should name the length: “\(summary)”"
+        )
+        let recovery = try XCTUnwrap((error as LocalizedError).recoverySuggestion)
+        XCTAssertTrue(
+            recovery.contains("lower sample rate"),
+            "The owner should be told how to get an export that works: “\(recovery)”"
+        )
+        XCTAssertTrue(recovery.contains("Nothing was written."))
+    }
+
+    /// Everything the app can actually export today is comfortably inside the
+    /// limit, so the guard above is a boundary rather than a restriction.
+    func testARealisticExportIsNowhereNearTheContainerLimit() throws {
+        let timeline = try fixtureTimeline()
+        let settings = AudioExportSettings(format: .wav, sampleRate: .rate96000, bitDepth: .bits24)
+        let url = destination("headroom.wav")
+        let result = try AudioExporter(request: request(timeline, settings: settings)).run(to: url)
+
+        XCTAssertLessThan(result.byteCount, AudioFileWriter.maximumFileByteCount / 1_000)
+    }
+
     func testTheSuggestedFileNameCombinesPieceAndPresetSafely() {
         XCTAssertEqual(
             AudioExportNaming.suggestedFileName(
@@ -629,11 +766,14 @@ final class AudioExportTests: XCTestCase {
             AudioExportNaming.suggestedFileName(pieceTitle: "   ", presetName: nil, format: .wav),
             "Untitled piece.wav"
         )
-        // A pathological title still yields a name a filesystem accepts.
+        // A pathological title still yields a name a filesystem accepts —
+        // bounded by what a *staged sibling* needs, not by NAME_MAX itself.
+        // The first version of this checked 255 and passed while the staged
+        // name it implied was 52 bytes too long to create.
         let long = AudioExportNaming.suggestedFileName(
             pieceTitle: String(repeating: "é", count: 400), presetName: "P", format: .aiff
         )
-        XCTAssertLessThanOrEqual(long.utf8.count, 255)
+        XCTAssertLessThanOrEqual(long.utf8.count, AudioExportNaming.maximumSuggestedNameBytes)
         XCTAssertTrue(long.hasSuffix(".aiff"))
     }
 

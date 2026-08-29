@@ -36,7 +36,12 @@ struct ExportSheet: View {
         }
         .padding(24)
         .frame(width: 520)
-        .accessibilityLabel("Export audio")
+        // **No `.accessibilityLabel` on this container.** Driving the built app
+        // showed that a label here is inherited by every descendant, so the
+        // whole sheet came back from `NSAccessibility` as fourteen elements all
+        // called "Export audio" — the format buttons, the pickers, Close and
+        // Choose Destination indistinguishable from one another. The heading
+        // below names the sheet; each control names itself.
     }
 
     private var header: some View {

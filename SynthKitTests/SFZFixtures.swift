@@ -305,6 +305,83 @@ enum SFZFixtures {
         )
     }
 
+    /// Sixteen velocity layers with sampled releases: the shape Salamander has,
+    /// and the one INS003's dynamics-response control is gated on.
+    ///
+    /// Every layer is a constant at a different level so a rendered level says
+    /// which one sounded, and `amp_veltrack` is left at SFZ's default so the
+    /// engine's own velocity curve — the thing `dynamicsResponse` reshapes — is
+    /// what varies the loudness inside a layer.
+    static func deeplyLayeredInstrument(in root: URL) throws -> AvailableInstrument {
+        let layers = 16
+        var regions: [String] = []
+        for index in 0..<layers {
+            let name = "layer\(index).wav"
+            try writeWave(
+                constant(0.05 + 0.05 * Float(index), seconds: 2.0),
+                to: root.appending(path: name)
+            )
+            let low = index * 8 + 1
+            let high = index == layers - 1 ? 127 : (index + 1) * 8
+            regions.append(
+                "<region> sample=\(name) lokey=60 hikey=60 pitch_keycenter=60 "
+                    + "lovel=\(low) hivel=\(high)"
+            )
+        }
+        try writeWave(constant(0.04, seconds: 1.0), to: root.appending(path: "release.wav"))
+        return try writeInstrument(
+            """
+            <group> ampeg_attack=0 ampeg_release=0.2 pitch_keytrack=0
+            \(regions.joined(separator: "\n"))
+
+            <group> trigger=release ampeg_attack=0 ampeg_release=0.3 amp_veltrack=0
+              pitch_keytrack=0 rt_decay=6
+            <region> sample=release.wav lokey=60 hikey=60 pitch_keycenter=60
+            """,
+            in: root, instrumentName: "Deep Layers", dynamicLayerCount: layers,
+            alternates: ["alt.sfz"]
+        )
+    }
+
+    /// A patch made entirely of one-shots: the sample always plays to its end
+    /// and note-off does nothing, which is what a percussion map is.
+    static func oneShotInstrument(in root: URL) throws -> AvailableInstrument {
+        try writeWave(constant(0.4, seconds: 0.5), to: root.appending(path: "hit.wav"))
+        return try writeInstrument(
+            """
+            <group> ampeg_attack=0 ampeg_release=0.01 amp_veltrack=0 pitch_keytrack=0
+              loop_mode=one_shot
+            <region> sample=hit.wav lokey=60 hikey=60 pitch_keycenter=60
+            """,
+            in: root, instrumentName: "One Shots", family: .percussion
+        )
+    }
+
+    /// A pitched instrument with two velocity layers and a long sustaining
+    /// sine, for the render tests that need both a measurable pitch and a
+    /// dynamics response to reshape.
+    static func pitchedLayeredInstrument(in root: URL, sampleRate: Double = 44_100) throws
+        -> AvailableInstrument {
+        try writeWave(
+            sine(hertz: 440, seconds: 3.0, sampleRate: sampleRate),
+            to: root.appending(path: "soft440.wav"),
+            sampleRate: sampleRate
+        )
+        try writeWave(
+            sine(hertz: 440, seconds: 3.0, sampleRate: sampleRate),
+            to: root.appending(path: "loud440.wav"),
+            sampleRate: sampleRate
+        )
+        return try writeInstrument(
+            """
+            <group> ampeg_attack=0.001 ampeg_release=0.2
+            <region> sample=soft440.wav lokey=48 hikey=96 pitch_keycenter=69 lovel=1 hivel=63
+            <region> sample=loud440.wav lokey=48 hikey=96 pitch_keycenter=69 lovel=64 hivel=127
+            """,
+            in: root, instrumentName: "Pitched Layers", family: .strings, dynamicLayerCount: 2
+        )
+    }
+
     /// Keyswitched articulations, written the way VSCO 2's `-KS` files are:
     /// one `<control>` per articulation, each with its own `default_path`, and
     /// `sw_default`/`sw_lokey`/`sw_hikey`/`sw_last` on every group.

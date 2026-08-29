@@ -10,6 +10,7 @@
 		AA00000000000000000050 /* SynthKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA00000000000000000021 /* SynthKit.framework */; };
 		AA00000000000000000051 /* SynthKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = AA00000000000000000021 /* SynthKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		AA00000000000000000052 /* SynthKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA00000000000000000021 /* SynthKit.framework */; };
+		AA00000000000000000053 /* SynthKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA00000000000000000021 /* SynthKit.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -30,6 +31,7 @@
 		AA00000000000000000020 /* Synth.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Synth.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA00000000000000000021 /* SynthKit.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = SynthKit.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA00000000000000000022 /* SynthKitTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SynthKitTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA00000000000000000023 /* SynthAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SynthAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -49,6 +51,11 @@
 		AA00000000000000000032 /* SynthKitTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = SynthKitTests;
+			sourceTree = "<group>";
+		};
+		AA00000000000000000034 /* SynthAppTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = SynthAppTests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -90,6 +97,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AA0000000000000000004C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA00000000000000000053 /* SynthKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -99,6 +114,7 @@
 				AA00000000000000000030 /* Synth */,
 				AA00000000000000000031 /* SynthKit */,
 				AA00000000000000000032 /* SynthKitTests */,
+				AA00000000000000000034 /* SynthAppTests */,
 				AA00000000000000000003 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -109,6 +125,7 @@
 				AA00000000000000000020 /* Synth.app */,
 				AA00000000000000000021 /* SynthKit.framework */,
 				AA00000000000000000022 /* SynthKitTests.xctest */,
+				AA00000000000000000023 /* SynthAppTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -196,6 +213,29 @@
 			productReference = AA00000000000000000022 /* SynthKitTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		AA00000000000000000013 /* SynthAppTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA0000000000000000007C /* Build configuration list for PBXNativeTarget "SynthAppTests" */;
+			buildPhases = (
+				AA0000000000000000004B /* Sources */,
+				AA0000000000000000004C /* Frameworks */,
+				AA0000000000000000004D /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AA00000000000000000064 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				AA00000000000000000034 /* SynthAppTests */,
+			);
+			name = SynthAppTests;
+			packageProductDependencies = (
+			);
+			productName = SynthAppTests;
+			productReference = AA00000000000000000023 /* SynthAppTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -214,6 +254,10 @@
 					};
 					AA00000000000000000012 = {
 						CreatedOnToolsVersion = 16.0;
+					};
+					AA00000000000000000013 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = AA00000000000000000010;
 					};
 				};
 			};
@@ -234,6 +278,7 @@
 				AA00000000000000000010 /* Synth */,
 				AA00000000000000000011 /* SynthKit */,
 				AA00000000000000000012 /* SynthKitTests */,
+				AA00000000000000000013 /* SynthAppTests */,
 			);
 		};
 /* End PBXProject section */
@@ -254,6 +299,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		AA0000000000000000004A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA0000000000000000004D /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -284,6 +336,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AA0000000000000000004B /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -296,6 +355,11 @@
 			isa = PBXTargetDependency;
 			target = AA00000000000000000011 /* SynthKit */;
 			targetProxy = AA00000000000000000063 /* PBXContainerItemProxy */;
+		};
+		AA00000000000000000064 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AA00000000000000000010 /* Synth */;
+			targetProxy = AA00000000000000000065 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -313,6 +377,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = AA00000000000000000011;
 			remoteInfo = SynthKit;
+		};
+		AA00000000000000000065 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AA00000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AA00000000000000000010;
+			remoteInfo = Synth;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -593,6 +664,52 @@
 			};
 			name = Release;
 		};
+		AA0000000000000000007D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.cedagova.synth.SynthAppTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Synth.app/Contents/MacOS/Synth";
+			};
+			name = Debug;
+		};
+		AA0000000000000000007E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.cedagova.synth.SynthAppTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Synth.app/Contents/MacOS/Synth";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -628,6 +745,15 @@
 			buildConfigurations = (
 				AA0000000000000000007A /* Debug */,
 				AA0000000000000000007B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AA0000000000000000007C /* Build configuration list for PBXNativeTarget "SynthAppTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA0000000000000000007D /* Debug */,
+				AA0000000000000000007E /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

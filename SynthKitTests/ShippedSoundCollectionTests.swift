@@ -22,13 +22,29 @@ final class ShippedSoundCollectionTests: XCTestCase {
 
     // MARK: Presence and shape (REQ-019)
 
+    /// Increment 005 added two categories no shipped sound files under.
+    ///
+    /// Woodwinds and Percussion exist so a downloaded flute and a downloaded
+    /// timpani file where an orchestral score would look for them (REQ-020,
+    /// REQ-023). The synth collection has no counterpart for either — a "synth
+    /// woodwind" would be a lead, which is where the shipped leads already are
+    /// — so the invariant is stated as what it actually is rather than
+    /// weakened: every category *except* those two has a shipped sound, and
+    /// those two are named here so adding a third by accident fails this test.
+    static let instrumentOnlyCategories: Set<SoundCategory> = [.woodwinds, .percussion]
+
     func testTheCollectionIsPresentAndCoversEveryCategory() throws {
         XCTAssertGreaterThanOrEqual(collection.count, 8)
 
         let occupied = Set(collection.map(\.category))
         XCTAssertEqual(
-            occupied, Set(SoundCategory.allCases),
-            "Every category the library offers must have at least one shipped sound in it"
+            occupied,
+            Set(SoundCategory.allCases).subtracting(Self.instrumentOnlyCategories),
+            "Every category except the instrument-only ones must have a shipped sound in it"
+        )
+        XCTAssertTrue(
+            occupied.isDisjoint(with: Self.instrumentOnlyCategories),
+            "An instrument-only category gained a shipped sound; update the list above."
         )
 
         for category in SoundCategory.allCases {

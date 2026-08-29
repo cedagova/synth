@@ -93,16 +93,27 @@ static inline float sample_random_unit(uint64_t *state) {
 }
 
 /*
- A sine over a 0…1 phase, in four flops and no call.
+ A sine over a 0…1 phase, in a handful of flops and no call.
 
  A triangle rounded by `x(1.5 - 0.5x²)`, which is exact at -1, 0 and +1 and
  within about one percent of a sine in between. That is more than enough for a
  vibrato — the control is "how wide", and one percent of a semitone at the
  widest setting is under a cent — and it keeps the LFO off `sinf`, which is a
  library call in the innermost loop of every sampled line.
+
+ **It starts at zero and rises**, like a sine and unlike a cosine: a note whose
+ vibrato began a semitone flat and swung up to pitch would be out of tune at
+ exactly the moment the ear decides what note it is hearing.
  */
 static inline float sample_lfo_sine(float phase) {
-    const float triangle = phase < 0.5f ? phase * 4.0f - 1.0f : 3.0f - phase * 4.0f;
+    float triangle;
+    if (phase < 0.25f) {
+        triangle = phase * 4.0f;
+    } else if (phase < 0.75f) {
+        triangle = 2.0f - phase * 4.0f;
+    } else {
+        triangle = phase * 4.0f - 4.0f;
+    }
     return triangle * (1.5f - 0.5f * triangle * triangle);
 }
 

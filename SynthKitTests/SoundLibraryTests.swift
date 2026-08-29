@@ -815,7 +815,8 @@ final class SoundLibraryTests: XCTestCase {
         XCTAssertEqual(store.migrationOutcome.previousVersion, 3)
         XCTAssertEqual(store.migrationOutcome.currentVersion, SchemaMigrator.latestVersion)
         XCTAssertEqual(
-            store.migrationOutcome.appliedMigrationNames, ["create_sounds", "create_presets", "create_installed_instrument_libraries"]
+            store.migrationOutcome.appliedMigrationNames, ["create_sounds", "create_presets", "create_installed_instrument_libraries",
+             "add_sound_kind"]
         )
 
         // Nothing the previous build wrote was disturbed.
@@ -899,7 +900,7 @@ final class SoundEntryAccessibilityTests: XCTestCase {
             revision: origin == .shipped ? 0 : 1,
             createdAt: origin == .shipped ? "" : "2026-08-28T00:00:00Z",
             updatedAt: origin == .shipped ? "" : "2026-08-28T00:00:00Z",
-            patch: .defaultVoice
+            content: .synth(.defaultVoice)
         )
     }
 

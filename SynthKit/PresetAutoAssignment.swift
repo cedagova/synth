@@ -175,12 +175,40 @@ public enum PresetAutoAssignment {
         let words = (familyRules.first { $0.family == family }?.words ?? [])
             .sorted { $0.count > $1.count }
 
+        let wantsSection = namesASection(text)
         for word in words where text.contains(word) {
-            if let named = candidates.first(where: { $0.name.lowercased().contains(word) }) {
-                return named
+            let named = candidates.filter { $0.name.lowercased().contains(word) }
+            guard !named.isEmpty else { continue }
+            // Among the instruments sharing the score's word, prefer the one
+            // whose *number of players* matches what the part name implies.
+            // The curated set has both "Solo violin" and "Violin section", and
+            // handing "Violin I" a solo instrument would be a first open that
+            // sounds thin for a reason the owner cannot see.
+            if let matched = named.first(where: {
+                $0.name.localizedCaseInsensitiveContains("section") == wantsSection
+            }) {
+                return matched
             }
+            return named[0]
         }
         return candidates.first
+    }
+
+    /// True when the part name reads as more than one player.
+    ///
+    /// The three markers orchestral scores actually use: the word itself, a
+    /// desk number ("Violin I", "Violin 2"), and the plural ("Violins"). A
+    /// chamber part — "Violin", "Cello" — matches none of them and takes the
+    /// solo instrument when the catalog has one.
+    static func namesASection(_ lowercasedText: String) -> Bool {
+        if lowercasedText.contains("section") || lowercasedText.contains("ensemble") { return true }
+        for token in lowercasedText.split(whereSeparator: { !$0.isLetter && !$0.isNumber }) {
+            if token.allSatisfy(\.isNumber) { return true }
+            if ["i", "ii", "iii", "iv"].contains(String(token)) { return true }
+            // "violins", but not "brass" or "bass".
+            if token.count > 4, token.hasSuffix("s"), !token.hasSuffix("ss") { return true }
+        }
+        return false
     }
 
     /// The category this build maps a line to when the score names nothing it

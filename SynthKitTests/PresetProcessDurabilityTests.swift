@@ -79,7 +79,7 @@ final class PresetProcessDurabilityTests: XCTestCase {
         let performance = try store.openActivePreset(for: score)
         let audio = try PlaybackEngine.renderTimelineOffline(
             PerformanceRealizer().realize(score, settings: .literal),
-            voices: performance.voiceAssignment
+            voices: performance.voiceAssignment()
         ) { engine in performance.applyMixer(to: engine) }
         XCTAssertGreaterThan(audio.peak(), 0.001, "The piece rendered as silence.")
         return SHA256Digest.hexString(audio.canonicalData())

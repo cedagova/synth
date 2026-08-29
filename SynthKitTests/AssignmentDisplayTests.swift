@@ -128,7 +128,7 @@ final class AssignmentDisplayTests: XCTestCase {
                              mixer: LineMixerState(volume: 0.5, pan: -0.6))
         XCTAssertEqual(
             AssignmentDisplay.spokenStrip(line),
-            "Soprano, Bright Lead. Volume 6.0 decibels down, pan 60 percent left."
+            "Soprano, Bright Lead. Volume 6.0 decibels down, pan 60 percent left, dry, no room."
         )
     }
 
@@ -137,7 +137,7 @@ final class AssignmentDisplayTests: XCTestCase {
                              mixer: LineMixerState(isMuted: true))
         XCTAssertEqual(
             AssignmentDisplay.spokenStrip(line),
-            "Bass, Deep Sub, muted. Volume unity, pan centre."
+            "Bass, Deep Sub, muted. Volume unity, pan centre, dry, no room."
         )
     }
 
@@ -146,12 +146,12 @@ final class AssignmentDisplayTests: XCTestCase {
             lineID: ScoreLineID(rawValue: "p1.s1.v1"),
             name: "Tenor",
             source: .embedded(originalSoundID: "s9", name: "Doomed"),
-            patch: .defaultVoice,
+            content: .synth(.defaultVoice),
             mixer: .neutral
         )
         XCTAssertEqual(
             AssignmentDisplay.spokenStrip(line),
-            "Tenor, Doomed, embedded copy. Volume unity, pan centre."
+            "Tenor, Doomed, embedded copy. Volume unity, pan centre, dry, no room."
         )
     }
 
@@ -229,7 +229,7 @@ final class AssignmentDisplayTests: XCTestCase {
             lineID: ScoreLineID(rawValue: "piece.\(name)"),
             name: name,
             source: .library(soundID: "sound.\(soundName)", name: soundName),
-            patch: .defaultVoice,
+            content: .synth(.defaultVoice),
             mixer: mixer
         )
     }

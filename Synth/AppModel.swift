@@ -78,7 +78,13 @@ final class AppModel {
     }
 
     /// Held open for the app's lifetime; later leaves read and write through it.
-    private var store: LibraryStore?
+    ///
+    /// The setter stays private — nothing outside this model decides when the
+    /// store opens — while the getter is internal so `SynthAppTests` can put a
+    /// sound in the same library the app is holding and then drive the real
+    /// screens over it. Reading a test's assertions from a *second* store would
+    /// prove nothing about the one the app is using.
+    private(set) var store: LibraryStore?
 
     /// Tail of the chain of bootstrap attempts. Each new attempt waits for it,
     /// which is what keeps the database from ever being opened twice at once —
@@ -86,7 +92,19 @@ final class AppModel {
     /// only after the first attempt has already suspended.
     private var attempts: Task<Void, Never>?
 
-    nonisolated init() {}
+    /// Where the store is opened.
+    ///
+    /// Nil means `<Application Support>/Synth`, which is what the app always
+    /// uses — `SynthApp` constructs this model with no arguments. It is
+    /// injectable for exactly one reason: `SynthAppTests` drives this model for
+    /// real, and a test that bootstrapped into the owner's own container would
+    /// be writing to their library. A documented seam on one initialiser, the
+    /// same shape `SoundLibrary` uses for its clock and its identity generator.
+    private let containerOverride: AppContainer?
+
+    nonisolated init(container: AppContainer? = nil) {
+        self.containerOverride = container
+    }
 
     /// Opens the container and store, then publishes the resulting state.
     /// Never throws: every failure becomes a rendered launch error.
@@ -277,7 +295,9 @@ final class AppModel {
         state = .loading
         let appVersion = Bundle.main.synthVersionString
         do {
-            let opened = try await Self.openStore(appVersion: appVersion)
+            let opened = try await Self.openStore(
+                appVersion: appVersion, container: containerOverride
+            )
             store = opened
             state = .ready(LibraryModel(store: opened))
             prepareInstrumentsForFirstRun()
@@ -287,12 +307,14 @@ final class AppModel {
     }
 
     /// Disk work runs off the main actor so launch stays responsive.
-    private static func openStore(appVersion: String) async throws -> LibraryStore {
+    private static func openStore(
+        appVersion: String, container: AppContainer?
+    ) async throws -> LibraryStore {
         try await Task.detached(priority: .userInitiated) {
             // The preset store registers itself inside `open`, in both the
             // piece-removal cascade (REQ-003) and the sound-deletion embed hook
             // (REQ-029), so no call site can open a store without them.
-            try LibraryStore.open(appVersion: appVersion)
+            try LibraryStore.open(container: container, appVersion: appVersion)
         }.value
     }
 }

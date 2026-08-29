@@ -188,6 +188,13 @@ enum SFZFixtures {
     }
 
     // MARK: - Ready-made instruments, one per opcode family
+    //
+    // **Each writes its own SFZ file name.** They all used to write
+    // `instrument.sfz`, which is invisible until a test builds two of them in
+    // one directory — and then the second silently overwrites the first and
+    // both `AvailableInstrument`s point at the same file. A test comparing a
+    // thin patch with a deep one would have been comparing the deep one with
+    // itself.
 
     /// Key mapping and pitch: one sine sample, keycentred, spanning an octave.
     static func pitchedInstrument(in root: URL, sampleRate: Double = 44_100) throws
@@ -206,7 +213,7 @@ enum SFZFixtures {
             ampeg_attack=0 ampeg_release=0.01 amp_veltrack=0
             <region> sample=a440.wav lokey=48 hikey=96 pitch_keycenter=69
             """,
-            in: root, instrumentName: "Pitched"
+            named: "pitched.sfz", in: root, instrumentName: "Pitched"
         )
     }
 
@@ -223,7 +230,7 @@ enum SFZFixtures {
             <region> sample=mid.wav lokey=60 hikey=60 pitch_keycenter=60 lovel=43 hivel=84
             <region> sample=loud.wav lokey=60 hikey=60 pitch_keycenter=60 lovel=85 hivel=127
             """,
-            in: root, instrumentName: "Layers", dynamicLayerCount: 3
+            named: "layers.sfz", in: root, instrumentName: "Layers", dynamicLayerCount: 3
         )
     }
 
@@ -240,7 +247,7 @@ enum SFZFixtures {
             <region> sample=rr2.wav seq_position=2
             <region> sample=rr3.wav seq_position=3
             """,
-            in: root, instrumentName: "Sequenced"
+            named: "sequenced.sfz", in: root, instrumentName: "Sequenced"
         )
     }
 
@@ -255,7 +262,7 @@ enum SFZFixtures {
             <region> sample=randA.wav lorand=0 hirand=0.5
             <region> sample=randB.wav lorand=0.5 hirand=1
             """,
-            in: root, instrumentName: "Randomised"
+            named: "randomised.sfz", in: root, instrumentName: "Randomised"
         )
     }
 
@@ -281,7 +288,7 @@ enum SFZFixtures {
             <group> ampeg_attack=0 ampeg_release=0.01 amp_veltrack=0 pitch_keytrack=0
             <region> sample=looped.wav lokey=60 hikey=60 pitch_keycenter=60
             """,
-            in: root, instrumentName: "Looped"
+            named: "looped.sfz", in: root, instrumentName: "Looped"
         )
     }
 
@@ -301,7 +308,7 @@ enum SFZFixtures {
               pitch_keytrack=0 rt_decay=\(releaseDecayDBPerSecond)
             <region> sample=release.wav lokey=60 hikey=60 pitch_keycenter=60
             """,
-            in: root, instrumentName: "Released"
+            named: "released.sfz", in: root, instrumentName: "Released"
         )
     }
 
@@ -338,7 +345,8 @@ enum SFZFixtures {
               pitch_keytrack=0 rt_decay=6
             <region> sample=release.wav lokey=60 hikey=60 pitch_keycenter=60
             """,
-            in: root, instrumentName: "Deep Layers", dynamicLayerCount: layers,
+            named: "deep-layers.sfz", in: root, instrumentName: "Deep Layers",
+            dynamicLayerCount: layers,
             alternates: ["alt.sfz"]
         )
     }
@@ -353,7 +361,7 @@ enum SFZFixtures {
               loop_mode=one_shot
             <region> sample=hit.wav lokey=60 hikey=60 pitch_keycenter=60
             """,
-            in: root, instrumentName: "One Shots", family: .percussion
+            named: "one-shots.sfz", in: root, instrumentName: "One Shots", family: .percussion
         )
     }
 
@@ -378,7 +386,8 @@ enum SFZFixtures {
             <region> sample=soft440.wav lokey=48 hikey=96 pitch_keycenter=69 lovel=1 hivel=63
             <region> sample=loud440.wav lokey=48 hikey=96 pitch_keycenter=69 lovel=64 hivel=127
             """,
-            in: root, instrumentName: "Pitched Layers", family: .strings, dynamicLayerCount: 2
+            named: "pitched-layers.sfz", in: root, instrumentName: "Pitched Layers",
+            family: .strings, dynamicLayerCount: 2
         )
     }
 
@@ -406,7 +415,7 @@ enum SFZFixtures {
             ampeg_attack=0 ampeg_release=0.01 amp_veltrack=0 pitch_keytrack=0
             <region> sample=sample.wav lokey=60 hikey=60 pitch_keycenter=60
             """,
-            in: root, instrumentName: "Keyswitched"
+            named: "keyswitched.sfz", in: root, instrumentName: "Keyswitched"
         )
     }
 }

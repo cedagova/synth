@@ -277,6 +277,34 @@ final class InstrumentCapabilityTests: XCTestCase {
         XCTAssertNil(bounded.articulationFileName)
     }
 
+    /// A variant stored while an instrument was deeper than it is now cannot
+    /// smuggle the old setting past the gate.
+    ///
+    /// The live case: a library re-pinned to different bytes, or a variant
+    /// carried between machines. The stored document is untouched — nothing
+    /// rewrites the owner's variant behind their back — but what reaches the
+    /// render core is bounded to what the files on disk can actually do.
+    func testAStoredSettingForAControlTheAssetLostIsBoundedAway() throws {
+        let deep = try SFZFixtures.deeplyLayeredInstrument(in: root)
+        let thin = try SFZFixtures.pitchedInstrument(in: root, sampleRate: 44_100)
+
+        let saved = InstrumentCustomization(toneLowDecibels: 3, dynamicsResponse: 1.7)
+        XCTAssertEqual(
+            try capabilities(of: deep).bounded(saved).dynamicsResponse, 1.7,
+            "While the instrument has its layers, the setting stands"
+        )
+
+        let afterRepinning = try capabilities(of: thin).bounded(saved)
+        XCTAssertEqual(
+            afterRepinning.dynamicsResponse, 1,
+            "Once the files have one layer, the stored setting has no effect"
+        )
+        XCTAssertEqual(
+            afterRepinning.toneLowDecibels, 3,
+            "…and the controls the instrument still supports are untouched"
+        )
+    }
+
     /// An instrument that is not installed has nothing measured, so nothing is
     /// offered — and the explanation is the one that helps: download it.
     func testAnUninstalledInstrumentDisablesEverythingAndOffersTheDownload() throws {

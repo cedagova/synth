@@ -379,8 +379,18 @@ final class InstrumentEditorModel {
 
     /// Publishes the variant as it now stands to every line of the open piece
     /// that plays it (REQ-018).
+    ///
+    /// **Bounded on the way out, not only on the way in.** `setValue` already
+    /// refuses a control this instrument cannot support, but Revert and Reset
+    /// publish *stored* values — and a variant saved when its library had two
+    /// dynamic layers, played after that library was re-pinned to a
+    /// single-layer one, would otherwise carry a dynamics setting straight past
+    /// the gate into the running voices. Bounding here is what makes
+    /// "unsupported means inert" true of every path out of this editor, the way
+    /// `ResolvedLine.voiceProvider` makes it true of every path out of storage.
     private func publishWorkingVariant() {
-        guard let entry, let variant, entry.isEditable else { return }
+        guard let entry, var variant, entry.isEditable else { return }
+        if let capabilities { variant.customization = capabilities.bounded(variant.customization) }
         onVariantEdited?(entry.id, variant)
     }
 

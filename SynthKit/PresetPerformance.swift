@@ -353,9 +353,15 @@ public struct PresetPerformance: Sendable {
         var resolved: [ResolvedLine] = []
         resolved.reserveCapacity(inventory.entries.count)
 
-        // Read once for the whole preset rather than per line: an 18-line score
-        // would otherwise stat every installed SFZ eighteen times.
+        // **Read once for the whole preset, and looked up from that.** Asking
+        // the library per line would stat every installed SFZ once per line —
+        // 540 filesystem calls for the eighteen-line orchestral reference,
+        // every time a preset is applied — because an installed instrument is
+        // derived from the disk rather than stored.
         let palette = try library.allSounds()
+        let byIdentity = Dictionary(
+            palette.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }
+        )
         let synthPalette = palette.filter { $0.kind == .synth }
 
         for entry in inventory.entries {
@@ -366,7 +372,7 @@ public struct PresetPerformance: Sendable {
 
             switch line.assignment {
             case .library(_, let soundID):
-                if let sound = try library.sound(withID: soundID) {
+                if let sound = byIdentity[soundID] {
                     source = .library(soundID: soundID, name: sound.name)
                     content = sound.content
                 } else if let reference = try uninstalledInstrument(

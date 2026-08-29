@@ -69,7 +69,7 @@ enum ShippedSounds {
             revision: 0,
             createdAt: "",
             updatedAt: "",
-            patch: definition.patch
+            content: .synth(definition.patch)
         )
     }
 

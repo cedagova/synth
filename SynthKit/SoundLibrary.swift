@@ -35,6 +35,11 @@ public enum SoundLibraryError: Error, Equatable, Sendable {
     /// (REQ-017). Use `makeEditableCopy(of:)` instead.
     case shippedSoundIsReadOnly(name: String)
 
+    /// A downloaded instrument cannot be changed in place: the assets are
+    /// read-only and the entry is not a row (REQ-021, REQ-023). Use
+    /// `makeEditableCopy(of:)` to save a named variant instead.
+    case instrumentIsReadOnly(name: String)
+
     /// The sound was not in the library when the operation ran — another
     /// window, or a stale list.
     case soundNotFound(name: String)
@@ -61,6 +66,9 @@ extension SoundLibraryError: LocalizedError {
         switch self {
         case .shippedSoundIsReadOnly(let name):
             return "“\(name)” is one of Synth's own sounds and cannot be changed."
+        case .instrumentIsReadOnly(let name):
+            return "“\(name)” is a downloaded instrument. Its samples are read-only, so it "
+                + "cannot be changed in place."
         case .soundNotFound(let name):
             return "“\(name)” is no longer in your sound library."
         case .nameIsEmpty:
@@ -80,6 +88,9 @@ extension SoundLibraryError: LocalizedError {
         switch self {
         case .shippedSoundIsReadOnly:
             return "Duplicate it to get an editable copy of your own; the original stays as it is."
+        case .instrumentIsReadOnly:
+            return "Save a named variant of it instead; the downloaded library stays exactly as "
+                + "it was installed."
         case .soundNotFound:
             return "The sound list has been refreshed."
         case .nameIsEmpty:
@@ -119,20 +130,29 @@ public final class SoundLibrary: @unchecked Sendable {
     private let database: SQLiteDatabase
     private let catalog: SoundCatalog
     private let shipped: ShippedSoundCollection
+    private let instruments: InstrumentAssetStore?
     private let dependentStores: [SoundDependentStore]
     private let makeIdentity: @Sendable () -> String
     private let now: @Sendable () -> String
 
     /// A library over an opened store.
+    ///
+    /// `instruments` is optional so a store built before increment 005 — and
+    /// every test that only cares about patches — still opens without one. When
+    /// it is present, every installed instrument appears in the library as a
+    /// read-only entry, which is what makes an instrument assignable to a line
+    /// through exactly the same picker a synth sound is.
     public convenience init(
         database: SQLiteDatabase,
         shipped: ShippedSoundCollection = .standard,
+        instruments: InstrumentAssetStore? = nil,
         dependentStores: [SoundDependentStore] = []
     ) {
         self.init(
             database: database,
             catalog: SoundCatalog(database: database),
             shipped: shipped,
+            instruments: instruments,
             dependentStores: dependentStores
         )
     }
@@ -145,6 +165,7 @@ public final class SoundLibrary: @unchecked Sendable {
         database: SQLiteDatabase,
         catalog: SoundCatalog,
         shipped: ShippedSoundCollection = .standard,
+        instruments: InstrumentAssetStore? = nil,
         dependentStores: [SoundDependentStore] = [],
         makeIdentity: @escaping @Sendable () -> String = { "user." + UUID().uuidString.lowercased() },
         now: @escaping @Sendable () -> String = { SchemaMigrator.timestamp() }
@@ -152,6 +173,7 @@ public final class SoundLibrary: @unchecked Sendable {
         self.database = database
         self.catalog = catalog
         self.shipped = shipped
+        self.instruments = instruments
         self.dependentStores = dependentStores
         self.makeIdentity = makeIdentity
         self.now = now
@@ -159,13 +181,52 @@ public final class SoundLibrary: @unchecked Sendable {
 
     // MARK: Reading
 
-    /// The whole library — shipped sounds and the owner's — in list order.
+    /// The whole library — shipped sounds, installed instruments and the
+    /// owner's own — in list order.
     ///
     /// Shipped entries come from the build, so they are present on the very
     /// first run before anything has been written anywhere (REQ-019).
+    /// Instrument entries come from what INS001 installed, so they appear when
+    /// a library is downloaded and disappear when it is removed — with the same
+    /// identity either way, so a preset that referenced one starts playing
+    /// again rather than resolving to a stranger.
     public func allSounds() throws -> [SoundEntry] {
-        (shipped.sounds + (try catalog.allStoredSounds()))
+        (shipped.sounds + (try installedInstrumentSounds()) + (try catalog.allStoredSounds()))
             .sorted(by: SoundEntry.isOrderedBefore)
+    }
+
+    /// Every downloaded instrument, as a read-only library entry.
+    ///
+    /// A read of the filesystem and the database, never a write: an instrument
+    /// is not a row and never becomes one. Customizing it means
+    /// `makeEditableCopy(of:)`, whose result *is* a row — the owner's named
+    /// variant.
+    public func installedInstrumentSounds() throws -> [SoundEntry] {
+        guard let instruments else { return [] }
+        return try instruments.availableInstruments().map(Self.entry(forInstalled:))
+    }
+
+    /// The library entry an installed instrument appears as.
+    static func entry(forInstalled available: AvailableInstrument) -> SoundEntry {
+        let variant = InstrumentVariant.asRecorded(available)
+        return SoundEntry(
+            id: variant.reference.soundID,
+            name: available.coverage.name,
+            category: SoundCategory.forInstrumentFamily(available.coverage.family),
+            origin: .instrument,
+            shippedOriginID: nil,
+            documentVersion: InstrumentVariantDocument.currentVersion,
+            // Zero, like a shipped sound's: an installed instrument has no
+            // stored history to revise, and the library it came from is
+            // versioned by INS001's catalog rather than by this counter.
+            revision: 0,
+            // Empty, like a shipped sound's, and for the same reason: there is
+            // no moment it came into existence as a sound. When the library was
+            // installed is `InstalledInstrumentLibrary.installedAt`.
+            createdAt: "",
+            updatedAt: "",
+            content: .instrument(variant)
+        )
     }
 
     /// Just the sounds filed under one category, in list order.
@@ -185,9 +246,12 @@ public final class SoundLibrary: @unchecked Sendable {
         }
     }
 
-    /// The sound with this identity, shipped or stored.
+    /// The sound with this identity: shipped, installed, or stored.
     public func sound(withID id: String) throws -> SoundEntry? {
         if let entry = shipped.sound(withID: id) { return entry }
+        if InstrumentReference.isInstrumentSoundID(id) {
+            return try installedInstrumentSounds().first { $0.id == id }
+        }
         return try catalog.storedSound(withID: id)
     }
 
@@ -228,19 +292,70 @@ public final class SoundLibrary: @unchecked Sendable {
     ) throws -> SoundEntry {
         let trimmed = try validName(name)
         return try insert(
-            patch: patch,
+            content: .synth(patch),
             name: trimmed,
             category: category,
             shippedOriginID: nil
         )
     }
 
-    /// An editable copy of a shipped sound (REQ-017).
+    /// Stores a named instrument-customization variant (REQ-021, REQ-023).
     ///
-    /// This is the *only* way a shipped sound changes. The result is a new user
-    /// sound with its own identity and its own row; the shipped original is
-    /// untouched and stays exactly where it was, because it was never a row in
-    /// the first place.
+    /// **The variant is a description, never a copy of the samples.** What
+    /// lands in the row is the reference to a read-only downloaded instrument
+    /// plus the bounded parameters it is played with, so saving one costs a few
+    /// hundred bytes and the 3.2 GB under `assets/` is untouched. The category
+    /// defaults to the instrument's own family, so a darker cello files under
+    /// Strings without the caller having to know that.
+    @discardableResult
+    public func createVariant(
+        _ variant: InstrumentVariant,
+        named name: String,
+        in category: SoundCategory? = nil
+    ) throws -> SoundEntry {
+        let trimmed = try validName(name)
+        let filed = try category ?? categoryForInstrument(variant.reference)
+        return try insert(
+            content: .instrument(variant),
+            name: trimmed,
+            category: filed,
+            shippedOriginID: nil
+        )
+    }
+
+    /// Replaces the customization of a variant the owner owns — the instrument
+    /// editor's save.
+    @discardableResult
+    public func update(_ entry: SoundEntry, variant: InstrumentVariant) throws -> SoundEntry {
+        try mutate(entry) { current in
+            (name: current.name, category: current.category, content: .instrument(variant))
+        }
+    }
+
+    /// The category an instrument's family files under, falling back to the
+    /// family the catalog declares when the library is not installed.
+    private func categoryForInstrument(_ reference: InstrumentReference) throws -> SoundCategory {
+        let family = instruments?.catalogLibraries
+            .first { $0.identifier == reference.libraryID }?
+            .coverage.first { $0.identifier == reference.instrumentID }?
+            .family
+        guard let family else { return .keys }
+        return SoundCategory.forInstrumentFamily(family)
+    }
+
+    /// An editable copy of a shipped sound or an installed instrument
+    /// (REQ-017, REQ-023).
+    ///
+    /// This is the *only* way either of them changes. The result is a new user
+    /// sound with its own identity and its own row; the original is untouched
+    /// and stays exactly where it was, because it was never a row in the first
+    /// place.
+    ///
+    /// **The instrument case is what makes variants safe by construction.**
+    /// Customizing a downloaded instrument goes through here, so what the owner
+    /// edits is always their own row and never the read-only assets — "variants
+    /// never mutate the downloaded assets" is then a property of there being no
+    /// other path, rather than a rule the editor has to keep.
     ///
     /// Applying this to a sound the owner already owns is a plain duplicate,
     /// which is the other entry point REQ-017 asks for — the operation is the
@@ -252,11 +367,15 @@ public final class SoundLibrary: @unchecked Sendable {
     ) throws -> SoundEntry {
         let requested = try name.map(validName) ?? copyName(for: entry.name)
         return try insert(
-            patch: entry.patch,
+            content: entry.content,
             name: requested,
             category: entry.category,
             // Provenance is flattened to the shipped root: a copy of a copy of
-            // "Glass Keys" still came from "Glass Keys".
+            // "Glass Keys" still came from "Glass Keys". An instrument's
+            // provenance is not recorded here at all — it is the reference
+            // inside the variant, which is a stronger link than a name: it says
+            // which library and which instrument, and it is what the
+            // missing-instrument states resolve against.
             shippedOriginID: entry.origin == .shipped ? entry.id : entry.shippedOriginID
         )
     }
@@ -277,9 +396,15 @@ public final class SoundLibrary: @unchecked Sendable {
     public func rename(_ entry: SoundEntry, to name: String) throws -> SoundEntry {
         let trimmed = try validName(name)
         return try mutate(entry) { current in
-            var patch = current.patch
-            patch.name = trimmed
-            return (name: trimmed, category: current.category, patch: patch)
+            // A patch carries its own name so an exported document agrees with
+            // the row it came from; a variant carries no name at all, because
+            // the only name it has ever had is the row's.
+            var content = current.content
+            if case .synth(var patch) = content {
+                patch.name = trimmed
+                content = .synth(patch)
+            }
+            return (name: trimmed, category: current.category, content: content)
         }
     }
 
@@ -291,7 +416,7 @@ public final class SoundLibrary: @unchecked Sendable {
         to category: SoundCategory
     ) throws -> SoundEntry {
         try mutate(entry) { current in
-            (name: current.name, category: category, patch: current.patch)
+            (name: current.name, category: category, content: current.content)
         }
     }
 
@@ -302,7 +427,7 @@ public final class SoundLibrary: @unchecked Sendable {
     @discardableResult
     public func update(_ entry: SoundEntry, patch: SynthPatch) throws -> SoundEntry {
         try mutate(entry) { current in
-            (name: current.name, category: current.category, patch: patch)
+            (name: current.name, category: current.category, content: .synth(patch))
         }
     }
 
@@ -316,9 +441,7 @@ public final class SoundLibrary: @unchecked Sendable {
     /// A shipped sound cannot reach this method, and has no row to delete if it
     /// somehow did.
     public func delete(_ entry: SoundEntry) throws {
-        guard entry.origin == .user else {
-            throw SoundLibraryError.shippedSoundIsReadOnly(name: entry.name)
-        }
+        guard entry.origin == .user else { throw Self.readOnly(entry) }
 
         let timestamp = now()
         do {
@@ -355,7 +478,7 @@ public final class SoundLibrary: @unchecked Sendable {
     /// there is exactly one place that allocates an identity and one place that
     /// decides what a stored sound looks like.
     private func insert(
-        patch: SynthPatch,
+        content: SoundContent,
         name: String,
         category: SoundCategory,
         shippedOriginID: String?
@@ -363,10 +486,7 @@ public final class SoundLibrary: @unchecked Sendable {
         let identity = makeIdentity()
         let timestamp = now()
 
-        var stored = patch
-        stored.identifier = identity
-        stored.name = name
-
+        let stored = Self.stamped(content, id: identity, name: name)
         let document = try encode(stored, named: name)
 
         let entry = SoundEntry(
@@ -375,11 +495,11 @@ public final class SoundLibrary: @unchecked Sendable {
             category: category,
             origin: .user,
             shippedOriginID: shippedOriginID,
-            documentVersion: SynthPatch.currentVersion,
+            documentVersion: Self.documentVersion(of: stored),
             revision: 1,
             createdAt: timestamp,
             updatedAt: timestamp,
-            patch: stored
+            content: stored
         )
 
         do {
@@ -407,11 +527,9 @@ public final class SoundLibrary: @unchecked Sendable {
     /// rather than resurrected.
     private func mutate(
         _ entry: SoundEntry,
-        _ change: (SoundEntry) -> (name: String, category: SoundCategory, patch: SynthPatch)
+        _ change: (SoundEntry) -> (name: String, category: SoundCategory, content: SoundContent)
     ) throws -> SoundEntry {
-        guard entry.origin == .user else {
-            throw SoundLibraryError.shippedSoundIsReadOnly(name: entry.name)
-        }
+        guard entry.origin == .user else { throw Self.readOnly(entry) }
 
         let timestamp = now()
 
@@ -422,13 +540,22 @@ public final class SoundLibrary: @unchecked Sendable {
                 }
 
                 let changed = change(current)
+                guard changed.content.kind == current.kind else {
+                    // Unreachable through the public API — nothing offers to
+                    // turn a patch into a variant — and refused rather than
+                    // written, because `SoundCatalog.update` deliberately does
+                    // not touch the `kind` column and a silent disagreement
+                    // between the column and the document would make the row
+                    // unreadable on the next launch.
+                    throw SoundLibraryError.documentRejected(
+                        name: changed.name,
+                        reason: "a sound cannot change which engine plays it."
+                    )
+                }
 
-                var stored = changed.patch
                 // Identity and name live in the row. Whatever the incoming
-                // patch claims about itself loses, every time.
-                stored.identifier = current.id
-                stored.name = changed.name
-
+                // document claims about itself loses, every time.
+                let stored = Self.stamped(changed.content, id: current.id, name: changed.name)
                 let document = try encode(stored, named: changed.name)
 
                 let updated = SoundEntry(
@@ -437,11 +564,11 @@ public final class SoundLibrary: @unchecked Sendable {
                     category: changed.category,
                     origin: .user,
                     shippedOriginID: current.shippedOriginID,
-                    documentVersion: SynthPatch.currentVersion,
+                    documentVersion: Self.documentVersion(of: stored),
                     revision: current.revision + 1,
                     createdAt: current.createdAt,
                     updatedAt: timestamp,
-                    patch: stored
+                    content: stored
                 )
 
                 try catalog.update(updated, document: document)
@@ -454,13 +581,43 @@ public final class SoundLibrary: @unchecked Sendable {
         }
     }
 
-    /// Serialises a patch through SYN001's document format — the one
-    /// serialisation contract — and reports a rejected parameter as a rejected
-    /// *save*, naming the sound, rather than as a bare document error.
-    private func encode(_ patch: SynthPatch, named name: String) throws -> String {
+    /// `content` with the row's identity and name written into it, where the
+    /// document has somewhere to put them.
+    ///
+    /// A patch carries both so an exported document agrees with the row it came
+    /// from. A variant carries neither: its identity is the row's and its name
+    /// is the row's, and duplicating them into the document would be a second
+    /// place for a rename to have to reach.
+    private static func stamped(_ content: SoundContent, id: String, name: String) -> SoundContent {
+        guard case .synth(var patch) = content else { return content }
+        patch.identifier = id
+        patch.name = name
+        return .synth(patch)
+    }
+
+    private static func documentVersion(of content: SoundContent) -> Int {
+        switch content {
+        case .synth: return SynthPatch.currentVersion
+        case .instrument: return InstrumentVariantDocument.currentVersion
+        }
+    }
+
+    /// Serialises a sound through its own engine's document format — the one
+    /// serialisation contract per kind — and reports a rejected parameter as a
+    /// rejected *save*, naming the sound, rather than as a bare document error.
+    private func encode(_ content: SoundContent, named name: String) throws -> String {
         do {
-            return String(decoding: try SynthPatchDocument.data(from: patch), as: UTF8.self)
+            switch content {
+            case .synth(let patch):
+                return String(decoding: try SynthPatchDocument.data(from: patch), as: UTF8.self)
+            case .instrument(let variant):
+                return String(
+                    decoding: try InstrumentVariantDocument.data(from: variant), as: UTF8.self
+                )
+            }
         } catch let error as SynthPatchDocumentError {
+            throw SoundLibraryError.documentRejected(name: name, reason: error.description)
+        } catch let error as InstrumentVariantDocumentError {
             throw SoundLibraryError.documentRejected(name: name, reason: error.description)
         } catch {
             throw SoundLibraryError.documentRejected(name: name, reason: String(describing: error))
@@ -493,6 +650,17 @@ public final class SoundLibrary: @unchecked Sendable {
         var suffix = 2
         while taken.contains("\(base) \(suffix)".lowercased()) { suffix += 1 }
         return "\(base) \(suffix)"
+    }
+
+    /// Why this entry cannot be changed in place, in its own words.
+    ///
+    /// Two read-only origins with two different answers: duplicate a shipped
+    /// sound, save a variant of an instrument. Same refusal, and the owner is
+    /// owed the right next step rather than the nearest one.
+    private static func readOnly(_ entry: SoundEntry) -> SoundLibraryError {
+        entry.origin == .instrument
+            ? .instrumentIsReadOnly(name: entry.name)
+            : .shippedSoundIsReadOnly(name: entry.name)
     }
 
     private static func describe(_ error: Error) -> String {

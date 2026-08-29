@@ -9,7 +9,21 @@ import Foundation
 public enum SoundOrigin: String, Codable, Sendable, CaseIterable {
     /// Immutable app content, present on every first run (REQ-019).
     case shipped
-    /// The owner's own sound, in the versioned store (REQ-023).
+
+    /// A downloaded instrument, exactly as its library recorded it (REQ-020).
+    ///
+    /// **The same kind of thing a shipped sound is, and read-only for the same
+    /// reason.** It is not a row: it is derived from the assets INS001
+    /// installed, so removing the library removes it and downloading the
+    /// library again brings back the identical identity. Customizing one means
+    /// `makeEditableCopy(of:)`, whose result is a named variant of the owner's
+    /// — which is REQ-017's edit-as-copy rule applied to an instrument, and why
+    /// "variants never mutate the downloaded assets" needs no separate
+    /// enforcement.
+    case instrument
+
+    /// The owner's own sound, in the versioned store (REQ-023). A synth patch
+    /// or a named instrument variant.
     case user
 }
 
@@ -33,6 +47,12 @@ public enum SoundCategory: String, Codable, Sendable, CaseIterable {
     case bells
     case brass
     case strings
+    /// Added by increment 005 so downloaded instruments file where an
+    /// orchestral score would look for them. Purely additive, exactly as the
+    /// note above promises: no stored row changes, and a store written before
+    /// this build never named either of the two new values.
+    case woodwinds
+    case percussion
 
     /// Shown in a picker or a section header.
     public var displayName: String {
@@ -45,6 +65,26 @@ public enum SoundCategory: String, Codable, Sendable, CaseIterable {
         case .bells: return "Bells"
         case .brass: return "Brass"
         case .strings: return "Strings"
+        case .woodwinds: return "Woodwinds"
+        case .percussion: return "Percussion"
+        }
+    }
+
+    /// Where an instrument of this family files in the sound library.
+    ///
+    /// A total function rather than a lookup that can miss, so adding a family
+    /// to REQ-020 fails to compile here instead of quietly filing a new
+    /// instrument under Keys.
+    public static func forInstrumentFamily(_ family: InstrumentCoverage.Family) -> SoundCategory {
+        switch family {
+        case .strings: return .strings
+        case .woodwinds: return .woodwinds
+        case .brass: return .brass
+        case .keyboards: return .keys
+        // A harp is plucked, and Plucks is where the shipped nylon pluck
+        // already lives — so a harp line's alternatives sit beside it.
+        case .harp: return .plucks
+        case .percussion: return .percussion
         }
     }
 
@@ -54,7 +94,51 @@ public enum SoundCategory: String, Codable, Sendable, CaseIterable {
     }
 }
 
-/// One sound in the library: a shipped entry or a stored user entry.
+/// What a sound actually *is*.
+///
+/// **The two kinds of sound REQ-023 names, as one closed set.** A synth patch
+/// is the complete description of a sound the engine synthesises; an instrument
+/// variant is a reference to read-only downloaded assets plus the bounded
+/// parameters they are played with. They are alternatives rather than a struct
+/// with two optionals, because a sound is exactly one of them and a
+/// representable "both" or "neither" would be a state every consumer had to
+/// decide what to do about.
+///
+/// It is also what makes `SoundKind` in the preset document mean something:
+/// the discriminator ASN001 wrote from day one now has a second case behind it,
+/// and no already-written preset had to change for that.
+public enum SoundContent: Equatable, Sendable {
+    /// A synth patch from SYN001's engine.
+    case synth(SynthPatch)
+
+    /// A downloaded instrument, played the owner's way (INS002 + INS003).
+    case instrument(InstrumentVariant)
+
+    /// Which engine renders it.
+    public var kind: SoundKind {
+        switch self {
+        case .synth: return .synth
+        case .instrument: return .instrument
+        }
+    }
+
+    /// The patch, when this is a synth sound. Nil for an instrument variant —
+    /// deliberately, so a caller that only knows how to render a patch has to
+    /// say what it does about the other case rather than silently rendering the
+    /// default voice over a cello.
+    public var synthPatch: SynthPatch? {
+        if case .synth(let patch) = self { return patch }
+        return nil
+    }
+
+    public var instrumentVariant: InstrumentVariant? {
+        if case .instrument(let variant) = self { return variant }
+        return nil
+    }
+}
+
+/// One sound in the library: a shipped entry, an installed instrument, or a
+/// stored user entry.
 ///
 /// **The identity model increment 004 will reference.** `id` is stable for the
 /// life of the sound — a rename does not change it, a re-categorisation does
@@ -106,7 +190,7 @@ public struct SoundEntry: Equatable, Sendable, Identifiable {
     public let updatedAt: String
 
     /// The complete sound. Loading it fully determines what is heard.
-    public let patch: SynthPatch
+    public let content: SoundContent
 
     public init(
         id: String,
@@ -118,7 +202,7 @@ public struct SoundEntry: Equatable, Sendable, Identifiable {
         revision: Int,
         createdAt: String,
         updatedAt: String,
-        patch: SynthPatch
+        content: SoundContent
     ) {
         self.id = id
         self.name = name
@@ -129,19 +213,28 @@ public struct SoundEntry: Equatable, Sendable, Identifiable {
         self.revision = revision
         self.createdAt = createdAt
         self.updatedAt = updatedAt
-        self.patch = patch
+        self.content = content
     }
+
+    /// The synth patch, when this sound is one.
+    public var synthPatch: SynthPatch? { content.synthPatch }
+
+    /// The instrument variant, when this sound is one.
+    public var instrumentVariant: InstrumentVariant? { content.instrumentVariant }
+
+    /// Which engine renders it.
+    public var kind: SoundKind { content.kind }
 
     /// Whether this sound may be renamed, re-categorised, edited or deleted.
     ///
-    /// False for every shipped sound (REQ-017). The library enforces this
+    /// False for a shipped sound (REQ-017) and for an installed instrument,
+    /// which is read-only for the same reason: neither is a row, and neither
+    /// belongs to the owner to change in place. The library enforces this
     /// itself rather than trusting a caller to read the flag.
     public var isEditable: Bool { origin == .user }
 
-    /// A provider that renders this sound, for the engine.
-    public var voiceProvider: SynthPatchVoiceProvider {
-        SynthPatchVoiceProvider(patch: patch)
-    }
+    /// True when customizing this means making a copy of it first.
+    public var mustBeCopiedToEdit: Bool { origin != .user }
 
     /// What VoiceOver says a row in the sound list is.
     ///
@@ -157,8 +250,18 @@ public struct SoundEntry: Equatable, Sendable, Identifiable {
         switch origin {
         case .shipped:
             return "\(name), \(category.displayName), one of Synth's own sounds, read-only"
+        case .instrument:
+            let library = content.instrumentVariant?.reference.libraryName ?? "a downloaded library"
+            return "\(name), \(category.displayName), a downloaded instrument from \(library), "
+                + "read-only"
         case .user:
-            return "\(name), \(category.displayName), your sound"
+            guard let variant = content.instrumentVariant else {
+                return "\(name), \(category.displayName), your sound"
+            }
+            let base = "\(name), \(category.displayName), your variant of "
+                + "\(variant.reference.instrumentName)"
+            guard let changes = variant.customization.changeSummary else { return base }
+            return "\(base), \(changes)"
         }
     }
 

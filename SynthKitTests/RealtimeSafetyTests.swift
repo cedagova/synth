@@ -65,7 +65,15 @@ final class RealtimeSafetyTests: XCTestCase {
     /// The synthesizer (SYN001) follows the same split as the engine, so it is
     /// covered by the same guard: adding a render core without adding it here
     /// would leave the real-time claim resting on a file nobody checks.
-    private static let renderCores = ["SynthAudioCore.c", "SynthPatchEngine.c"]
+    ///
+    /// The sampler (INS002) is the third. It is the one whose real-time claim
+    /// is least obvious from the source, because reading a memory-mapped file
+    /// can block without any forbidden symbol appearing anywhere — which is why
+    /// `SampledInstrument` faults the samples' attacks in on the control thread
+    /// and `RealtimePlaybackTests` measures what the rest costs.
+    private static let renderCores = [
+        "SynthAudioCore.c", "SynthPatchEngine.c", "SampleVoiceEngine.c"
+    ]
 
     /// The render cores are written so that this scan is meaningful.
     ///
@@ -124,6 +132,22 @@ final class RealtimeSafetyTests: XCTestCase {
                 )
             }
         }
+    }
+
+    /// The sampler allocates exactly once per voice, and it does it in setup.
+    ///
+    /// The other half of the split above. `SampleVoiceEngine.c` is scanned for
+    /// allocation with every other render core; this states that the allocation
+    /// it does not do is actually happening somewhere, so the scan is a real
+    /// division of responsibilities rather than a file that never needed to
+    /// allocate in the first place.
+    func testTheSamplersAllocationLivesInItsSetupFile() throws {
+        let setup = Self.strippingComments(from: try Self.source(named: "SampleVoiceSetup.c"))
+        XCTAssertTrue(
+            setup.contains("calloc") && setup.contains("free("),
+            "SampleVoiceSetup.c neither allocates nor frees, so the sampler's render core's "
+                + "allocation-free claim is not being made by a real split."
+        )
     }
 
     /// Rendering a full synthesizer patch does not allocate per block either.

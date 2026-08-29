@@ -213,6 +213,69 @@ public enum SchemaMigrator {
                 ) STRICT;
                 """
             )
+        },
+        Migration(version: 6, name: "create_installed_instrument_libraries") { database in
+            // Which curated instrument libraries are installed (REQ-020,
+            // REQ-022). Purely additive: nothing here touches `pieces`,
+            // `preferences`, `sounds` or `presets`, so a store increment 004
+            // wrote still opens with every record intact, and reverting this
+            // build leaves the store openable — the extra table is simply
+            // unread, and the downloaded samples sit unreferenced under
+            // `assets/` rather than being lost (AD3).
+            //
+            // **One row per installed library and nothing about downloads in
+            // progress.** Resume state lives on the filesystem as the length of
+            // a `.part` file under `assets/.staging/`, because a database row
+            // and a partially written file are two facts that can disagree
+            // after a crash, and the file is the one that is actually true.
+            //
+            // `manifest_digest` is what makes a stale install detectable: it is
+            // the digest of the exact asset list — URLs, sizes and content
+            // digests — this build's catalog pinned when the library was
+            // installed. A later build that re-pins the same library to
+            // different bytes therefore reads its own row and can tell that
+            // what is on disk is not what it describes, instead of trusting the
+            // identifier and playing the wrong samples.
+            try database.executeScript(
+                """
+                CREATE TABLE installed_instrument_libraries (
+                    library_id TEXT PRIMARY KEY,
+                    catalog_version INTEGER NOT NULL,
+                    installed_at TEXT NOT NULL,
+                    byte_count INTEGER NOT NULL,
+                    asset_count INTEGER NOT NULL,
+                    manifest_digest TEXT NOT NULL
+                ) STRICT;
+                """
+            )
+        },
+        Migration(version: 7, name: "add_sound_kind") { database in
+            // Named instrument-customization variants in the personal sound
+            // library (REQ-023, INS003). One column, and the whole of the
+            // change: a variant is stored exactly as a patch is — its document
+            // in the row, one atomic transaction per edit — so the only thing
+            // the schema was missing was which of the two documents a row
+            // holds.
+            //
+            // **Additive twice over, which is what the issue's rollback line
+            // asks for.** `ADD COLUMN` with a default rewrites no row and
+            // touches no index, so every sound, preset and piece survives it
+            // untouched. And reverting this build leaves the store openable:
+            // the previous build reads `sounds` without knowing the column
+            // exists, and the only rows it cannot make sense of are the variant
+            // rows this build wrote — which it reports as unreadable by name
+            // (`StoreError.soundRowUnreadable`) rather than dropping, because a
+            // sound the owner made must never silently stop existing.
+            //
+            // `document_version` stays what it always was: the format version
+            // of whatever document is in the row. The two document formats
+            // number themselves independently, which is why the kind has to be
+            // a column rather than something inferred by trying to parse.
+            try database.executeScript(
+                """
+                ALTER TABLE sounds ADD COLUMN kind TEXT NOT NULL DEFAULT 'synth';
+                """
+            )
         }
     ]
 

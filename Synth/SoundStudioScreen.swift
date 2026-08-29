@@ -39,7 +39,18 @@ struct SoundStudioScreen: View {
                 soundList
                     .frame(width: 280)
                 Divider()
-                SoundEditorPane(model: model.editor, duplicateToEdit: duplicateToEdit)
+                // Exactly one editor at a time, chosen by what is selected. A
+                // synth patch and a downloaded instrument are edited by
+                // completely different controls, and showing either set over
+                // the other kind would be a panel full of knobs that do nothing.
+                if model.isEditingInstrument {
+                    InstrumentEditorPane(
+                        model: model.instrumentEditor,
+                        saveAsVariant: { model.beginVariantNaming() }
+                    )
+                } else {
+                    SoundEditorPane(model: model.editor, duplicateToEdit: duplicateToEdit)
+                }
             }
             // The destructive confirmation is attached *here* rather than
             // beside the failure alert below, and that is not cosmetic. Both
@@ -85,6 +96,13 @@ struct SoundStudioScreen: View {
             Button("OK") { model.alert = nil; model.editor.alert = nil }
         } message: { alert in
             Text([alert.message, alert.recovery].compactMap { $0 }.joined(separator: "\n\n"))
+        }
+        // The variant name is a sheet rather than a third alert: this view
+        // already carries a failure alert and the split below carries the
+        // destructive confirmation, and two presentations on one view meant
+        // neither of them appeared (see the note on the delete alert above).
+        .sheet(isPresented: variantNamingBinding) {
+            VariantNameSheet(model: model)
         }
         .onChange(of: model.searchFocusRequests) { _, _ in focus = .search }
         .onChange(of: model.listFocusRequests) { _, _ in focus = .list }
@@ -148,6 +166,13 @@ struct SoundStudioScreen: View {
         )
     }
 
+    private var variantNamingBinding: Binding<Bool> {
+        Binding(
+            get: { model.isNamingVariant },
+            set: { if !$0 { model.cancelVariantNaming() } }
+        )
+    }
+
     private var deletionConfirmationBinding: Binding<Bool> {
         Binding(
             get: { model.pendingDeletion != nil },
@@ -185,9 +210,20 @@ private struct SoundRow: View {
                 Text(entry.name)
                     .lineLimit(1)
                 Spacer(minLength: 4)
-                if entry.origin == .shipped {
-                    // The read-only marker (REQ-017), said in the row rather
-                    // than discovered when an edit is refused.
+                if entry.origin == .user, entry.kind == .instrument {
+                    // A variant of the owner's own: editable, and worth telling
+                    // apart from a synth patch at a glance because the two are
+                    // edited by different panels.
+                    Image(systemName: "pianokeys")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                }
+                if entry.origin != .user {
+                    // The read-only marker (REQ-017 for a shipped sound,
+                    // REQ-021's read-only assets for a downloaded instrument),
+                    // said in the row rather than discovered when an edit is
+                    // refused.
                     Image(systemName: "lock.fill")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
@@ -200,7 +236,9 @@ private struct SoundRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(entry.accessibilityDescription)
         .contextMenu {
-            Button("Duplicate") { model.duplicate(entry) }
+            Button(entry.origin == .instrument ? "Save as Variant" : "Duplicate") {
+                model.duplicate(entry)
+            }
             Button("Rename…") { model.beginRename(of: entry) }
                 .disabled(!entry.isEditable)
             Divider()
@@ -635,5 +673,54 @@ private struct StudioStatusBar: View {
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.bar)
+    }
+}
+
+// MARK: - Naming a variant (REQ-023)
+
+/// Names a new instrument variant before it is saved.
+///
+/// A sheet with a text field and two buttons, focused the moment it appears, so
+/// a variant started from the keyboard can be finished from the keyboard — the
+/// point every rename field on this screen had to learn (REQ-027).
+private struct VariantNameSheet: View {
+    @Bindable var model: SoundStudioModel
+
+    @FocusState private var isNaming: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Save as a named variant")
+                .font(.headline)
+                .accessibilityAddTraits(.isHeader)
+
+            Text("This saves your settings as a sound of your own, assignable to any line. "
+                 + "The downloaded instrument itself is not changed.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            TextField("Variant name", text: $model.variantNameDraft)
+                .textFieldStyle(.roundedBorder)
+                .focused($isNaming)
+                .onAppear { isNaming = true }
+                .onSubmit { model.commitVariantNaming() }
+                .onExitCommand { model.cancelVariantNaming() }
+                .accessibilityLabel("Name for this variant")
+                .accessibilityHint("Type a name and press Return.")
+
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { model.cancelVariantNaming() }
+                Button("Save Variant") { model.commitVariantNaming() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(
+                        model.variantNameDraft
+                            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    )
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
     }
 }

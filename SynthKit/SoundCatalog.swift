@@ -28,7 +28,7 @@ public final class SoundCatalog: @unchecked Sendable {
     }
 
     private static let columns = """
-        id, name, category, shipped_origin_id, document_version, document, \
+        id, name, category, kind, shipped_origin_id, document_version, document, \
         revision, created_at, updated_at
         """
 
@@ -73,12 +73,13 @@ public final class SoundCatalog: @unchecked Sendable {
         try database.execute(
             """
             INSERT INTO \(Self.tableName) (\(Self.columns))
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
             [
                 .text(entry.id),
                 .text(entry.name),
                 .text(entry.category.rawValue),
+                .text(entry.kind.rawValue),
                 entry.shippedOriginID.map { SQLiteValue.text($0) } ?? .null,
                 .integer(Int64(entry.documentVersion)),
                 .text(document),
@@ -89,9 +90,10 @@ public final class SoundCatalog: @unchecked Sendable {
         )
     }
 
-    /// `created_at` and `id` are deliberately not in the SET list: an edit
-    /// changes what a sound *is*, never when it came into existence or which
-    /// sound it is.
+    /// `created_at`, `id` and `kind` are deliberately not in the SET list: an
+    /// edit changes what a sound *is*, never when it came into existence, which
+    /// sound it is, or which engine plays it. A synth patch does not become an
+    /// instrument variant by being edited; making one means making a new sound.
     public func update(_ entry: SoundEntry, document: String) throws {
         try database.execute(
             """
@@ -162,6 +164,13 @@ public final class SoundCatalog: @unchecked Sendable {
             throw fail("It is filed under “\(rawCategory)”, which this version of Synth does not know.")
         }
 
+        // Written by schema v7 with a default of `synth`, so a row this build
+        // did not write reads as the patch it has always been.
+        let rawKind = row.text("kind") ?? SoundKind.synth.rawValue
+        guard let kind = SoundKind(rawValue: rawKind) else {
+            throw fail("It is played by “\(rawKind)”, which this version of Synth does not know.")
+        }
+
         // The row records the document's format version and the document
         // records it too, so the two must be made to agree here — otherwise the
         // column is an unchecked copy, and the obvious future use for it ("find
@@ -170,20 +179,37 @@ public final class SoundCatalog: @unchecked Sendable {
         // the column, or the column without the documents, would then silently
         // skip or double-process rows. Checked, that is a loud unreadable row
         // instead — the same failure channel a corrupt document already uses.
+        //
+        // Both document formats number themselves independently, which is why
+        // the check is inside the kind switch rather than above it.
         let bytes = Data(document.utf8)
-        let patch: SynthPatch
+        let content: SoundContent
         do {
-            let declared = try SynthPatchDocument.version(of: bytes)
-            guard Int(documentVersion) == declared else {
-                throw fail(
-                    "Its row records patch format version \(documentVersion), "
-                        + "but the document itself declares version \(declared)."
-                )
+            switch kind {
+            case .synth:
+                let declared = try SynthPatchDocument.version(of: bytes)
+                guard Int(documentVersion) == declared else {
+                    throw fail(
+                        "Its row records patch format version \(documentVersion), "
+                            + "but the document itself declares version \(declared)."
+                    )
+                }
+                content = .synth(try SynthPatchDocument.patch(from: bytes))
+            case .instrument:
+                let declared = try InstrumentVariantDocument.version(of: bytes)
+                guard Int(documentVersion) == declared else {
+                    throw fail(
+                        "Its row records variant format version \(documentVersion), "
+                            + "but the document itself declares version \(declared)."
+                    )
+                }
+                content = .instrument(try InstrumentVariantDocument.variant(from: bytes))
             }
-            patch = try SynthPatchDocument.patch(from: bytes)
         } catch let error as StoreError {
             throw error
         } catch let error as SynthPatchDocumentError {
+            throw fail(error.description)
+        } catch let error as InstrumentVariantDocumentError {
             throw fail(error.description)
         } catch {
             throw fail(String(describing: error))
@@ -199,7 +225,7 @@ public final class SoundCatalog: @unchecked Sendable {
             revision: Int(revision),
             createdAt: createdAt,
             updatedAt: updatedAt,
-            patch: patch
+            content: content
         )
     }
 }

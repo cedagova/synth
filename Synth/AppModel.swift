@@ -43,6 +43,16 @@ final class AppModel {
     /// owner who never designs a sound should pay for neither.
     private(set) var studio: SoundStudioModel?
 
+    /// The instrument catalog, once it has been opened.
+    ///
+    /// Kept after the screen closes, deliberately: a 2.6 GB download must not
+    /// stop because the owner went back to their piece. `suspend()` on the
+    /// store closing is the only thing that ends a transfer early.
+    private(set) var instrumentCatalog: InstrumentCatalogModel?
+
+    /// True while the catalog is the screen showing.
+    private(set) var isInstrumentCatalogShowing = false
+
     /// True while the studio is the screen showing.
     ///
     /// Separate from `studio != nil` because leaving the studio must not throw
@@ -68,7 +78,13 @@ final class AppModel {
     }
 
     /// Held open for the app's lifetime; later leaves read and write through it.
-    private var store: LibraryStore?
+    ///
+    /// The setter stays private — nothing outside this model decides when the
+    /// store opens — while the getter is internal so `SynthAppTests` can put a
+    /// sound in the same library the app is holding and then drive the real
+    /// screens over it. Reading a test's assertions from a *second* store would
+    /// prove nothing about the one the app is using.
+    private(set) var store: LibraryStore?
 
     /// Tail of the chain of bootstrap attempts. Each new attempt waits for it,
     /// which is what keeps the database from ever being opened twice at once —
@@ -76,7 +92,19 @@ final class AppModel {
     /// only after the first attempt has already suspended.
     private var attempts: Task<Void, Never>?
 
-    nonisolated init() {}
+    /// Where the store is opened.
+    ///
+    /// Nil means `<Application Support>/Synth`, which is what the app always
+    /// uses — `SynthApp` constructs this model with no arguments. It is
+    /// injectable for exactly one reason: `SynthAppTests` drives this model for
+    /// real, and a test that bootstrapped into the owner's own container would
+    /// be writing to their library. A documented seam on one initialiser, the
+    /// same shape `SoundLibrary` uses for its clock and its identity generator.
+    private let containerOverride: AppContainer?
+
+    nonisolated init(container: AppContainer? = nil) {
+        self.containerOverride = container
+    }
 
     /// Opens the container and store, then publishes the resulting state.
     /// Never throws: every failure becomes a rendered launch error.
@@ -140,22 +168,95 @@ final class AppModel {
         guard let store else { return }
         if studio == nil {
             let editor = SoundEditorModel(store: store, playbackChannel: playbackChannel)
-            editor.onPlayThroughChanged = { [weak self] isPlayingThrough in
-                self?.playback?.setPlayingThroughEditedSound(isPlayingThrough)
-            }
-            // REQ-018 on an assigned line: an edit reaches every line of the
-            // open piece that plays this sound, while it plays, and nothing
-            // else.
-            editor.onPatchEdited = { [weak self] soundID, patch in
-                self?.playback?.assignment.publishEditedSound(id: soundID, patch: patch)
-            }
-            studio = SoundStudioModel(store: store, editor: editor)
+            let instrumentEditor = InstrumentEditorModel(store: store)
+            wireStudioToPlayback(editor: editor, instrumentEditor: instrumentEditor)
+            studio = SoundStudioModel(
+                store: store, editor: editor, instrumentEditor: instrumentEditor
+            )
         }
         isStudioShowing = true
     }
 
+    /// Connect the two editors to the open piece.
+    ///
+    /// **Extracted so it can be tested.** The increment-004 effort review found
+    /// that nothing covered these closures: the behaviour was proved one layer
+    /// below, at `SoundEditorModel` and `AssignmentModel.publishEditedSound`,
+    /// so a wiring regression here — a closure dropped, or pointed at the wrong
+    /// model — would have passed every test while REQ-018 quietly stopped
+    /// working in the app. Increment 005 adds a second editor with the same
+    /// three closures, which doubles the surface, so this leaf closes the gap:
+    /// `AppModelWiringTests` calls this with stubs and asserts each closure
+    /// reaches the model it names.
+    ///
+    /// `nonisolated` on the parameters is not needed — everything here is main
+    /// actor — but `[weak self]` is: the editors outlive individual playbacks
+    /// and must not keep the app model alive through a closure.
+    func wireStudioToPlayback(
+        editor: SoundEditorModel,
+        instrumentEditor: InstrumentEditorModel
+    ) {
+        editor.onPlayThroughChanged = { [weak self] isPlayingThrough in
+            self?.playback?.setPlayingThroughEditedSound(isPlayingThrough)
+        }
+        // REQ-018 on an assigned line: an edit reaches every line of the
+        // open piece that plays this sound, while it plays, and nothing
+        // else.
+        editor.onPatchEdited = { [weak self] soundID, patch in
+            self?.playback?.assignment.publishEditedSound(id: soundID, patch: patch)
+        }
+        // The same requirement for a customized instrument (INS003): moving a
+        // tone control reaches every line playing that variant, on the notes
+        // already sounding, without rebuilding the program.
+        instrumentEditor.onVariantEdited = { [weak self] soundID, variant in
+            self?.playback?.assignment.publishEditedVariant(id: soundID, variant: variant)
+        }
+    }
+
     func closeSoundStudio() {
         isStudioShowing = false
+    }
+
+    // MARK: - The instrument catalog
+
+    /// Show the curated instrument catalog (REQ-020, REQ-022).
+    ///
+    /// Built once and kept, because the model owns the download tasks. Sits
+    /// over whatever else is showing, like the studio does, so an open piece
+    /// keeps playing while a library downloads behind it.
+    func openInstrumentCatalog() {
+        guard let store else { return }
+        if instrumentCatalog == nil {
+            instrumentCatalog = InstrumentCatalogModel(store: store)
+        }
+        isInstrumentCatalogShowing = true
+    }
+
+    func closeInstrumentCatalog() {
+        isInstrumentCatalogShowing = false
+    }
+
+    /// Runs the first-run instrument offer once the store is open.
+    ///
+    /// Built without showing the screen: the offer is a sheet the catalog model
+    /// raises, and `RootView` shows the catalog when it does. An owner who
+    /// declines never sees the catalog screen at all.
+    private func prepareInstrumentsForFirstRun() {
+        guard let store else { return }
+        let catalog = instrumentCatalog ?? InstrumentCatalogModel(store: store)
+        instrumentCatalog = catalog
+        catalog.prepareForFirstRun()
+        guard catalog.isShowingFirstRunOffer else { return }
+
+        // Declining puts the screen away again. An owner who never asked to see
+        // the catalog and said no to it should be back where they were, not
+        // left looking at the thing they just turned down. Accepting keeps it
+        // open, because that is where the progress is.
+        catalog.onFirstRunOfferAnswered = { [weak self] didAccept in
+            guard let self, !didAccept else { return }
+            self.isInstrumentCatalogShowing = false
+        }
+        isInstrumentCatalogShowing = true
     }
 
     /// The Playback ▸ Open Selected Piece command, and the library's own
@@ -179,6 +280,12 @@ final class AppModel {
             studio?.editor.suspend()
             studio = nil
             isStudioShowing = false
+            // Downloads write into the container this store owns, so they have
+            // to stop before it is closed underneath them. Whatever has already
+            // arrived stays staged and resumes on the next attempt.
+            instrumentCatalog?.suspend()
+            instrumentCatalog = nil
+            isInstrumentCatalogShowing = false
             current.close()
             store = nil
         }
@@ -188,21 +295,26 @@ final class AppModel {
         state = .loading
         let appVersion = Bundle.main.synthVersionString
         do {
-            let opened = try await Self.openStore(appVersion: appVersion)
+            let opened = try await Self.openStore(
+                appVersion: appVersion, container: containerOverride
+            )
             store = opened
             state = .ready(LibraryModel(store: opened))
+            prepareInstrumentsForFirstRun()
         } catch {
             state = .failed(StoreFailure(error))
         }
     }
 
     /// Disk work runs off the main actor so launch stays responsive.
-    private static func openStore(appVersion: String) async throws -> LibraryStore {
+    private static func openStore(
+        appVersion: String, container: AppContainer?
+    ) async throws -> LibraryStore {
         try await Task.detached(priority: .userInitiated) {
             // The preset store registers itself inside `open`, in both the
             // piece-removal cascade (REQ-003) and the sound-deletion embed hook
             // (REQ-029), so no call site can open a store without them.
-            try LibraryStore.open(appVersion: appVersion)
+            try LibraryStore.open(container: container, appVersion: appVersion)
         }.value
     }
 }

@@ -24,11 +24,101 @@ static inline float synth_clampf(float value, float low, float high) {
 
 static inline int64_t synth_min64(int64_t a, int64_t b) { return a < b ? a : b; }
 
+/// Flush denormals, which are how a reverb tail quietly turns into a CPU spike.
+static inline float synth_room_flush(float value) {
+    return (value < 1.0e-25f && value > -1.0e-25f) ? 0.0f : value;
+}
+
+/// Replace a non-finite sample with silence before it enters a feedback loop.
+///
+/// A NaN in a comb filter is permanent: it feeds back into itself and every
+/// line's reverb is silent from then on. The lines themselves already sanitise
+/// their own output, so this is the second lock on the one path in the mixer
+/// with memory.
+static inline float synth_room_finite(float value) {
+    return (value == value && value * 0.0f == 0.0f) ? value : 0.0f;
+}
+
+/*
+ One channel of the hall, one frame.
+
+ Freeverb: eight damped comb filters in parallel into four allpasses in series.
+ The same topology as the per-patch reverb in `SynthPatchEngine.c`, with two
+ differences that follow from this being a shared bus rather than an insert —
+ there is no dry path (the caller adds the return to the dry mix itself) and no
+ pre-delay (a hall the whole orchestra shares wants its first reflection at the
+ same moment for every line, which is what a common bus already gives).
+ */
+static inline float synth_room_step(SynthRoomState *room, int32_t channel, float input) {
+    /* Input scaled by (1 - feedback) so the eight combs sum to roughly unity
+       whatever the decay length; otherwise a longer hall would simply be louder
+       rather than longer. */
+    const float driven = synth_room_finite(input) * 0.12f * (1.0f - SYNTH_ROOM_FEEDBACK);
+
+    float summed = 0.0f;
+    for (int32_t index = 0; index < SYNTH_ROOM_COMB_COUNT; index++) {
+        const int32_t cursor = room->combIndex[channel][index];
+        const float tap = room->comb[channel][index][cursor];
+        room->combStore[channel][index] = synth_room_flush(
+            tap + (room->combStore[channel][index] - tap) * SYNTH_ROOM_DAMPING);
+        room->comb[channel][index][cursor] = synth_room_flush(
+            synth_room_finite(driven + room->combStore[channel][index] * SYNTH_ROOM_FEEDBACK));
+        room->combIndex[channel][index] = cursor + 1 >= room->combLength[channel][index]
+            ? 0 : cursor + 1;
+        summed += tap;
+    }
+
+    float wet = summed;
+    for (int32_t index = 0; index < SYNTH_ROOM_ALLPASS_COUNT; index++) {
+        const int32_t cursor = room->allpassIndex[channel][index];
+        const float tap = room->allpass[channel][index][cursor];
+        const float output = tap - wet;
+        room->allpass[channel][index][cursor] = synth_room_flush(
+            synth_room_finite(wet + tap * 0.5f));
+        room->allpassIndex[channel][index] = cursor + 1 >= room->allpassLength[channel][index]
+            ? 0 : cursor + 1;
+        wet = output;
+    }
+
+    return wet;
+}
+
+/// Clear the hall without resizing it. Render thread, on a faded-out buffer.
+///
+/// A seek that left the previous passage ringing in the room would put audio
+/// from before the jump on top of the audio after it, which is exactly the
+/// discontinuity the declick fade exists to remove.
+static void synth_room_silence(SynthRoomState *room) {
+    if (room == NULL) { return; }
+    for (int32_t channel = 0; channel < 2; channel++) {
+        for (int32_t index = 0; index < SYNTH_ROOM_COMB_COUNT; index++) {
+            for (int32_t frame = 0; frame < room->combLength[channel][index]; frame++) {
+                room->comb[channel][index][frame] = 0.0f;
+            }
+            room->combStore[channel][index] = 0.0f;
+            room->combIndex[channel][index] = 0;
+        }
+        for (int32_t index = 0; index < SYNTH_ROOM_ALLPASS_COUNT; index++) {
+            for (int32_t frame = 0; frame < room->allpassLength[channel][index]; frame++) {
+                room->allpass[channel][index][frame] = 0.0f;
+            }
+            room->allpassIndex[channel][index] = 0;
+        }
+    }
+}
+
 #pragma mark - Scheduler
 
 /// Put every line back to its state at `frame`: cursors rewound, voices
 /// silenced, pedal state recomputed. Called only while the mix is faded out.
 static void synth_engine_relocate(SynthRenderEngine *engine, int64_t frame) {
+    /* The hall goes with the playhead. A seek that left the previous passage
+       ringing would lay audio from before the jump over the audio after it —
+       the one discontinuity the declick fade cannot hide, because it arrives
+       after the fade is over. */
+    synth_room_silence(engine->room);
+    engine->roomTailFrames = 0;
+
     for (int32_t l = 0; l < engine->lineCount; l++) {
         SynthRenderLine *line = &engine->lines[l];
 
@@ -76,8 +166,10 @@ static void synth_render_line(SynthRenderEngine *engine,
                               int32_t frameCount,
                               float gainLeft,
                               float gainRight,
+                              float roomGain,
                               float *outLeft,
-                              float *outRight) {
+                              float *outRight,
+                              float *roomOut) {
     int32_t offset = 0;
 
     while (offset < frameCount) {
@@ -171,6 +263,17 @@ static void synth_render_line(SynthRenderEngine *engine,
                 const float sample = engine->scratchMono[f];
                 outLeft[offset + f]  += sample * gainLeft;
                 outRight[offset + f] += sample * gainRight;
+            }
+            /* The room send is post-fader and post-mute: a line the owner
+               silenced is silent in the hall too, and pulling a fader down
+               takes its reverb with it. Sending pre-fader would leave a muted
+               line audible as its own reverb, which is the surprising answer.
+               `roomGain` is already zero when the line is muted or unsoloed,
+               so the guard below is the send itself. */
+            if (roomGain > 0.0f) {
+                for (int32_t f = 0; f < chunk; f++) {
+                    roomOut[offset + f] += engine->scratchMono[f] * roomGain;
+                }
             }
         }
 
@@ -315,6 +418,28 @@ int32_t synth_audio_core_render(SynthRenderEngine *engine,
         if (atomic_load_explicit(&engine->lines[l].soloed, memory_order_relaxed)) { anySolo = 1; break; }
     }
 
+    /* --- Is the room in use at all this block? --- */
+
+    /* The whole bus is skipped when nothing is sent to it, which is every mix
+       until the owner turns a send up. That is what keeps D7's room send from
+       costing REQ-013's budget anything by merely existing.
+
+       The hall goes on being rendered for its own tail after the last send
+       reaches zero, though: stopping the moment the control passes zero would
+       cut a ringing room off with a step, and it would do it exactly while the
+       owner had hold of the fader. */
+    int32_t anySend = 0;
+    for (int32_t l = 0; l < engine->lineCount; l++) {
+        if (atomic_load_explicit(&engine->lines[l].roomSend, memory_order_relaxed) > 0.0f) {
+            anySend = 1;
+            break;
+        }
+    }
+    if (anySend) {
+        engine->roomTailFrames = (int64_t)(SYNTH_ROOM_TAIL_SECONDS * engine->sampleRate);
+    }
+    const int32_t anyRoomSend = anySend || engine->roomTailFrames > 0;
+
     /* --- Render, stopping at the fade-out point if one is pending --- */
 
     int32_t offset = 0;
@@ -350,6 +475,10 @@ int32_t synth_audio_core_render(SynthRenderEngine *engine,
             (atomic_load_explicit(&engine->transportState, memory_order_relaxed) == SynthTransportPlaying);
 
         if (rendering) {
+            if (anyRoomSend) {
+                for (int32_t f = 0; f < chunk; f++) { engine->scratchRoom[f] = 0.0f; }
+            }
+
             for (int32_t l = 0; l < engine->lineCount; l++) {
                 SynthRenderLine *line = &engine->lines[l];
 
@@ -366,11 +495,39 @@ int32_t synth_audio_core_render(SynthRenderEngine *engine,
                 const float gainLeft = cosf(theta) * gain;
                 const float gainRight = sinf(theta) * gain;
 
+                const float send = anyRoomSend
+                    ? atomic_load_explicit(&line->roomSend, memory_order_relaxed)
+                    : 0.0f;
+
                 synth_render_line(engine, line,
                                   engine->cursorFrame, chunk,
-                                  gainLeft, gainRight,
-                                  outLeft + offset, outRight + offset);
+                                  gainLeft, gainRight, send * gain,
+                                  outLeft + offset, outRight + offset,
+                                  engine->scratchRoom);
             }
+
+            /* The hall, once, over everything that was sent to it. Added to the
+               dry mix before the declick and master gain below, so a fade takes
+               the reverb with it rather than leaving a tail hanging over a
+               silenced transport. */
+            if (anyRoomSend) {
+                const int32_t separate = (outRight != outLeft);
+                for (int32_t f = 0; f < chunk; f++) {
+                    const float input = engine->scratchRoom[f];
+                    const float left = synth_room_step(engine->room, 0, input);
+                    const float right = separate
+                        ? synth_room_step(engine->room, 1, input)
+                        : left;
+                    outLeft[offset + f] += left * SYNTH_ROOM_RETURN_GAIN;
+                    if (separate) { outRight[offset + f] += right * SYNTH_ROOM_RETURN_GAIN; }
+                }
+            }
+
+            if (anyRoomSend && !anySend) {
+                engine->roomTailFrames -= chunk;
+                if (engine->roomTailFrames < 0) { engine->roomTailFrames = 0; }
+            }
+
             engine->cursorFrame += chunk;
         }
 
@@ -507,6 +664,17 @@ float synth_engine_line_pan(const SynthRenderEngine *engine, int32_t lineIndex) 
 int32_t synth_engine_line_muted(const SynthRenderEngine *engine, int32_t lineIndex) {
     if (engine == NULL || lineIndex < 0 || lineIndex >= engine->lineCount) { return 0; }
     return atomic_load_explicit(&engine->lines[lineIndex].muted, memory_order_relaxed);
+}
+
+void synth_engine_set_line_room_send(SynthRenderEngine *engine, int32_t lineIndex, float send) {
+    if (engine == NULL || lineIndex < 0 || lineIndex >= engine->lineCount) { return; }
+    atomic_store_explicit(&engine->lines[lineIndex].roomSend,
+                          synth_clampf(send, 0.0f, 1.0f), memory_order_relaxed);
+}
+
+float synth_engine_line_room_send(const SynthRenderEngine *engine, int32_t lineIndex) {
+    if (engine == NULL || lineIndex < 0 || lineIndex >= engine->lineCount) { return 0.0f; }
+    return atomic_load_explicit(&engine->lines[lineIndex].roomSend, memory_order_relaxed);
 }
 
 int32_t synth_engine_line_soloed(const SynthRenderEngine *engine, int32_t lineIndex) {

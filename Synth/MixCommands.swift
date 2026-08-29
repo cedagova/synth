@@ -85,6 +85,30 @@ struct MixCommands: Commands {
             Button("Centre Line Pan") { assignment?.centrePanOnSelectedLine() }
                 .keyboardShortcut("0", modifiers: [.command, .control])
 
+            // D7's room send. `[` and `]` rather than more letters because the
+            // letter space in this menu is nearly full and a bracket pair reads
+            // as a magnitude the way `u`/`j` do for volume.
+            Button("More Room on Line") {
+                assignment?.nudgeRoomSendOnSelectedLine(by: AssignmentDisplay.roomSendStep)
+            }
+            .keyboardShortcut("]", modifiers: [.command, .control])
+
+            Button("Less Room on Line") {
+                assignment?.nudgeRoomSendOnSelectedLine(by: -AssignmentDisplay.roomSendStep)
+            }
+            .keyboardShortcut("[", modifiers: [.command, .control])
+
+            Divider()
+
+            // Issue #24's explicit acknowledgment, from the keyboard. The
+            // on-screen button beside the flagged line is the ordinary way; this
+            // is the one a keyboard-only owner can always reach, and it refuses
+            // to act on a line that has nothing to substitute.
+            Button("Substitute Missing Instrument on Line") {
+                assignment?.toggleSubstitutionOnSelectedLine()
+            }
+            .keyboardShortcut("i", modifiers: [.command, .control])
+
             Divider()
 
             Button("New Preset") { assignment?.createPreset() }

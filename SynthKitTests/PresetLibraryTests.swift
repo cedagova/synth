@@ -664,7 +664,7 @@ final class PresetLibraryTests: XCTestCase {
 
         let performance = try store.openActivePreset(for: score)
         let resolved = try XCTUnwrap(performance.lines.first { $0.lineID == line })
-        XCTAssertEqual(resolved.patch.filter.cutoffHertz, 9_000,
+        XCTAssertEqual(try XCTUnwrap(resolved.patch).filter.cutoffHertz, 9_000,
                        "The preset must follow the sound, not a copy of it")
         XCTAssertFalse(resolved.source.isEmbedded)
     }
@@ -873,7 +873,7 @@ final class PresetLibraryTests: XCTestCase {
                         originalSoundID: "user.gone",
                         name: "Gone",
                         category: .bells,
-                        patch: testPatch(cutoff: 4_321),
+                        content: .synth(testPatch(cutoff: 4_321)),
                         embeddedAt: "2026-08-28T00:00:00Z"
                     )
                 ),
@@ -1013,6 +1013,8 @@ final class PresetLibraryTests: XCTestCase {
                 """
                 DROP TABLE presets;
                 DROP TABLE line_names;
+                DROP TABLE installed_instrument_libraries;
+                ALTER TABLE sounds DROP COLUMN kind;
                 UPDATE schema_version SET version = 4 WHERE id = 1;
                 """
             )
@@ -1023,7 +1025,10 @@ final class PresetLibraryTests: XCTestCase {
 
         XCTAssertEqual(store.migrationOutcome.previousVersion, 4)
         XCTAssertEqual(store.migrationOutcome.currentVersion, SchemaMigrator.latestVersion)
-        XCTAssertEqual(store.migrationOutcome.appliedMigrationNames, ["create_presets"])
+        XCTAssertEqual(
+            store.migrationOutcome.appliedMigrationNames,
+            ["create_presets", "create_installed_instrument_libraries", "add_sound_kind"]
+        )
 
         // Nothing the previous build wrote was disturbed.
         XCTAssertEqual(try store.pieceCount(), 1)
@@ -1056,7 +1061,7 @@ final class PresetLibraryTests: XCTestCase {
             guard case StoreError.storeWrittenByNewerApp(let stored, let supported) = error else {
                 return XCTFail("Expected storeWrittenByNewerApp, got \(error)")
             }
-            XCTAssertEqual(stored, 5)
+            XCTAssertEqual(stored, SchemaMigrator.latestVersion)
             XCTAssertEqual(supported, 4)
         }
 

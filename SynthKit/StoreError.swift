@@ -61,6 +61,15 @@ public enum StoreError: Error, Equatable, Sendable {
     /// it would lose an interpretation the owner built, which REQ-025 is
     /// precisely a promise not to do.
     case presetRowUnreadable(id: String, reason: String)
+
+    /// An `installed_instrument_libraries` row could not be decoded.
+    ///
+    /// Loud for the same reason as the rows above, and with the same
+    /// all-or-nothing consequence: one unreadable row stops the installed set
+    /// being listed rather than costing one library. Silently dropping it would
+    /// tell the owner that gigabytes they downloaded are not there, and offer
+    /// to fetch them again.
+    case installedInstrumentRowUnreadable(id: String, reason: String)
 }
 
 extension StoreError: LocalizedError {
@@ -97,6 +106,11 @@ extension StoreError: LocalizedError {
             return "Synth could not read the sound \(id), so it cannot list your sound library. \(reason)"
         case .presetRowUnreadable(let id, let reason):
             return "Synth could not read the preset \(id), so it cannot list this piece's presets. \(reason)"
+        case .installedInstrumentRowUnreadable(let id, let reason):
+            return """
+                Synth could not read the record of the installed instrument library \(id), \
+                so it cannot list your instruments. \(reason)
+                """
         }
     }
 
@@ -124,6 +138,8 @@ extension StoreError: LocalizedError {
             return "No sounds can be listed until that entry is dealt with. Update Synth to the newest version you have used with this library, or restore the library from a backup."
         case .presetRowUnreadable:
             return "This piece's presets cannot be listed until that entry is dealt with. Update Synth to the newest version you have used with this library, or restore the library from a backup."
+        case .installedInstrumentRowUnreadable:
+            return "Your downloaded instruments are still on disk. Update Synth to the newest version you have used with this library, or restore the library from a backup."
         }
     }
 }

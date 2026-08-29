@@ -47,6 +47,21 @@ public protocol LineVoiceProvider: Sendable {
     /// Defaulted, so this stayed a purely additive change to the interface
     /// increments 003 and 005 both bind to.
     var releaseTailSeconds: Double { get }
+
+    /// Lines this sound could not build a voice for, and which are therefore
+    /// rendering silence rather than music.
+    ///
+    /// **Zero in every normal run, and the interface has to be able to say so
+    /// when it is not.** INS002 made the deliberate choice that a sampled
+    /// instrument whose voice cannot be allocated renders silence rather than
+    /// quietly becoming a synthesizer, because a substitute the owner did not
+    /// ask for is the prohibited end state INS003 exists to gate. Silence the
+    /// owner is not told about is the same failure by the other route — so the
+    /// count is on the interface, and `LineRenderHealth` turns it into a flag.
+    ///
+    /// Defaulted to zero, so a provider that cannot fail to build a voice —
+    /// the synthesizer allocates nothing per voice — says nothing about it.
+    var unbuiltVoiceCount: Int { get }
 }
 
 extension LineVoiceProvider {
@@ -54,6 +69,8 @@ extension LineVoiceProvider {
     /// opinion. Ample for a short release, and the right answer for a sound
     /// that genuinely does not know.
     public var releaseTailSeconds: Double { 2.0 }
+
+    public var unbuiltVoiceCount: Int { 0 }
 }
 
 /// One line's voice: the C vtable the render thread calls, plus the control-
@@ -67,8 +84,29 @@ public struct LineVoiceInstance: @unchecked Sendable {
     public let vtable: SynthLineVoice
     public let release: @Sendable () -> Void
 
-    public init(vtable: SynthLineVoice, release: @escaping @Sendable () -> Void) {
+    /// True when the provider meant to build a sounding voice and could not, so
+    /// this line renders silence it did not ask for.
+    ///
+    /// **Not the same thing as a voice that renders silence on purpose.** A
+    /// line whose instrument is not downloaded is *deliberately* quiet and
+    /// already carries a sentence saying so; this is the other case — the
+    /// instrument is here, the allocation failed, and nobody would otherwise
+    /// know. INS002 chose silence over quietly substituting a synth patch when
+    /// `sample_voice_create` cannot allocate, because an unasked-for substitute
+    /// is the end state issue #24 gates; this flag is what stops the remaining
+    /// failure, silence nobody was told about.
+    ///
+    /// Defaulted to false, so a provider that cannot fail to build a voice says
+    /// nothing about it.
+    public let didFailToBuild: Bool
+
+    public init(
+        vtable: SynthLineVoice,
+        didFailToBuild: Bool = false,
+        release: @escaping @Sendable () -> Void
+    ) {
         self.vtable = vtable
+        self.didFailToBuild = didFailToBuild
         self.release = release
     }
 }

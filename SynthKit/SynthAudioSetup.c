@@ -18,6 +18,68 @@
 #include <math.h>
 #include <mach/mach_time.h>
 
+/*
+ Freeverb's comb and allpass tunings, in frames at 44.1 kHz, and the published
+ stereo spread.
+
+ Kept as the published values and scaled rather than re-derived, exactly as the
+ per-patch reverb in `SynthPatchSetup.c` keeps them: they are mutually prime
+ lengths chosen so the combs do not reinforce each other into a metallic ring.
+ The 23-frame spread on the right channel is what gives the hall a width
+ instead of a centre.
+ */
+static const int32_t synth_room_comb_tuning[SYNTH_ROOM_COMB_COUNT] = {
+    1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617
+};
+static const int32_t synth_room_allpass_tuning[SYNTH_ROOM_ALLPASS_COUNT] = {
+    556, 441, 341, 225
+};
+static const int32_t synth_room_stereo_spread = 23;
+
+/// Size the hall's delay lines for `sampleRate` and clear them.
+///
+/// Control thread. Called when the engine is built and again on a rate change,
+/// which is the only time the lengths can move.
+void synth_room_prepare(SynthRoomState *room, double sampleRate) {
+    if (room == NULL) { return; }
+
+    /* Capped at the rate the buffers were sized for. Without the cap a 192 kHz
+       interface — ordinary hardware for this audience — would make every comb
+       saturate to the same maximum length, and eight identical combs are not a
+       room, they are one ring. */
+    const double effectiveRate = sampleRate > SYNTH_ROOM_MAX_SAMPLE_RATE
+        ? SYNTH_ROOM_MAX_SAMPLE_RATE
+        : (sampleRate > 0.0 ? sampleRate : 44100.0);
+    const double scale = effectiveRate / 44100.0;
+
+    for (int32_t channel = 0; channel < 2; channel++) {
+        const int32_t spread = channel == 0 ? 0 : synth_room_stereo_spread;
+
+        for (int32_t index = 0; index < SYNTH_ROOM_COMB_COUNT; index++) {
+            int32_t length = (int32_t)((double)synth_room_comb_tuning[index] * scale) + spread;
+            if (length < 1) { length = 1; }
+            if (length > SYNTH_ROOM_COMB_MAX_FRAMES) { length = SYNTH_ROOM_COMB_MAX_FRAMES; }
+            room->combLength[channel][index] = length;
+            room->combIndex[channel][index] = 0;
+            room->combStore[channel][index] = 0.0f;
+            for (int32_t frame = 0; frame < length; frame++) {
+                room->comb[channel][index][frame] = 0.0f;
+            }
+        }
+
+        for (int32_t index = 0; index < SYNTH_ROOM_ALLPASS_COUNT; index++) {
+            int32_t length = (int32_t)((double)synth_room_allpass_tuning[index] * scale) + spread;
+            if (length < 1) { length = 1; }
+            if (length > SYNTH_ROOM_ALLPASS_MAX_FRAMES) { length = SYNTH_ROOM_ALLPASS_MAX_FRAMES; }
+            room->allpassLength[channel][index] = length;
+            room->allpassIndex[channel][index] = 0;
+            for (int32_t frame = 0; frame < length; frame++) {
+                room->allpass[channel][index][frame] = 0.0f;
+            }
+        }
+    }
+}
+
 SynthRenderEngine *synth_engine_create(int32_t lineCount,
                                        int32_t maximumFrameCount,
                                        double sampleRate) {
@@ -42,11 +104,30 @@ SynthRenderEngine *synth_engine_create(int32_t lineCount,
         return NULL;
     }
 
+    engine->scratchRoom = (float *)calloc((size_t)maximumFrameCount, sizeof(float));
+    if (engine->scratchRoom == NULL) {
+        free(engine->scratchMono);
+        free(engine->lines);
+        free(engine);
+        return NULL;
+    }
+
+    engine->room = (SynthRoomState *)calloc(1, sizeof(SynthRoomState));
+    if (engine->room == NULL) {
+        free(engine->scratchRoom);
+        free(engine->scratchMono);
+        free(engine->lines);
+        free(engine);
+        return NULL;
+    }
+    synth_room_prepare(engine->room, sampleRate);
+
     for (int32_t l = 0; l < lineCount; l++) {
         atomic_store_explicit(&engine->lines[l].gain, 1.0f, memory_order_relaxed);
         atomic_store_explicit(&engine->lines[l].pan, 0.0f, memory_order_relaxed);
         atomic_store_explicit(&engine->lines[l].muted, 0, memory_order_relaxed);
         atomic_store_explicit(&engine->lines[l].soloed, 0, memory_order_relaxed);
+        atomic_store_explicit(&engine->lines[l].roomSend, 0.0f, memory_order_relaxed);
     }
 
     atomic_store_explicit(&engine->masterGain, 1.0f, memory_order_relaxed);
@@ -77,6 +158,8 @@ void synth_engine_destroy(SynthRenderEngine *engine) {
     }
     free(engine->lines);
     free(engine->scratchMono);
+    free(engine->scratchRoom);
+    free(engine->room);
     free(engine);
 }
 
@@ -171,6 +254,7 @@ void synth_engine_set_sample_rate(SynthRenderEngine *engine, double sampleRate) 
     if (engine == NULL || sampleRate <= 0.0) { return; }
     engine->sampleRate = sampleRate;
     engine->declickStep = (float)(1.0 / (SYNTH_DECLICK_SECONDS * sampleRate));
+    synth_room_prepare(engine->room, sampleRate);
     for (int32_t l = 0; l < engine->lineCount; l++) {
         const SynthLineVoice *voice = &engine->lines[l].voice;
         if (voice->prepare) { voice->prepare(voice->state, sampleRate); }

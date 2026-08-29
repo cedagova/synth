@@ -16,6 +16,7 @@ struct SynthApp: App {
             PlaybackCommands(model: model)
             MixCommands(model: model)
             SoundCommands(model: model)
+            InstrumentCommands(model: model)
         }
     }
 }

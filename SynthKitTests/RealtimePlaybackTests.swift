@@ -224,6 +224,77 @@ final class RealtimePlaybackTests: XCTestCase {
         )
     }
 
+    /// The same guardrail with D7's shared room carrying every line.
+    ///
+    /// **This is the adverse case for the room, not the ordinary one.** The bus
+    /// is skipped entirely while every send is zero, which is every mix until
+    /// the owner turns one up — so a guardrail run with the sends down would
+    /// measure a code path that did not execute. Eighteen lines all the way up
+    /// is the most the hall can ever be asked to do, and it is what REQ-013 has
+    /// to hold for.
+    func testOrchestralReferenceSurvivesEveryLineSendingToTheRoom() throws {
+        try requireOutputDevice()
+        try XCTSkipIf(
+            !fullGuardrailEnabled,
+            "Set SYNTH_REALTIME_GUARDRAIL=1 to run the full-length real-time guardrail."
+        )
+
+        let timeline = try AudioRenderFixtures.timeline(
+            MusicXMLScoreFixtures.orchestralExcerpt(),
+            settings: .standard
+        )
+        let expectedSeconds = Double(timeline.totalMicroseconds) / 1_000_000
+
+        let engine = PlaybackEngine()
+        try engine.load(timeline: timeline)
+
+        let program = try XCTUnwrap(engine.loadedProgram)
+        for index in program.lineIDs.indices {
+            engine.mixer(forLineAt: index)?.roomSend = 1
+        }
+
+        try engine.start()
+        engine.resetStatistics()
+        engine.play()
+        XCTAssertTrue(waitUntilPlaying(engine), "Playback never started.")
+
+        let started = Date()
+        while engine.transportState == .playing,
+              Date().timeIntervalSince(started) < expectedSeconds + 15 {
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        let elapsed = Date().timeIntervalSince(started)
+        let statistics = engine.statistics
+        let reason = engine.pauseReason
+        engine.stopEngine()
+
+        print("""
+            REQ-013 with the room — orchestral reference, every line at full send
+              lines:            \(timeline.lines.count)
+              events:           \(timeline.eventCount)
+              timeline length:  \(String(format: "%.1f", expectedSeconds)) s
+              wall clock:       \(String(format: "%.1f", elapsed)) s
+              rendered blocks:  \(statistics.renderedBlocks)
+              overload blocks:  \(statistics.overloadBlocks) \
+            (\(String(format: "%.4f", statistics.overloadRatio * 100))%)
+              overload pauses:  \(statistics.overloadPauses)
+              peak level:       \(String(format: "%.3f", statistics.peakLevel))
+              ended because:    \(reason)
+            """)
+
+        XCTAssertEqual(reason, .reachedEnd, "Playback did not run to the end; it stopped for \(reason).")
+        XCTAssertEqual(statistics.overloadPauses, 0, "The engine degraded to a pause under load.")
+        XCTAssertLessThan(
+            statistics.overloadRatio, 0.001,
+            "\(statistics.overloadBlocks) of \(statistics.renderedBlocks) blocks missed their "
+                + "deadline with the room carrying every line."
+        )
+        XCTAssertLessThan(
+            statistics.peakLevel, 1.0,
+            "The room pushed the mix into the limiter at \(statistics.peakLevel)."
+        )
+    }
+
     /// The same guardrail for the expressive reference.
     func testExpressiveReferencePlaysStartToFinishWithoutDropouts() throws {
         try requireOutputDevice()

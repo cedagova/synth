@@ -157,14 +157,34 @@ public enum AssignmentDisplay {
 
     // MARK: The mix as a whole
 
-    /// True when this line reaches the output: mute wins over solo, and an
+    /// True when this line is routed to the output: mute wins over solo, and an
     /// unsoloed line is silent while anything is soloed.
     ///
-    /// The engine's rule, restated here so the panel can say how many lines are
-    /// actually being heard without asking the render thread.
-    public static func isAudible(_ line: ResolvedLine, whileSoloing isSoloing: Bool) -> Bool {
+    /// The engine's rule, restated here so the panel can say how the mixer is
+    /// set without asking the render thread. **Routed is not the same as
+    /// heard** — see `isHeard` below — and the two were the same thing only
+    /// while every line had a sound it could actually play.
+    public static func isRouted(_ line: ResolvedLine, whileSoloing isSoloing: Bool) -> Bool {
         if line.mixer.isMuted { return false }
         return isSoloing ? line.mixer.isSoloed : true
+    }
+
+    /// True when this line is producing sound.
+    ///
+    /// **Routed *and* able to play.** A line whose instrument is not
+    /// downloaded is routed — nothing is muted and nothing is soloed over it —
+    /// and produces nothing, because issue #24 requires exactly that rather
+    /// than a substitute the owner did not ask for. Counting it as heard was
+    /// this summary telling the owner six lines were sounding while the banner
+    /// directly above it named one of them as silent.
+    public static func isHeard(_ line: ResolvedLine, whileSoloing isSoloing: Bool) -> Bool {
+        isRouted(line, whileSoloing: isSoloing) && !line.isSilent
+    }
+
+    /// Retained name for the routed test, which is what every caller before
+    /// increment 005 meant by it.
+    public static func isAudible(_ line: ResolvedLine, whileSoloing isSoloing: Bool) -> Bool {
+        isHeard(line, whileSoloing: isSoloing)
     }
 
     public static func isSoloing(_ lines: [ResolvedLine]) -> Bool {
@@ -173,11 +193,25 @@ public enum AssignmentDisplay {
 
     public static func audibleLineCount(_ lines: [ResolvedLine]) -> Int {
         let soloing = isSoloing(lines)
-        return lines.count { isAudible($0, whileSoloing: soloing) }
+        return lines.count { isHeard($0, whileSoloing: soloing) }
     }
 
-    /// `4 lines · 1 soloed · 1 heard`. The one line that says whether what the
-    /// owner is hearing is what they think they are hearing.
+    /// Lines that are routed but producing nothing, because the sound they were
+    /// given is not available to play.
+    public static func silentLineCount(_ lines: [ResolvedLine]) -> Int {
+        let soloing = isSoloing(lines)
+        return lines.count { isRouted($0, whileSoloing: soloing) && $0.isSilent }
+    }
+
+    /// `4 lines · 1 soloed · 1 heard`, and `6 lines · 1 silent · 5 heard` when a
+    /// line is routed and has nothing to play.
+    ///
+    /// **The one line that says whether what the owner is hearing is what they
+    /// think they are hearing** — which is why the silent count is here and not
+    /// only on the line. Until increment 005 a routed line always sounded, so
+    /// "heard" and "routed" were the same number; a line whose instrument is
+    /// missing is deliberately routed and deliberately silent, and folding it
+    /// into "heard" made this sentence contradict the banner above it.
     public static func mixSummary(_ lines: [ResolvedLine]) -> String {
         guard !lines.isEmpty else { return "No lines." }
 
@@ -186,6 +220,8 @@ public enum AssignmentDisplay {
         if soloed > 0 { parts.append("\(soloed) soloed") }
         let muted = lines.count { $0.mixer.isMuted }
         if muted > 0 { parts.append("\(muted) muted") }
+        let silent = silentLineCount(lines)
+        if silent > 0 { parts.append("\(silent) silent") }
         parts.append("\(audibleLineCount(lines)) heard")
         return parts.joined(separator: " · ")
     }

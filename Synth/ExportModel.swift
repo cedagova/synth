@@ -109,12 +109,22 @@ final class ExportModel {
 
     /// How the destination is chosen.
     ///
-    /// An `NSSavePanel` in the app. A seam because a save panel cannot be
-    /// answered by a test, and because the sandbox runs it out of process where
-    /// nothing in this process can drive it — so `ExportWiringTests` and the
-    /// local smoke driver supply a URL directly and everything downstream of the
-    /// choice is the production path.
-    var chooseDestination: @MainActor (_ suggestedName: String, _ format: AudioExportFormat) -> URL?
+    /// An `NSSavePanel`, attached to the window as a sheet. A seam because a
+    /// save panel cannot be answered by a test — `ExportWiringTests` supplies a
+    /// URL directly and everything downstream of the choice is the production
+    /// path.
+    ///
+    /// **Completion-based rather than returning a URL**, because the panel is
+    /// presented as a sheet rather than run app-modally. A modal panel blocks
+    /// the main thread inside this call, which stops the transport's ticker and
+    /// any export already running, and puts a window-wide modal loop over an
+    /// app whose other windows stay meaningful. A sheet on the window that
+    /// asked for it is also what every other file interaction in macOS does.
+    var chooseDestination: @MainActor (
+        _ suggestedName: String,
+        _ format: AudioExportFormat,
+        _ completion: @escaping @MainActor (URL?) -> Void
+    ) -> Void
 
     init(pieceTitle: String) {
         self.pieceTitle = pieceTitle
@@ -187,10 +197,12 @@ final class ExportModel {
     /// panel — is separable from everything this leaf actually owns.
     func chooseDestinationAndStart() {
         guard !isExporting else { return }
-        guard let destination = chooseDestination(suggestedFileName, settings.format) else {
-            return  // The owner cancelled the panel. Nothing happened.
+        chooseDestination(suggestedFileName, settings.format) { [weak self] destination in
+            // Nil means the owner cancelled the panel. Nothing happened, and
+            // nothing is reported: cancelling a file chooser is not a failure.
+            guard let self, let destination else { return }
+            self.start(to: destination)
         }
-        start(to: destination)
     }
 
     /// Render the open piece to `destination` on a background thread.
@@ -283,11 +295,14 @@ final class ExportModel {
 
     // MARK: Destination
 
-    /// The shipped destination chooser: a real save panel.
+    /// The shipped destination chooser: a real save panel, attached to the
+    /// window that asked for it.
     @MainActor
     private static func presentSavePanel(
-        suggestedName: String, format: AudioExportFormat
-    ) -> URL? {
+        suggestedName: String,
+        format: AudioExportFormat,
+        completion: @escaping @MainActor (URL?) -> Void
+    ) {
         let panel = NSSavePanel()
         panel.title = "Export Audio"
         panel.prompt = "Export"
@@ -299,8 +314,19 @@ final class ExportModel {
         if let type = UTType(format.contentTypeIdentifier) {
             panel.allowedContentTypes = [type]
         }
-        guard panel.runModal() == .OK, let url = panel.url else { return nil }
-        return url
+
+        // The export sheet is the key window when this runs, so the panel lands
+        // on it. Falling back to the app-modal panel keeps the command working
+        // if it is ever invoked with no window at all.
+        guard let host = NSApp.keyWindow ?? NSApp.mainWindow else {
+            completion(panel.runModal() == .OK ? panel.url : nil)
+            return
+        }
+        panel.beginSheetModal(for: host) { response in
+            MainActor.assumeIsolated {
+                completion(response == .OK ? panel.url : nil)
+            }
+        }
     }
 
     // MARK: Formatting

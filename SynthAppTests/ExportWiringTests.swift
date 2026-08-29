@@ -115,14 +115,13 @@ final class ExportWiringTests: XCTestCase {
 
     /// The sheet's Export button, with the save panel answered by a fixed URL.
     ///
-    /// The panel is the one step a test cannot drive — under the sandbox it is
-    /// another process's window — so it is the one step replaced. Everything
-    /// after the choice, including `chooseDestinationAndStart`, is the shipped
-    /// path.
+    /// The panel is the one step a test cannot drive, so it is the one step
+    /// replaced. Everything after the choice, including
+    /// `chooseDestinationAndStart`, is the shipped path.
     private func exportAndWait(
         _ playback: PlaybackModel, to url: URL, timeout: TimeInterval = 120
     ) async throws -> AudioExportResult {
-        playback.export.chooseDestination = { _, _ in url }
+        playback.export.chooseDestination = { _, _, done in done(url) }
         playback.export.chooseDestinationAndStart()
         return try await waitForFinish(playback, timeout: timeout)
     }
@@ -184,7 +183,7 @@ final class ExportWiringTests: XCTestCase {
         XCTAssertNil(playback.export.makeRequest(.cdQuality))
 
         let url = exports.appending(path: "unready.wav")
-        playback.export.chooseDestination = { _, _ in url }
+        playback.export.chooseDestination = { _, _, done in done(url) }
         playback.export.chooseDestinationAndStart()
 
         guard case .failed(let failure) = playback.export.phase else {
@@ -366,7 +365,7 @@ final class ExportWiringTests: XCTestCase {
         let playback = try await openPreparedPiece(measureCount: 40)
         let url = exports.appending(path: "cancelled.wav")
 
-        playback.export.chooseDestination = { _, _ in url }
+        playback.export.chooseDestination = { _, _, done in done(url) }
         playback.export.chooseDestinationAndStart()
 
         // Wait for the render to be genuinely under way before pressing Cancel.
@@ -411,7 +410,7 @@ final class ExportWiringTests: XCTestCase {
         let playback = try await openPreparedPiece(measureCount: 40)
         let url = exports.appending(path: "abandoned.wav")
 
-        playback.export.chooseDestination = { _, _ in url }
+        playback.export.chooseDestination = { _, _, done in done(url) }
         playback.export.chooseDestinationAndStart()
         for _ in 0..<400 {
             if case .exporting(let progress) = playback.export.phase, progress != nil { break }

@@ -521,6 +521,38 @@ final class AudioExportTests: XCTestCase {
         assertNothingWasLeftBehind(at: url)
     }
 
+    /// A disk that fills at the *flush* rather than at a write.
+    ///
+    /// Separate from the test above, and it caught a real gap: closing a file
+    /// handle is a write, so a handle holding buffered bytes reports `ENOSPC`
+    /// from `close(2)` rather than from `write(2)`. That path was reaching the
+    /// owner as a bare POSIX string with no recovery, and — worse — it was the
+    /// one failure that could still have published a file whose tail never
+    /// landed.
+    func testADiskThatFillsAtTheFlushFailsTheExportAndExplainsItself() throws {
+        let timeline = try fixtureTimeline()
+        let url = destination("full-at-close.wav")
+
+        XCTAssertThrowsError(
+            try AudioExporter(request: request(timeline)).run(
+                to: url, opener: FullDiskOpener(bytesBeforeFailure: .max, failsOnClose: true)
+            )
+        ) { error in
+            guard case .writeFailed(_, let reason)? = error as? AudioExportError else {
+                return XCTFail("Expected a write failure, got \(error)")
+            }
+            XCTAssertTrue(
+                reason.lowercased().contains("space"),
+                "The flush failure should name the real reason; got “\(reason)”."
+            )
+            XCTAssertTrue(
+                (error as? LocalizedError)?.recoverySuggestion?.contains("disk space") == true,
+                "The owner should be told to free up space here too."
+            )
+        }
+        assertNothingWasLeftBehind(at: url)
+    }
+
     /// **The strongest form of the atomicity claim:** a failed overwrite leaves
     /// the *previous* export exactly as it was.
     func testAFailedExportLeavesAnExistingFileUntouched() throws {
@@ -888,20 +920,35 @@ final class AudioExportTests: XCTestCase {
 /// failure path, not a bespoke one.
 private struct FullDiskOpener: StagingFileOpening {
     let bytesBeforeFailure: Int
+    /// Fail at the flush instead of at a write — where a handle holding
+    /// buffered bytes actually reports a full disk.
+    var failsOnClose = false
 
     func openForAppending(at url: URL) throws -> AppendableFile {
         let real = try FileSystemStagingFileOpener().openForAppending(at: url)
-        return FullDiskFile(underlying: real, budget: bytesBeforeFailure)
+        return FullDiskFile(
+            underlying: real, budget: bytesBeforeFailure, failsOnClose: failsOnClose
+        )
     }
 }
 
 private final class FullDiskFile: AppendableFile {
     private let underlying: AppendableFile
     private var remaining: Int
+    private let failsOnClose: Bool
 
-    init(underlying: AppendableFile, budget: Int) {
+    init(underlying: AppendableFile, budget: Int, failsOnClose: Bool = false) {
         self.underlying = underlying
         self.remaining = budget
+        self.failsOnClose = failsOnClose
+    }
+
+    private static var outOfSpace: NSError {
+        NSError(
+            domain: NSPOSIXErrorDomain,
+            code: Int(ENOSPC),
+            userInfo: [NSLocalizedDescriptionKey: "There is no space left on the disk."]
+        )
     }
 
     func append(_ data: Data) throws {
@@ -910,17 +957,16 @@ private final class FullDiskFile: AppendableFile {
             // partial audio when the failure lands.
             if remaining > 0 { try underlying.append(data.prefix(remaining)) }
             remaining = 0
-            throw NSError(
-                domain: NSPOSIXErrorDomain,
-                code: Int(ENOSPC),
-                userInfo: [NSLocalizedDescriptionKey: "There is no space left on the disk."]
-            )
+            throw Self.outOfSpace
         }
         remaining -= data.count
         try underlying.append(data)
     }
 
-    func close() throws { try underlying.close() }
+    func close() throws {
+        try underlying.close()
+        if failsOnClose { throw Self.outOfSpace }
+    }
 }
 
 /// Progress arrives on the export's thread; these two collect it without racing

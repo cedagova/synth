@@ -187,7 +187,12 @@ public struct AudioExporter: Sendable {
         // leaves nothing behind.
         if cancellation.isCancelled { throw AudioExportError.cancelled }
 
-        try file.close()
+        // Closing is a write: a file handle can be holding buffered bytes, and
+        // the flush is where a disk that filled during the last block actually
+        // reports itself. Left unmapped, that failure reached the owner as a
+        // bare POSIX message instead of "free up disk space"; and it must fail
+        // the export rather than publishing a file whose tail never landed.
+        try staging.close(file)
         try staging.publish()
 
         return AudioExportResult(
@@ -560,6 +565,18 @@ struct AudioExportStaging {
         guard !data.isEmpty else { return }
         do {
             try file.append(data)
+        } catch {
+            throw AudioExportError.writeFailed(
+                path: stagedURL.path(percentEncoded: false),
+                reason: (error as NSError).localizedDescription
+            )
+        }
+    }
+
+    /// Flushes and closes, reporting a failed flush as the write it is.
+    func close(_ file: AppendableFile) throws {
+        do {
+            try file.close()
         } catch {
             throw AudioExportError.writeFailed(
                 path: stagedURL.path(percentEncoded: false),

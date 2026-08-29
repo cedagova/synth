@@ -212,10 +212,15 @@ final class AppModelWiringTests: XCTestCase {
     /// The same claim for a customized instrument, through the second editor.
     ///
     /// The variant references an instrument no library here installs, which is
-    /// deliberate: what is under test is the *wiring*, and a variant resolves
-    /// and publishes through exactly the same path whether or not its samples
-    /// are on disk. That its line is also flagged and silent is the subject of
-    /// `InstrumentAssignmentTests` in `SynthKitTests`, not of this one.
+    /// deliberate: what is under test is the *wiring*, and a variant travels
+    /// from the editor to the open piece's line through exactly the same
+    /// closure whether or not its samples are on disk. That the edit also
+    /// reaches a sampled voice that is already sounding is proved at the layer
+    /// that can prove it, by
+    /// `InstrumentCustomizationRenderTests.testAnEditReachesAVoiceThatIsAlreadySounding`;
+    /// that the line is flagged and silent meanwhile is
+    /// `InstrumentAssignmentTests`. Neither of those can see `AppModel`, which
+    /// is the gap this file exists to close.
     func testEditingAnAssignedVariantReachesThatLineOfTheOpenPiece() async throws {
         let playback = try await openPreparedPiece()
         let assignment = playback.assignment

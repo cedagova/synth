@@ -384,8 +384,18 @@ final class AssignmentModel {
     func publishEditedVariant(id soundID: String, variant: InstrumentVariant) {
         guard !isSuspendedByPlayThrough,
               let channel = instrumentChannels["sound:\(soundID)"] else { return }
-        let result = channel.apply(variant.customization)
-        guard result.reachedAnyVoice else { return }
+
+        // The audio and the panel are two separate questions here, and the
+        // patch path's single `reachedAnyVoice` guard answers only the first.
+        //
+        // A synth line always has a voice to reach, so the two questions have
+        // the same answer for it. An instrument line does not: a line whose
+        // instrument is not downloaded is deliberately silent and has no voice
+        // registered at all. Gating the panel on the audio would then leave the
+        // strip showing the *old* tone of a variant the owner is editing in
+        // front of them — a stale value on a line that is not playing anything
+        // the new one could contradict.
+        channel.apply(variant.customization)
         for index in lines.indices where channelKey(for: lines[index]) == "sound:\(soundID)" {
             lines[index] = lines[index].replacing(content: .instrument(variant))
         }

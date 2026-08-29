@@ -198,6 +198,37 @@ final class RoomSendRenderTests: XCTestCase {
         )
     }
 
+    /// Pulling the last send down lets the hall decay rather than cutting it
+    /// off.
+    ///
+    /// The bus is skipped while every send is zero, and the naive way to write
+    /// that stops rendering the room the instant the control passes zero — which
+    /// truncates a ringing hall with a step, in the owner's hand, while they are
+    /// moving the fader. The engine keeps rendering it for its own tail instead.
+    func testPullingTheLastSendDownLetsTheHallDecayRatherThanCuttingItOff() throws {
+        let cut = try render { engine in
+            engine.mixer(forLineAt: 0)?.roomSend = 1
+            // Down to dry a moment after the notes, while the hall is loudest.
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) {
+                engine.mixer(forLineAt: 0)?.roomSend = 0
+            }
+        }
+
+        // Offline rendering runs far faster than real time, so the send has
+        // already reached zero long before the window this measures — the
+        // energy there is the tail the engine chose to keep rendering.
+        let held = try render { engine in engine.mixer(forLineAt: 0)?.roomSend = 1 }
+
+        XCTAssertGreaterThan(
+            tailEnergy(cut), 1e-5,
+            "The hall must go on decaying after the last send reaches zero"
+        )
+        XCTAssertLessThanOrEqual(
+            tailEnergy(cut), tailEnergy(held) + 1e-9,
+            "…but it must not be louder than the send that was never pulled down"
+        )
+    }
+
     // MARK: Determinism
 
     func testTwoRendersOfTheSameRoomAreIdentical() throws {

@@ -117,6 +117,7 @@ static void synth_engine_relocate(SynthRenderEngine *engine, int64_t frame) {
        the one discontinuity the declick fade cannot hide, because it arrives
        after the fade is over. */
     synth_room_silence(engine->room);
+    engine->roomTailFrames = 0;
 
     for (int32_t l = 0; l < engine->lineCount; l++) {
         SynthRenderLine *line = &engine->lines[l];
@@ -421,14 +422,23 @@ int32_t synth_audio_core_render(SynthRenderEngine *engine,
 
     /* The whole bus is skipped when nothing is sent to it, which is every mix
        until the owner turns a send up. That is what keeps D7's room send from
-       costing REQ-013's budget anything by merely existing. */
-    int32_t anyRoomSend = 0;
+       costing REQ-013's budget anything by merely existing.
+
+       The hall goes on being rendered for its own tail after the last send
+       reaches zero, though: stopping the moment the control passes zero would
+       cut a ringing room off with a step, and it would do it exactly while the
+       owner had hold of the fader. */
+    int32_t anySend = 0;
     for (int32_t l = 0; l < engine->lineCount; l++) {
         if (atomic_load_explicit(&engine->lines[l].roomSend, memory_order_relaxed) > 0.0f) {
-            anyRoomSend = 1;
+            anySend = 1;
             break;
         }
     }
+    if (anySend) {
+        engine->roomTailFrames = (int64_t)(SYNTH_ROOM_TAIL_SECONDS * engine->sampleRate);
+    }
+    const int32_t anyRoomSend = anySend || engine->roomTailFrames > 0;
 
     /* --- Render, stopping at the fade-out point if one is pending --- */
 
@@ -511,6 +521,11 @@ int32_t synth_audio_core_render(SynthRenderEngine *engine,
                     outLeft[offset + f] += left * SYNTH_ROOM_RETURN_GAIN;
                     if (separate) { outRight[offset + f] += right * SYNTH_ROOM_RETURN_GAIN; }
                 }
+            }
+
+            if (anyRoomSend && !anySend) {
+                engine->roomTailFrames -= chunk;
+                if (engine->roomTailFrames < 0) { engine->roomTailFrames = 0; }
             }
 
             engine->cursorFrame += chunk;

@@ -74,6 +74,15 @@
 #define SYNTH_ROOM_FEEDBACK 0.88f
 #define SYNTH_ROOM_DAMPING 0.42f
 
+/// How long the hall keeps being rendered after the last send reaches zero, in
+/// seconds.
+///
+/// Long enough to cover the decay above. Without it, pulling the last send down
+/// would stop rendering the room mid-tail and cut a ringing hall off with a
+/// step — the one audible artefact this bus could introduce, and it would
+/// happen precisely while the owner was moving the control.
+#define SYNTH_ROOM_TAIL_SECONDS 2.5
+
 typedef struct {
     float   comb[2][SYNTH_ROOM_COMB_COUNT][SYNTH_ROOM_COMB_MAX_FRAMES];
     int32_t combIndex[2][SYNTH_ROOM_COMB_COUNT];
@@ -176,6 +185,8 @@ struct SynthRenderEngine {
     float   declickGain;
     float   declickTarget;
     float   declickStep;
+    /// Frames of hall still to render after the last send reached zero.
+    int64_t roomTailFrames;
     /// Set when a discontinuity is waiting for the fade-out to finish.
     int32_t pendingDiscontinuity;
     int64_t pendingSeekFrame;

@@ -44,6 +44,8 @@ struct PlaybackScreen: View {
                             LoopControls(model: model, focus: $focus)
                             Divider()
                             HumanizationControls(model: model)
+                            Divider()
+                            ExportControls(model: model)
                         }
                         .padding(20)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -68,6 +70,14 @@ struct PlaybackScreen: View {
         }
         .safeAreaInset(edge: .bottom) { PlaybackStatusBar(model: model) }
         .overlay { preparationOverlay }
+        // An explicit binding rather than `$model.export.isPresented`: `export`
+        // is a `let`, so the projected chain has nothing to write through.
+        .sheet(isPresented: Binding(
+            get: { model.export.isPresented },
+            set: { model.export.isPresented = $0 }
+        )) {
+            ExportSheet(model: model.export, subtitle: exportSubtitle)
+        }
         .onChange(of: model.measureFocusRequests) { _, _ in focus = .measure }
         .onChange(of: model.timeFocusRequests) { _, _ in focus = .time }
         .task { await model.prepare() }
@@ -83,6 +93,13 @@ struct PlaybackScreen: View {
         // The model's lifetime was never this view's to own anyway.
         // `AppModel.closePlayback()` closes it when the owner leaves the piece,
         // and `openPlayback(for:)` closes the previous one before replacing it.
+    }
+
+    /// What the export sheet says it is about to render: the piece, and the
+    /// preset when the piece has more than the one it was opened with.
+    private var exportSubtitle: String {
+        guard let preset = model.assignment.activePreset else { return model.piece.title }
+        return "\(model.piece.title) — \(preset.name)"
     }
 
     /// Loading and failure both sit over the transport rather than replacing
@@ -477,6 +494,56 @@ private struct HumanizationControls: View {
                  : "The same piece at the same amount always sounds the same.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
+        }
+    }
+}
+
+// MARK: - Export (REQ-026)
+
+/// One button and one line of status. The choices live in the sheet, because
+/// they are answered once per export rather than watched while listening.
+private struct ExportControls: View {
+    @Bindable var model: PlaybackModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SectionHeading("Export")
+
+            HStack(spacing: 10) {
+                Button {
+                    model.export.present()
+                } label: {
+                    Label("Export Audio…", systemImage: "square.and.arrow.up")
+                }
+                .accessibilityLabel("Export this piece to an audio file")
+                .accessibilityHint("Renders the piece with its current preset to WAV or AIFF. "
+                                   + "Also on the Playback menu as Shift Command E.")
+                .disabled(!model.isReady)
+
+                if model.export.isExporting {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityHidden(true)
+                }
+            }
+
+            // Deliberately visible on the transport as well as in the sheet: an
+            // export runs in the background and the owner may well have closed
+            // the sheet to keep listening.
+            if let status = model.export.statusMessage {
+                Text(status)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel(status)
+                    .accessibilityAddTraits(.updatesFrequently)
+            } else {
+                Text("Writes exactly what you hear, including humanization, at CD quality "
+                     + "or better.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }

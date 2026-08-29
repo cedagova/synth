@@ -4,9 +4,23 @@
 <dict>
 	<key>com.apple.security.app-sandbox</key>
 	<true/>
-	<!-- Read-only: importing copies the score into Synth's own container and
-	     never writes back to the file the owner picked or dropped (D9). -->
-	<key>com.apple.security.files.user-selected.read-only</key>
+	<!-- Read-write, from increment 006 (EXP001, REQ-026). It was read-only
+	     through increment 005 and the reason for that has not changed:
+	     importing still copies the score into Synth's own container and never
+	     writes back to the file the owner picked or dropped (D9).
+
+	     The write this adds is the export, and it is the only one: Synth
+	     writes exactly the file the owner named in the save panel, plus the
+	     hidden sibling that file is staged as for the few seconds before the
+	     rename that publishes it. Nothing else on the owner's disk is touched,
+	     no folder is scanned, and nothing is deleted that Synth did not create
+	     in that same call.
+
+	     There is deliberately no com.apple.security.files.downloads,
+	     .desktop, .documents, .movies, .music or .pictures entitlement: the
+	     owner's folders are reachable only through a panel they opened
+	     themselves. AudioExportEntitlementTests pins this whole paragraph. -->
+	<key>com.apple.security.files.user-selected.read-write</key>
 	<true/>
 	<!-- Outbound only, and only ever used to GET the instrument-catalog assets
 	     this build pins by URL and checksum (INS001, REQ-020/REQ-022). There is

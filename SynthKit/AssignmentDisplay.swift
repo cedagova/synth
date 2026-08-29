@@ -181,12 +181,6 @@ public enum AssignmentDisplay {
         isRouted(line, whileSoloing: isSoloing) && !line.isSilent
     }
 
-    /// Retained name for the routed test, which is what every caller before
-    /// increment 005 meant by it.
-    public static func isAudible(_ line: ResolvedLine, whileSoloing isSoloing: Bool) -> Bool {
-        isHeard(line, whileSoloing: isSoloing)
-    }
-
     public static func isSoloing(_ lines: [ResolvedLine]) -> Bool {
         lines.contains { $0.mixer.isSoloed }
     }

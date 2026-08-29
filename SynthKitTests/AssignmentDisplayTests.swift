@@ -160,16 +160,19 @@ final class AssignmentDisplayTests: XCTestCase {
     /// The engine's rule, restated: mute wins over solo, and while anything is
     /// soloed every line that is not is silent. `LineMixerRenderTests` proves
     /// the engine behaves this way; this proves the panel says so.
+    ///
+    /// About *routing*, which is what the mixer decides. Whether a routed line
+    /// then produces sound is a separate question, below.
     func testMuteWinsOverSoloJustAsTheEngineHasIt() {
         let line = Self.line(named: "L", soundNamed: "S",
                              mixer: LineMixerState(isMuted: true, isSoloed: true))
-        XCTAssertFalse(AssignmentDisplay.isAudible(line, whileSoloing: true))
+        XCTAssertFalse(AssignmentDisplay.isRouted(line, whileSoloing: true))
     }
 
     func testAnUnsoloedLineIsSilentWhileAnythingIsSoloed() {
         let plain = Self.line(named: "L", soundNamed: "S", mixer: .neutral)
-        XCTAssertTrue(AssignmentDisplay.isAudible(plain, whileSoloing: false))
-        XCTAssertFalse(AssignmentDisplay.isAudible(plain, whileSoloing: true))
+        XCTAssertTrue(AssignmentDisplay.isRouted(plain, whileSoloing: false))
+        XCTAssertFalse(AssignmentDisplay.isRouted(plain, whileSoloing: true))
     }
 
     func testTheSummaryCountsWhatIsHeard() {

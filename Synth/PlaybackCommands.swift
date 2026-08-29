@@ -107,6 +107,16 @@ struct PlaybackCommands: Commands {
                 model.playback?.isReportShown.toggle()
             }
             .keyboardShortcut("r", modifiers: [.command, .shift])
+
+            Divider()
+
+            // Shift-Command-E, not Command-E: plain Command-E is Use Selection
+            // for Find in the standard Edit menu, and the seek fields are text
+            // fields where that still means something.
+            Button("Export Audio…") {
+                model.playback?.export.present()
+            }
+            .keyboardShortcut("e", modifiers: [.command, .shift])
         }
     }
 }

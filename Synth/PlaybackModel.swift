@@ -145,6 +145,14 @@ final class PlaybackModel {
     /// half addresses that program's lines.
     let assignment: AssignmentModel
 
+    /// The export surface for this piece (REQ-026).
+    ///
+    /// Owned here because an export is of *this* piece's timeline and *this*
+    /// piece's preset, and both live on this model. It renders on its own
+    /// thread; see `ExportModel` for why that crossing is one value type and
+    /// one flag wide.
+    let export: ExportModel
+
     /// A seek asked for before the piece finished loading. The issue's failure
     /// clause: it queues rather than being dropped.
     ///
@@ -175,9 +183,35 @@ final class PlaybackModel {
         let engine = PlaybackEngine(voiceProvider: voiceProvider)
         self.engine = engine
         self.assignment = AssignmentModel(store: store, engine: engine)
+        self.export = ExportModel(pieceTitle: piece.title)
         let stored = store.preferences.humanization()
         self.humanization = stored
         self.intensityDraft = Double(stored.intensity)
+
+        wireExport()
+    }
+
+    /// Connect the export surface to this piece.
+    ///
+    /// **Extracted so it can be tested**, exactly as `AppModel.wireStudioToPlayback`
+    /// is and for the same reason the increment-004 review gave: a closure that
+    /// is only installed, never asserted, can be deleted and every other test
+    /// still passes while the feature quietly stops working.
+    /// `ExportWiringTests` calls each of these and checks it reaches this model.
+    ///
+    /// `[weak self]` because the export's task outlives an individual render
+    /// and must not keep a closed piece alive.
+    private func wireExport() {
+        export.presetName = { [weak self] in self?.assignment.activePreset?.name }
+        export.caveat = { [weak self] in self?.assignment.exportCaveat }
+        export.makeRequest = { [weak self] settings in
+            guard let self, let timeline = self.timeline else { return nil }
+            // The timeline already carries the humanization that produced it,
+            // so an export cannot disagree with live playback about how
+            // humanized the piece is: there is one realization, and both read
+            // it.
+            return self.assignment.exportRequest(timeline: timeline, settings: settings)
+        }
     }
 
     // MARK: Derived state
@@ -318,6 +352,10 @@ final class PlaybackModel {
     func close() {
         ticker?.cancel()
         ticker = nil
+        // A render outlives the window unless something stops it, and one that
+        // finished after the piece closed would publish a file the owner has
+        // stopped expecting. Cancelling leaves nothing behind, by construction.
+        export.close()
         engine.stop()
         engine.stopEngine()
     }

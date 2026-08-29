@@ -267,6 +267,47 @@ final class AssignmentModel {
         return PresetPerformance(preset: activePreset, lines: lines)
     }
 
+    // MARK: Export (REQ-026)
+
+    /// This piece's active preset, frozen, as an offline render's input.
+    ///
+    /// **The same `PresetPerformance` the engine is playing right now**, read
+    /// on the main actor and turned into values. So an export renders the
+    /// sounds this panel is showing, through the same per-line decision
+    /// `ResolvedLine.voiceProvider` makes for live playback, with the same
+    /// mixer on it.
+    ///
+    /// The one deliberate difference is `live: nil` inside
+    /// `PresetPerformance.exportRequest`: a live channel renders whatever the
+    /// sound editor currently holds, and an export renders what the library
+    /// stores. An unsaved knob position is REQ-018's audition, not the piece.
+    ///
+    /// Nil before the preset has resolved, which the export reports as "this
+    /// piece has nothing to export yet" rather than writing an empty file.
+    func exportRequest(
+        timeline: PerformanceTimeline, settings: AudioExportSettings
+    ) -> AudioExportRequest? {
+        guard let performance = currentPerformance(), !lines.isEmpty else { return nil }
+        return performance.exportRequest(
+            timeline: timeline,
+            settings: settings,
+            instruments: store.sampledInstruments
+        )
+    }
+
+    /// What the export sheet has to warn about, or nil when what is playing is
+    /// what will be written.
+    ///
+    /// One case: the sound studio has taken every line over (SYN003's ⌥⌘P), so
+    /// live playback is the sound under edit while an export is still of the
+    /// preset. Saying nothing here would make the export sound wrong to an
+    /// owner who is, at that moment, listening to something else.
+    var exportCaveat: String? {
+        guard isSuspendedByPlayThrough else { return nil }
+        return "The sound studio is playing this piece through the sound being edited. "
+            + "The export renders the preset’s own sounds."
+    }
+
     // MARK: Live sounds (REQ-018)
 
     /// One publication channel per *sound*, not per line.

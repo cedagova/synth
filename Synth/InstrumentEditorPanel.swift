@@ -174,8 +174,8 @@ private struct InstrumentEditorHeader: View {
                     Label("Save as Variant…", systemImage: "plus.square.on.square")
                 }
                 .accessibilityLabel("Save these settings as a named variant")
-                .accessibilityHint("Also on the Sounds menu, as Shift Command V. The downloaded "
-                                   + "library is not changed.")
+                .accessibilityHint("Also on the Sounds menu, as Option Command V. The "
+                                   + "downloaded library is not changed.")
 
                 if model.isEditable {
                     Button("Revert") { model.revert() }

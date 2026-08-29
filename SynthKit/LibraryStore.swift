@@ -80,11 +80,18 @@ public final class LibraryStore: @unchecked Sendable {
         // protocols — and why one object conforms to both.
         let presets = PresetLibrary(database: database)
         self.presets = presets
-        self.sounds = SoundLibrary(
-            database: database, dependentStores: [presets] + soundDependentStores
-        )
-        self.instruments = InstrumentAssetStore(
+        // The instrument store before the sound library, because the sound
+        // library reads it: every downloaded instrument appears in the library
+        // as a read-only entry (REQ-023), which is what lets one picker offer
+        // synth sounds and instruments without knowing the difference.
+        let instruments = InstrumentAssetStore(
             database: database, assetsRootURL: container.assetsURL, fileManager: fileManager
+        )
+        self.instruments = instruments
+        self.sounds = SoundLibrary(
+            database: database,
+            instruments: instruments,
+            dependentStores: [presets] + soundDependentStores
         )
         self.dependentStores = [presets] + dependentStores
         self.schemaVersion = schemaVersion
@@ -210,7 +217,9 @@ public final class LibraryStore: @unchecked Sendable {
     public func openActivePreset(for score: CompiledScore) throws -> PresetPerformance {
         let inventory = try lineInventory(for: score)
         let preset = try presets.activePreset(for: inventory, palette: try sounds.allSounds())
-        return try PresetPerformance.resolve(preset, inventory: inventory, library: sounds)
+        return try PresetPerformance.resolve(
+            preset, inventory: inventory, library: sounds, instruments: instruments
+        )
     }
 
     /// When the current schema version was recorded, as stored ISO 8601 text.

@@ -47,6 +47,21 @@ public protocol LineVoiceProvider: Sendable {
     /// Defaulted, so this stayed a purely additive change to the interface
     /// increments 003 and 005 both bind to.
     var releaseTailSeconds: Double { get }
+
+    /// Lines this sound could not build a voice for, and which are therefore
+    /// rendering silence rather than music.
+    ///
+    /// **Zero in every normal run, and the interface has to be able to say so
+    /// when it is not.** INS002 made the deliberate choice that a sampled
+    /// instrument whose voice cannot be allocated renders silence rather than
+    /// quietly becoming a synthesizer, because a substitute the owner did not
+    /// ask for is the prohibited end state INS003 exists to gate. Silence the
+    /// owner is not told about is the same failure by the other route — so the
+    /// count is on the interface, and `LineRenderHealth` turns it into a flag.
+    ///
+    /// Defaulted to zero, so a provider that cannot fail to build a voice —
+    /// the synthesizer allocates nothing per voice — says nothing about it.
+    var unbuiltVoiceCount: Int { get }
 }
 
 extension LineVoiceProvider {
@@ -54,6 +69,8 @@ extension LineVoiceProvider {
     /// opinion. Ample for a short release, and the right answer for a sound
     /// that genuinely does not know.
     public var releaseTailSeconds: Double { 2.0 }
+
+    public var unbuiltVoiceCount: Int { 0 }
 }
 
 /// One line's voice: the C vtable the render thread calls, plus the control-

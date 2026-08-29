@@ -93,7 +93,52 @@ public enum AssignmentDisplay {
         case .missing:
             return "That sound is no longer in your library, so this line is playing "
                 + "Synth's default voice."
+        case .instrumentNotInstalled:
+            // Deliberately silent here: `LineInstrumentAdvice` already writes
+            // the sentence for this case, and it says considerably more than
+            // this function could — which library to download, and what the
+            // line is doing meanwhile. Two notes on one strip would be one
+            // note too many.
+            return nil
         }
+    }
+
+    // MARK: The instrument flags (issue #24)
+
+    /// Every sentence a line's flags contribute, in order.
+    ///
+    /// One string per flag rather than one joined paragraph, so the panel can
+    /// draw each with its own badge and VoiceOver reads them as separate
+    /// statements rather than as a run-on.
+    public static func adviceNotes(_ line: ResolvedLine) -> [String] {
+        line.advice.map(\.explanation)
+    }
+
+    /// The label for the button that accepts a substitute on this line, or nil
+    /// when there is nothing to offer.
+    public static func substitutionOffer(_ line: ResolvedLine) -> String? {
+        guard line.canOfferSubstitution, let substitute = line.substitute else { return nil }
+        return "Play “\(substitute.name)” here meanwhile"
+    }
+
+    /// The label for the button that takes a substitute back off a line.
+    public static func substitutionWithdrawal(_ line: ResolvedLine) -> String? {
+        guard line.acceptsSubstitution, let substitute = line.substitute else { return nil }
+        return "Stop playing “\(substitute.name)” here"
+    }
+
+    // MARK: Room send (D7)
+
+    /// `Dry`, `Room 40%` — the short form a strip has room for.
+    public static func roomSendText(_ send: Double) -> String {
+        let percent = Int((send * 100).rounded())
+        return percent <= 0 ? "Dry" : "Room \(percent)%"
+    }
+
+    /// …and the long form VoiceOver reads.
+    public static func spokenRoomSend(_ send: Double) -> String {
+        let percent = Int((send * 100).rounded())
+        return percent <= 0 ? "dry, no room" : "\(percent) percent to the room"
     }
 
     // MARK: A whole strip
@@ -101,10 +146,10 @@ public enum AssignmentDisplay {
     /// One sentence for one mixer strip.
     ///
     /// Built on `ResolvedLine.accessibilityDescription`, which ASN001 wrote for
-    /// exactly this, plus the two values a strip has that a line does not.
+    /// exactly this, plus the values a strip has that a line does not.
     public static func spokenStrip(_ line: ResolvedLine) -> String {
         "\(line.accessibilityDescription). Volume \(spokenVolume(line.mixer.volume)), "
-            + "pan \(spokenPan(line.mixer.pan))."
+            + "pan \(spokenPan(line.mixer.pan)), \(spokenRoomSend(line.mixer.roomSend))."
     }
 
     // MARK: The mix as a whole

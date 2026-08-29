@@ -93,6 +93,43 @@ static inline float sample_random_unit(uint64_t *state) {
 }
 
 /*
+ A sine over a 0…1 phase, in four flops and no call.
+
+ A triangle rounded by `x(1.5 - 0.5x²)`, which is exact at -1, 0 and +1 and
+ within about one percent of a sine in between. That is more than enough for a
+ vibrato — the control is "how wide", and one percent of a semitone at the
+ widest setting is under a cent — and it keeps the LFO off `sinf`, which is a
+ library call in the innermost loop of every sampled line.
+ */
+static inline float sample_lfo_sine(float phase) {
+    const float triangle = phase < 0.5f ? phase * 4.0f - 1.0f : 3.0f - phase * 4.0f;
+    return triangle * (1.5f - 0.5f * triangle * triangle);
+}
+
+/*
+ The playback-rate multiplier for `cents`, without `pow`.
+
+ `2^(c/1200) = e^(c·ln2/1200)`, and the exponent is at most 0.058 over the
+ ±100-cent range the controls offer, so two terms of the series are already
+ accurate to three parts in a hundred thousand — a third of a cent at the
+ extreme, and exact at zero. It runs once per frame per line, which is why it
+ is worth not being a call.
+ */
+static inline float sample_cents_ratio(float cents) {
+    const float exponent = cents * 5.7762265e-4f; /* ln(2) / 1200 */
+    return 1.0f + exponent + 0.5f * exponent * exponent;
+}
+
+/// One-pole lowpass coefficient for a corner at `hertz`.
+static inline float sample_one_pole_coefficient(double hertz, double sampleRate) {
+    if (!(sampleRate > 0.0)) { return 0.0f; }
+    /* Above Nyquist the corner is meaningless; pin it just under so the filter
+       stays a filter rather than becoming an oscillator. */
+    const double corner = hertz < sampleRate * 0.45 ? hertz : sampleRate * 0.45;
+    return (float)exp(-2.0 * M_PI * corner / sampleRate);
+}
+
+/*
  Does `draw` fall in this region's `lorand`…`hirand` window?
 
  SFZ's random round robins partition 0…1 between the alternates, and the draw
@@ -270,6 +307,26 @@ static inline float sample_decay_coefficient(float seconds, double sampleRate) {
 }
 
 /*
+ The per-frame release multiplier for one region, with INS003's release scale.
+
+ SFZ's default `ampeg_release` is zero, and taking that literally would cut a
+ sample off mid-cycle — a click, which is exactly the kind of audible defect
+ REQ-013's dropout-free bar is about. Every library in the curated set states a
+ release of its own, so this two-millisecond floor only ever applies to a file
+ that stated none, where it is inaudible.
+
+ Computed here rather than inlined so that both note-on and note-off can use
+ it: a release the owner lengthened while a note was already sounding takes
+ effect when that note is released, rather than waiting for the next one.
+ */
+static inline float sample_voice_release_coefficient(const SampleVoiceState *state,
+                                                     const SampleRegionData *region) {
+    const float declared = region->releaseSeconds > 0.002f ? region->releaseSeconds : 0.002f;
+    const float scale = atomic_load_explicit(&state->customReleaseScale, memory_order_relaxed);
+    return sample_decay_coefficient(declared * scale, state->sampleRate);
+}
+
+/*
  Start one region as a sounding slot.
 
  `heldSeconds` is only meaningful for a release trigger, where `rt_decay` turns
@@ -318,7 +375,30 @@ static void sample_voice_start_region(SampleVoiceState *state,
     const float normalized = (float)velocity / 127.0f;
     const float tracking = region->ampVelocityTracking;
     float gain = 1.0f + tracking * (normalized * normalized - 1.0f);
-    gain = sample_clampf(gain, 0.0f, 4.0f) * region->gainLinear;
+    gain = sample_clampf(gain, 0.0f, 4.0f);
+
+    /*
+     INS003's dynamics response, applied as an exponent on the region's own
+     velocity-derived level rather than as a separate gain.
+
+     `gain` here is 1 at full velocity and falls toward zero as the note gets
+     softer, so raising it to a power pivots the whole response around the
+     loudest note: above 1 the soft end drops further and the range widens,
+     below 1 it comes up and the range narrows. The loudest note is unchanged
+     at every setting, which is what stops this control being a volume knob.
+
+     It is offered only on an instrument with more than one sampled dynamic
+     layer (`InstrumentCapabilities`), because there the softer notes are a
+     *different recording* and this shapes how much of that difference is
+     heard. On a one-layer patch it would be pure synthetic gain wearing the
+     word "dynamics", which REQ-021 calls faking.
+    */
+    const float response = atomic_load_explicit(
+        &state->customDynamicsResponse, memory_order_relaxed);
+    if (response != 1.0f && gain > 0.0f && gain < 1.0f) {
+        gain = powf(gain, response);
+    }
+    gain *= region->gainLinear;
 
     if (isReleaseTrigger && region->releaseTriggerDecayDBPerSecond > 0.0f) {
         const double attenuation = (double)region->releaseTriggerDecayDBPerSecond * heldSeconds;
@@ -354,16 +434,17 @@ static void sample_voice_start_region(SampleVoiceState *state,
     slot->sustainLevel = sample_clampf(region->sustainLevel, 0.0f, 1.0f);
     slot->decayCoefficient = sample_decay_coefficient(region->decaySeconds, state->sampleRate);
 
-    /* SFZ's default `ampeg_release` is zero, and taking that literally would
-       cut a sample off mid-cycle — a click, which is exactly the kind of
-       audible defect REQ-013's dropout-free bar is about. Every library in the
-       curated set states a release of its own, so this two-millisecond floor
-       only ever applies to a file that stated none, where it is inaudible. */
-    const float release = region->releaseSeconds > 0.002f ? region->releaseSeconds : 0.002f;
-    slot->releaseCoefficient = sample_decay_coefficient(release, state->sampleRate);
+    slot->releaseCoefficient = sample_voice_release_coefficient(state, region);
 
-    if (region->attackSeconds > 0.0f) {
-        const double frames = (double)region->attackSeconds * state->sampleRate;
+    /* INS003's attack softening is added to what the region declares, never
+       subtracted from it: there is no way to make a recorded attack start
+       sooner than it was played, so the control eases a line in and cannot
+       sharpen it into something the instrument never did. */
+    const float attackSeconds = region->attackSeconds
+        + atomic_load_explicit(&state->customAttackSecondsAdded, memory_order_relaxed);
+
+    if (attackSeconds > 0.0f) {
+        const double frames = (double)attackSeconds * state->sampleRate;
         slot->attackIncrement = frames < 1.0 ? 1.0f : (float)(1.0 / frames);
         slot->envelope = 0.0f;
         slot->stage = SampleEnvelopeStageAttack;
@@ -387,8 +468,15 @@ static void sample_voice_release_slots(SampleVoiceState *state, int32_t key) {
         SampleVoiceSlot *slot = &state->slots[index];
         if (!slot->inUse || slot->key != key || slot->isReleaseTrigger) { continue; }
         /* A one-shot region ignores note-off by definition: that is what makes
-           a cymbal ring out rather than stop when the notated note ends. */
+           a cymbal ring out rather than stop when the notated note ends. It is
+           also why release shaping is disabled on an instrument made entirely
+           of them — there is nothing here for the scale to act on. */
         if (slot->loopMode == SampleLoopModeOneShot) { continue; }
+        /* Re-read the scale at the moment the damper falls, so lengthening a
+           release while a chord is held is heard on that chord. */
+        slot->releaseCoefficient = sample_voice_release_coefficient(
+            state, &state->instrument->regions[slot->regionIndex]
+        );
         slot->stage = SampleEnvelopeStageRelease;
     }
 }
@@ -446,6 +534,13 @@ void sample_voice_prepare(void *opaque, double sampleRate) {
     SampleVoiceState *state = (SampleVoiceState *)opaque;
     if (state == NULL) { return; }
     state->sampleRate = sampleRate > 0.0 ? sampleRate : 44100.0;
+    /* The shelf corners are fixed frequencies, so their coefficients are a
+       function of the rate alone and are derived once here rather than per
+       block. The gains they are applied with are read live. */
+    state->toneLowCoefficient =
+        sample_one_pole_coefficient(SAMPLE_TONE_LOW_HERTZ, state->sampleRate);
+    state->toneHighCoefficient =
+        sample_one_pole_coefficient(SAMPLE_TONE_HIGH_HERTZ, state->sampleRate);
     sample_voice_reset(state);
 }
 
@@ -472,8 +567,14 @@ void sample_voice_reset(void *opaque) {
         : -1;
 
     /* Back to the beginning of the seeded sequence, so a seek does not change
-       which round robin a passage plays. */
+       which round robin a passage plays. The vibrato phase and the shelves go
+       with it for the same reason: two renders of one passage must agree, and
+       a filter carrying the previous passage's state into this one would make
+       the first few milliseconds depend on what was played before. */
     state->randomState = state->randomSeed;
+    state->vibratoPhase = 0.0f;
+    state->toneLowState = 0.0f;
+    state->toneHighState = 0.0f;
 
     /* The telemetry counters deliberately survive a reset. The engine resets
        every voice on stop and on seek, and a peak or a steal that a seek then
@@ -604,6 +705,33 @@ void sample_voice_render(void *opaque, float *monoOut, int32_t frameCount) {
     for (int32_t frame = 0; frame < frameCount; frame++) { monoOut[frame] = 0.0f; }
     if (state == NULL || state->instrument == NULL) { return; }
 
+    /*
+     INS003's pitch controls, read once for the whole block.
+
+     Both are multipliers on the rate every slot already reads at, so neither
+     touches the region tables and neither is baked into a slot at note-on: a
+     tuning offset or a vibrato changed while a chord is held is heard on that
+     chord. The vibrato is one oscillator for the voice rather than one per
+     slot, because an instrument vibrates as a whole — eighteen independently
+     phased slots would be a chorus, not a vibrato.
+
+     `vibratoBase` is the phase this block starts at, and each slot recomputes
+     the phase for the frame it is on rather than reading a shared buffer. That
+     costs four flops per frame per slot and keeps this function free of the
+     scratch array it would otherwise need — which it could not allocate.
+    */
+    const float tuningRatio = atomic_load_explicit(
+        &state->customTuningRatio, memory_order_relaxed);
+    const float vibratoDepth = atomic_load_explicit(
+        &state->customVibratoDepthCents, memory_order_relaxed);
+    const float vibratoRate = atomic_load_explicit(
+        &state->customVibratoRateHz, memory_order_relaxed);
+    const float vibratoIncrement = state->sampleRate > 0.0
+        ? (float)((double)vibratoRate / state->sampleRate)
+        : 0.0f;
+    const float vibratoBase = state->vibratoPhase;
+    const int32_t isVibrating = vibratoDepth > 0.0f && vibratoIncrement > 0.0f;
+
     int32_t sounding = 0;
 
     for (int32_t index = 0; index < SAMPLE_VOICE_MAX_SLOTS; index++) {
@@ -638,7 +766,13 @@ void sample_voice_render(void *opaque, float *monoOut, int32_t frameCount) {
             const float source = sample_interpolate(waveform, slot->position);
             monoOut[frame] += source * slot->envelope * slot->levelGain;
 
-            slot->position += slot->increment;
+            float rate = slot->increment * tuningRatio;
+            if (isVibrating) {
+                float phase = vibratoBase + (float)frame * vibratoIncrement;
+                phase -= (float)(int32_t)phase;
+                rate *= sample_cents_ratio(vibratoDepth * sample_lfo_sine(phase));
+            }
+            slot->position += rate;
 
             if (sample_voice_step_envelope(slot)) {
                 slot->inUse = 0;
@@ -647,8 +781,67 @@ void sample_voice_render(void *opaque, float *monoOut, int32_t frameCount) {
         }
     }
 
+    /*
+     INS003's tone control, applied to the voice's summed output.
+
+     Two one-pole shelves rather than two biquads: a shelf is `x + (g - 1)·band`,
+     where the low band is a one-pole lowpass and the high band is what that
+     lowpass leaves behind. It is gentle — six decibels per octave — which is
+     the right shape for "more body" or "more air" over a recorded instrument
+     and the wrong shape for surgery, which is deliberate: D7's tone control is
+     not an equaliser section.
+
+     On the voice's sum rather than per slot, because tone is a property of the
+     instrument and filtering 128 slots separately would cost 128 filters to
+     reach the same answer. Before the limiter, so a boost is bent by the same
+     soft knee as any other hot signal rather than clipping past it.
+    */
+    const float toneLowGain = atomic_load_explicit(
+        &state->customToneLowGain, memory_order_relaxed);
+    const float toneHighGain = atomic_load_explicit(
+        &state->customToneHighGain, memory_order_relaxed);
+    const int32_t isShaping = toneLowGain != 1.0f || toneHighGain != 1.0f;
+
+    if (isShaping) {
+        const float lowCoefficient = state->toneLowCoefficient;
+        const float highCoefficient = state->toneHighCoefficient;
+        float lowState = state->toneLowState;
+        float highState = state->toneHighState;
+
+        for (int32_t frame = 0; frame < frameCount; frame++) {
+            const float input = sample_finite(monoOut[frame]);
+
+            lowState = sample_flush(input + (lowState - input) * lowCoefficient);
+            highState = sample_flush(input + (highState - input) * highCoefficient);
+
+            /* `input - highState` is everything above the high corner; the two
+               bands therefore sum back to `input` when both gains are 1. */
+            const float shaped = input
+                + (toneLowGain - 1.0f) * lowState
+                + (toneHighGain - 1.0f) * (input - highState);
+            monoOut[frame] = shaped;
+        }
+
+        state->toneLowState = lowState;
+        state->toneHighState = highState;
+    } else {
+        /* Flat: the filters are skipped entirely, so a line at the recorded
+           tone costs exactly what INS002 measured. Their state is cleared so
+           that turning the control up mid-note re-enters from silence rather
+           than from whatever was in them when it was last turned down — a
+           one-time ramp of a few milliseconds at the corner, against a step of
+           whatever the filter happened to be holding. */
+        state->toneLowState = 0.0f;
+        state->toneHighState = 0.0f;
+    }
+
     for (int32_t frame = 0; frame < frameCount; frame++) {
         monoOut[frame] = sample_flush(sample_limit(sample_finite(monoOut[frame])));
+    }
+
+    if (isVibrating) {
+        float phase = vibratoBase + (float)frameCount * vibratoIncrement;
+        state->vibratoPhase = phase - (float)(int32_t)phase;
     }
 
     state->frameCounter += frameCount;

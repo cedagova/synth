@@ -24,6 +24,25 @@ public struct SampledInstrumentVoiceProvider: LineVoiceProvider {
     /// when the last reference does.
     public let instrument: SampledInstrument
 
+    /// How the owner asked for this instrument to be played (INS003, REQ-021).
+    ///
+    /// Already bounded by `InstrumentCapabilities.bounded` at every call site
+    /// that builds one from a stored variant, so a control the instrument
+    /// cannot honestly support is neutral here rather than merely greyed out in
+    /// the editor.
+    public let customization: InstrumentCustomization
+
+    /// The channel that pushes a later edit of this customization into the
+    /// voices already rendering, or nil for a fixed provider.
+    ///
+    /// **The sampler's half of REQ-018.** A provider with no channel is what an
+    /// offline render wants: a frozen sound that cannot change under it. A
+    /// provider with one is what the app wants while a piece plays, because
+    /// moving a tone control then reaches the notes that are already sounding
+    /// rather than waiting for the program to be rebuilt — and rebuilding the
+    /// program stops the music.
+    public let live: SampledInstrumentLiveVoices?
+
     /// Seeds this provider's round-robin and random region selection.
     ///
     /// **This is what makes a sampler deterministic** (REQ-012, REQ-026, and
@@ -49,18 +68,41 @@ public struct SampledInstrumentVoiceProvider: LineVoiceProvider {
     public init(
         available: AvailableInstrument,
         articulation: URL? = nil,
-        renderSeed: UInt64? = nil
+        renderSeed: UInt64? = nil,
+        customization: InstrumentCustomization = .asRecorded,
+        live: SampledInstrumentLiveVoices? = nil
     ) throws {
         let loaded = try SampledInstrument(available, sfzURL: articulation)
-        self.init(instrument: loaded, renderSeed: renderSeed)
+        self.init(
+            instrument: loaded,
+            renderSeed: renderSeed,
+            customization: customization,
+            live: live
+        )
     }
 
     /// Build a provider over an instrument that is already loaded, so several
     /// lines can share one copy of the samples.
-    public init(instrument: SampledInstrument, renderSeed: UInt64? = nil) {
+    public init(
+        instrument: SampledInstrument,
+        renderSeed: UInt64? = nil,
+        customization: InstrumentCustomization = .asRecorded,
+        live: SampledInstrumentLiveVoices? = nil
+    ) {
         self.instrument = instrument
         self.renderSeed = renderSeed
             ?? SampledInstrumentVoiceProvider.seed(forIdentifier: Self.identifier(of: instrument))
+        self.customization = customization
+        self.live = live
+    }
+
+    /// This instrument's capability set, measured from the files it loaded.
+    public var capabilities: InstrumentCapabilities {
+        InstrumentCapabilities(
+            features: instrument.features,
+            coverage: instrument.source.coverage,
+            alternateArticulationCount: instrument.source.alternateSFZURLs.count
+        )
     }
 
     public var identifier: String { Self.identifier(of: instrument) }
@@ -80,7 +122,18 @@ public struct SampledInstrumentVoiceProvider: LineVoiceProvider {
     /// nothing, rather than the owner discovering it by listening.
     public var unbuiltVoiceCount: Int { instrument.unbuiltVoiceCount }
 
-    public var releaseTailSeconds: Double { instrument.features.releaseTailSeconds }
+    /// How long this instrument can still be heard after its last note ends,
+    /// with the owner's release scale applied.
+    ///
+    /// **The scale has to be in here or an export truncates.**
+    /// `RenderProgram` renders this far past the final event and then stops, so
+    /// a variant that quadrupled a cello's release and a tail figure that did
+    /// not know about it would cut the last note of the piece off in the
+    /// exported file while sounding complete in live playback.
+    public var releaseTailSeconds: Double {
+        let scaled = instrument.features.releaseTailSeconds * customization.releaseScale
+        return min(max(scaled, 0), RenderProgram.maximumReleaseTailSeconds)
+    }
 
     public func makeVoice(sampleRate: Double) -> LineVoiceInstance {
         var vtable = SynthLineVoice()
@@ -104,16 +157,31 @@ public struct SampledInstrumentVoiceProvider: LineVoiceProvider {
             return LineVoiceInstance(vtable: vtable, release: {})
         }
 
+        // The customization the voice starts on. Taken from the live channel
+        // rather than from `customization` when there is one, so a voice built
+        // *after* an edit — a device switch rebuilds the program — comes back
+        // playing the edited sound rather than the one this provider was
+        // constructed with. `SynthPatchLiveVoices.currentPatch` exists for
+        // exactly the same reason.
+        var current = (live?.currentCustomization ?? customization).renderCustomization
+        sample_voice_set_customization(state, &current)
+        live?.register(state: UnsafeMutableRawPointer(state), sampleRate: sampleRate)
+
         // The instrument is captured so the mappings the render thread reads
         // cannot be unmapped while a voice is still over them, whatever else
         // the caller does with its own reference. The pointer travels as an
         // integer because a raw pointer is not `Sendable` — the same crossing
         // `SynthPatchVoiceProvider` makes, for the same reason.
         let held = instrument
+        let channel = live
         let address = UInt(bitPattern: UnsafeMutableRawPointer(state))
         return LineVoiceInstance(vtable: vtable, release: {
             withExtendedLifetime(held) {
                 guard let pointer = UnsafeMutableRawPointer(bitPattern: address) else { return }
+                // Deregistered before the storage goes, inside the channel's
+                // own lock, so a publish racing this release cannot reach freed
+                // memory.
+                channel?.unregister(state: pointer)
                 sample_voice_destroy(OpaquePointer(pointer))
             }
         })

@@ -248,6 +248,34 @@ public enum SchemaMigrator {
                 ) STRICT;
                 """
             )
+        },
+        Migration(version: 7, name: "add_sound_kind") { database in
+            // Named instrument-customization variants in the personal sound
+            // library (REQ-023, INS003). One column, and the whole of the
+            // change: a variant is stored exactly as a patch is — its document
+            // in the row, one atomic transaction per edit — so the only thing
+            // the schema was missing was which of the two documents a row
+            // holds.
+            //
+            // **Additive twice over, which is what the issue's rollback line
+            // asks for.** `ADD COLUMN` with a default rewrites no row and
+            // touches no index, so every sound, preset and piece survives it
+            // untouched. And reverting this build leaves the store openable:
+            // the previous build reads `sounds` without knowing the column
+            // exists, and the only rows it cannot make sense of are the variant
+            // rows this build wrote — which it reports as unreadable by name
+            // (`StoreError.soundRowUnreadable`) rather than dropping, because a
+            // sound the owner made must never silently stop existing.
+            //
+            // `document_version` stays what it always was: the format version
+            // of whatever document is in the row. The two document formats
+            // number themselves independently, which is why the kind has to be
+            // a column rather than something inferred by trying to parse.
+            try database.executeScript(
+                """
+                ALTER TABLE sounds ADD COLUMN kind TEXT NOT NULL DEFAULT 'synth';
+                """
+            )
         }
     ]
 

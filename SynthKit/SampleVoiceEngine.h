@@ -224,6 +224,81 @@ typedef struct SampleInstrumentData {
     int32_t switchLowKey, switchHighKey;
 } SampleInstrumentData;
 
+#pragma mark - Customization
+
+/*
+ The bounded parameter set INS003 lets the owner put over a recorded instrument
+ (REQ-021, D7), in the units the render loop actually uses.
+
+ **Nothing here rewrites a sample.** Each field is applied while the recorded
+ audio is being played back: a shelf on the voice's output, a multiplier on the
+ playback rate, a scale on the envelope the SFZ file declared. The downloaded
+ library stays exactly as it was installed, which is what makes "variants never
+ mutate the downloaded assets" a property of this interface rather than a rule
+ somebody has to keep.
+
+ Decibels and cents are converted on the Swift side, so this struct holds only
+ ratios the render loop can multiply by. The one exception is
+ `vibratoDepthCents`, which has to reach the loop as cents because it modulates
+ a ratio rather than being one.
+
+ A field the instrument cannot honestly support has already been put back to
+ its neutral value by `InstrumentCapabilities.bounded` before it gets here.
+ This engine does not second-guess that: it applies what it is given, and
+ neutral values cost nothing because each one short-circuits below.
+ */
+typedef struct SampleVoiceCustomization {
+    /// Linear gain of the low shelf. 1 is flat.
+    float toneLowGain;
+
+    /// Linear gain of the high shelf. 1 is flat.
+    float toneHighGain;
+
+    /// Exponent applied to the region's velocity-derived level. 1 leaves the
+    /// library's own response exactly as recorded; above 1 widens the gap
+    /// between soft and loud, below 1 narrows it.
+    float dynamicsResponse;
+
+    /// Extra attack time added to whatever the region declares, in seconds.
+    /// Never negative: softening an attack is adding to the recording, and
+    /// there is no way to make a sample start sooner than it was recorded.
+    float attackSecondsAdded;
+
+    /// Multiplier on the region's own release time. 1 leaves it as recorded.
+    float releaseScale;
+
+    /// Peak vibrato excursion in cents, 0 for none.
+    float vibratoDepthCents;
+
+    /// Vibrato rate in hertz.
+    float vibratoRateHz;
+
+    /// Constant playback-rate multiplier for the tuning offset. 1 is A=440 as
+    /// the library recorded it.
+    float tuningRatio;
+} SampleVoiceCustomization;
+
+/// The instrument exactly as recorded: every field neutral.
+SampleVoiceCustomization sample_voice_customization_neutral(void);
+
+#pragma mark - Silence
+
+/*
+ Fill `outVoice` with the stateless voice that renders silence.
+
+ The vtable a line gets when it has an instrument to play and no way to play it
+ — not downloaded, files gone, or a voice that could not be allocated. It holds
+ no state, needs no teardown, and writes zeroes.
+
+ **Silence rather than a substitute is the product decision, not a fallback.**
+ Issue #24 requires a line to be flagged and substituted only with the owner's
+ explicit acknowledgment, so a line whose cello is missing plays nothing and
+ says so. Handing it a synth patch instead would reach the prohibited end state
+ by the pleasanter route, which is why this exists as a named, public thing
+ rather than as an accident of a null check.
+ */
+void sample_voice_fill_silence(SynthLineVoice *outVoice);
+
 #pragma mark - Voice
 
 typedef struct SampleVoiceState SampleVoiceState;
@@ -259,6 +334,38 @@ SampleVoiceState *sample_voice_create(const SampleInstrumentData *instrument,
 /// Free a voice built by `sample_voice_create`. Control thread, after the
 /// engine holding it has been destroyed.
 void sample_voice_destroy(SampleVoiceState *state);
+
+/*
+ Put a new customization on a voice that may already be rendering.
+
+ **Control thread, safe while rendering**, on the same terms as the engine's
+ own mixer accessors in `SynthAudioCore.h`: every field crosses as one
+ naturally aligned relaxed atomic, so no value can tear and the change lands
+ within one buffer. Two fields of one edit may land on either side of a block
+ boundary — a four-millisecond disagreement between, say, the low and high
+ shelf — which is inaudible and is what the same contract already accepts for
+ gain and pan.
+
+ This is what makes a customization editable while the piece plays, without
+ rebuilding the render program and therefore without stopping the music: the
+ sampler's version of the path SYN001 opened for a synth patch (REQ-018).
+
+ Values are clamped here rather than trusted, because this is a public entry
+ point and a NaN reaching the render loop would silence the line.
+ */
+void sample_voice_set_customization(SampleVoiceState *state,
+                                    const SampleVoiceCustomization *customization);
+
+/// What the voice is currently rendering with. Control thread; for tests and
+/// for a caller that needs to prove an edit arrived.
+SampleVoiceCustomization sample_voice_customization(const SampleVoiceState *state);
+
+/// How many customizations this voice has taken up since it was built.
+///
+/// The sampler's counterpart to `synth_patch_voice_adoptions`, and for the same
+/// reason: it lets a caller prove that an edit reached the voices that are
+/// actually sounding rather than assume it.
+int64_t sample_voice_customization_adoptions(const SampleVoiceState *state);
 
 #pragma mark - Telemetry (render thread writes, control thread reads)
 

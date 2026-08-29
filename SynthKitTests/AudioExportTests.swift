@@ -553,6 +553,30 @@ final class AudioExportTests: XCTestCase {
         assertNothingWasLeftBehind(at: url)
     }
 
+    /// A disk with no room for the staged file at all — the failure lands at
+    /// `open(2)` rather than at a write, and must still read as a full disk
+    /// rather than as "choose another folder", because the owner's folder is
+    /// not the one that is full.
+    func testADiskWithNoRoomToEvenStartFailsAsAWriteFailure() throws {
+        let timeline = try fixtureTimeline()
+        let url = destination("no-room.wav")
+
+        XCTAssertThrowsError(
+            try AudioExporter(request: request(timeline)).run(
+                to: url, opener: FullDiskOpener(bytesBeforeFailure: 0, failsOnOpen: true)
+            )
+        ) { error in
+            guard case .writeFailed? = error as? AudioExportError else {
+                return XCTFail("Expected a write failure, got \(error)")
+            }
+            XCTAssertTrue(
+                (error as? LocalizedError)?.recoverySuggestion?.contains("disk space") == true,
+                "The owner should be told to free up space, not to pick another folder."
+            )
+        }
+        assertNothingWasLeftBehind(at: url)
+    }
+
     /// **The strongest form of the atomicity claim:** a failed overwrite leaves
     /// the *previous* export exactly as it was.
     func testAFailedExportLeavesAnExistingFileUntouched() throws {
@@ -994,7 +1018,18 @@ private struct FullDiskOpener: StagingFileOpening {
     /// buffered bytes actually reports a full disk.
     var failsOnClose = false
 
+    /// Fail before a handle exists at all, which is what a volume with no room
+    /// left does to `open(2)`.
+    var failsOnOpen = false
+
     func openForAppending(at url: URL) throws -> AppendableFile {
+        if failsOnOpen {
+            throw NSError(
+                domain: NSPOSIXErrorDomain,
+                code: Int(ENOSPC),
+                userInfo: [NSLocalizedDescriptionKey: "There is no space left on the disk."]
+            )
+        }
         let real = try FileSystemStagingFileOpener().openForAppending(at: url)
         return FullDiskFile(
             underlying: real, budget: bytesBeforeFailure, failsOnClose: failsOnClose

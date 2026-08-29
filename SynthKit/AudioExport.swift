@@ -591,7 +591,11 @@ struct AudioExportStaging {
         do {
             return try opener.openForAppending(at: stagedURL)
         } catch {
-            throw AudioExportError.destinationUnusable(
+            // A *write* failure, not a destination one. The owner's folder was
+            // already checked in `init`, and this path is now the private
+            // staging directory, so the realistic cause is a full disk — and
+            // "choose another folder" would be the wrong thing to tell them.
+            throw AudioExportError.writeFailed(
                 path: stagedURL.path(percentEncoded: false),
                 reason: (error as NSError).localizedDescription
             )

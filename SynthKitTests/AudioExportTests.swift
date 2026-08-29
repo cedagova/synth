@@ -638,14 +638,14 @@ final class AudioExportTests: XCTestCase {
 
     // MARK: Naming
 
-    /// **The suggested name and the staged name have to agree.**
+    /// **Everything the app suggests can actually be created.**
     ///
-    /// The staged file is a sibling of the destination, so its name is the
-    /// destination's plus a fixed overhead — and if the two limits are derived
-    /// separately, the app can suggest a name in its own save panel whose
-    /// staged sibling then exceeds `NAME_MAX` and cannot be created. This walks
-    /// the whole range up to the cap for both formats.
-    func testEverySuggestedNameHasAStagedSiblingThatFitsOnDisk() {
+    /// The property, not the mechanism: the suggested name must fit `NAME_MAX`,
+    /// and the file staging derives from it must too. It held only by accident
+    /// once — the suggestion cap and the staged sibling's cap were derived
+    /// separately and disagreed by 48 bytes — so it is asserted directly, and
+    /// the assertion survives the staging scheme changing underneath it.
+    func testEverySuggestedNameCanActuallyBeCreated() throws {
         for format in AudioExportFormat.allCases {
             for titleLength in [1, 60, 200, 400, 4_000] {
                 for scalar in ["a", "é", "字"] {
@@ -655,31 +655,32 @@ final class AudioExportTests: XCTestCase {
                         format: format
                     )
                     XCTAssertLessThanOrEqual(
-                        suggested.utf8.count, AudioExportNaming.maximumSuggestedNameBytes,
-                        "The suggestion is longer than a destination whose sibling can be staged."
+                        suggested.utf8.count, AudioExportNaming.maximumFileNameBytes,
+                        "The suggestion is longer than any macOS filesystem accepts."
                     )
-                    let staged = AudioExportNaming.stagedFileName(for: suggested)
-                    XCTAssertLessThanOrEqual(
-                        staged.utf8.count, AudioExportNaming.maximumFileNameBytes,
-                        "The staged sibling of “\(suggested.prefix(24))…” exceeds NAME_MAX."
+                    // The filesystem is the authority, not the arithmetic.
+                    let url = destination(suggested)
+                    XCTAssertTrue(
+                        FileManager.default.createFile(
+                            atPath: url.path(percentEncoded: false), contents: Data()
+                        ),
+                        "“\(suggested.prefix(24))…” (\(suggested.utf8.count) bytes) could not be created."
                     )
+                    try FileManager.default.removeItem(at: url)
                 }
             }
         }
     }
 
-    /// A name the *owner* typed, right at the filesystem's own limit, still
-    /// exports — the staged name gives up its embedded copy rather than the
-    /// export giving up.
+    /// A name the *owner* typed, right at the filesystem's own limit, exports.
     ///
     /// End to end and onto a real filesystem, because the bug this exists for
     /// is `ENAMETOOLONG` from `open(2)`, which no test of the naming functions
-    /// alone can reach.
+    /// alone can reach — and because it is also the case that would break if
+    /// staging ever went back to wrapping the destination's name.
     func testADestinationNameAtTheFilesystemLimitStillExports() throws {
         let timeline = try fixtureTimeline()
 
-        // 255 bytes exactly: the longest name any macOS filesystem accepts, and
-        // 52 bytes more than a staged sibling could wrap verbatim.
         // 125 two-byte characters plus one one-byte character plus ".wav".
         let stem = String(repeating: "é", count: 125) + "a"
         let name = "\(stem).wav"
@@ -690,20 +691,92 @@ final class AudioExportTests: XCTestCase {
 
         XCTAssertEqual(result.url.lastPathComponent, name)
         XCTAssertTrue(FileManager.default.fileExists(atPath: url.path(percentEncoded: false)))
-        XCTAssertEqual(try siblings(), [name], "A staged file was left behind.")
+        XCTAssertEqual(try siblings(), [name], "Something was left beside the export.")
         XCTAssertEqual(Int64(try Data(contentsOf: url).count), result.byteCount)
     }
 
-    /// The staged name keeps its uniqueness when it has to drop the rest.
-    func testAStagedNameStaysUniqueEvenWhenItIsTruncated() {
-        let long = String(repeating: "x", count: 300)
-        let first = AudioExportNaming.stagedFileName(for: long)
-        let second = AudioExportNaming.stagedFileName(for: long)
+    // MARK: Where the bytes are staged
 
-        XCTAssertLessThanOrEqual(first.utf8.count, AudioExportNaming.maximumFileNameBytes)
-        XCTAssertNotEqual(first, second, "Two staged names for one destination collided.")
-        XCTAssertTrue(first.hasPrefix("."), "The staged file must be hidden.")
-        XCTAssertTrue(first.contains(".synth-partial-"))
+    /// **The staging never touches the destination's folder.**
+    ///
+    /// This is the claim the sandbox depends on. A save panel grants an
+    /// extension for the exact path the owner picked; a hand-rolled `open(2)`
+    /// at a differently named file beside it is not covered by anything Apple
+    /// documents, so an export that passed every test here could still have
+    /// failed on the owner's Desktop. Staging goes to the system's
+    /// item-replacement directory instead, and this asserts it: while the export
+    /// is mid-render, the destination's folder contains nothing at all.
+    func testNothingIsEverWrittenIntoTheDestinationsFolderUntilThePublish() throws {
+        let timeline = try AudioRenderFixtures.timeline(
+            MusicXMLScoreFixtures.keyboardFugueExposition(measureCount: 8)
+        )
+        let url = destination("staged-elsewhere.wav")
+
+        let seen = Counter()
+        let sightings = FolderSightings()
+        let result = try AudioExporter(request: request(timeline)).run(
+            to: url,
+            progress: { [directory] _ in
+                seen.increment()
+                sightings.record(
+                    (try? FileManager.default.contentsOfDirectory(
+                        atPath: directory!.path(percentEncoded: false)
+                    )) ?? ["<unreadable>"]
+                )
+            }
+        )
+
+        XCTAssertGreaterThan(seen.value, 2, "The render was too short to observe.")
+        for (index, contents) in sightings.observed.enumerated() {
+            XCTAssertEqual(
+                contents, [],
+                "Block \(index) saw \(contents) in the destination's folder; staging must not "
+                    + "write there, because a save panel's grant does not cover it."
+            )
+        }
+        XCTAssertEqual(try siblings(), ["staged-elsewhere.wav"])
+        XCTAssertEqual(Int64(try Data(contentsOf: url).count), result.byteCount)
+    }
+
+    /// The staged file is on the destination's own volume, which is what keeps
+    /// the publish a rename rather than a copy — and therefore atomic.
+    func testStagingSitsOnTheSameVolumeAsTheDestination() throws {
+        let url = destination("volume.wav")
+        let staging = try AudioExportStaging(destination: url, fileManager: .default)
+        defer { staging.discard() }
+
+        func volume(_ candidate: URL) throws -> (any NSObjectProtocol)? {
+            try candidate.resourceValues(forKeys: [.volumeIdentifierKey]).volumeIdentifier
+        }
+        let stagedVolume = try XCTUnwrap(volume(staging.replacementDirectory))
+        let destinationVolume = try XCTUnwrap(volume(directory))
+        XCTAssertTrue(
+            stagedVolume.isEqual(destinationVolume),
+            "The staged file is on another volume, so the publish would be a copy, not a rename."
+        )
+        XCTAssertFalse(
+            staging.stagedURL.deletingLastPathComponent().standardizedFileURL
+                == url.deletingLastPathComponent().standardizedFileURL,
+            "Staging is back in the destination's own folder."
+        )
+        XCTAssertEqual(
+            staging.stagedURL.lastPathComponent, url.lastPathComponent,
+            "The staged file should carry the destination's own name."
+        )
+    }
+
+    /// Two exports to the same destination name at once do not collide, without
+    /// needing a unique file name of their own.
+    func testTwoStagingsForOneDestinationDoNotCollide() throws {
+        let url = destination("shared-name.wav")
+        let first = try AudioExportStaging(destination: url, fileManager: .default)
+        let second = try AudioExportStaging(destination: url, fileManager: .default)
+        defer { first.discard(); second.discard() }
+
+        XCTAssertNotEqual(
+            first.stagedURL, second.stagedURL,
+            "Two concurrent exports of one name would write over each other."
+        )
     }
 
     // MARK: The container's own size limit
@@ -798,14 +871,11 @@ final class AudioExportTests: XCTestCase {
             AudioExportNaming.suggestedFileName(pieceTitle: "   ", presetName: nil, format: .wav),
             "Untitled piece.wav"
         )
-        // A pathological title still yields a name a filesystem accepts —
-        // bounded by what a *staged sibling* needs, not by NAME_MAX itself.
-        // The first version of this checked 255 and passed while the staged
-        // name it implied was 52 bytes too long to create.
+        // A pathological title still yields a name a filesystem accepts.
         let long = AudioExportNaming.suggestedFileName(
             pieceTitle: String(repeating: "é", count: 400), presetName: "P", format: .aiff
         )
-        XCTAssertLessThanOrEqual(long.utf8.count, AudioExportNaming.maximumSuggestedNameBytes)
+        XCTAssertLessThanOrEqual(long.utf8.count, AudioExportNaming.maximumFileNameBytes)
         XCTAssertTrue(long.hasSuffix(".aiff"))
     }
 
@@ -982,6 +1052,25 @@ private final class ProgressRecorder: @unchecked Sendable {
     }
 
     var steps: [AudioExportProgress] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recorded
+    }
+}
+
+/// What the destination's folder contained at each progress step, collected
+/// from the render thread.
+private final class FolderSightings: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [[String]] = []
+
+    func record(_ contents: [String]) {
+        lock.lock()
+        recorded.append(contents.sorted())
+        lock.unlock()
+    }
+
+    var observed: [[String]] {
         lock.lock()
         defer { lock.unlock() }
         return recorded

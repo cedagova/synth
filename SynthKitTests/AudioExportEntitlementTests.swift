@@ -83,35 +83,67 @@ final class AudioExportEntitlementTests: XCTestCase {
         )
     }
 
-    /// The entitlement is what lets the export write; the *reason* it is safe
-    /// is that nothing writes outside the file the owner named. This pins the
-    /// second half so the two cannot drift.
+    /// The entitlement is what lets the export write the file the owner named;
+    /// the *reason* that is enough is that the export writes nowhere else. This
+    /// pins the second half so the two cannot drift.
     ///
-    /// `AudioExportStaging` may only build paths from the destination's own
-    /// directory. A staged file anywhere else — a temporary directory, the
-    /// container, a home-relative path — would either not be atomic with the
-    /// destination or would need an entitlement the test above refuses.
-    func testTheExportStagesOnlyBesideItsDestination() throws {
+    /// **The specific hazard, recorded because it was nearly shipped.** A save
+    /// panel grants an extension for the exact path the owner picked. An earlier
+    /// version of this leaf staged its bytes in a hidden *sibling* of that path
+    /// — `.<name>.synth-partial-<UUID>` — on the argument that the grant must
+    /// cover it because `Data.write(options: .atomic)` does the same. Nothing
+    /// Apple documents says a hand-rolled `open(2)` at an arbitrarily named
+    /// neighbour falls inside that allowance, and nothing in the test suite
+    /// touched it: every automated export writes somewhere the app can write
+    /// anyway. An export that passed everything here and failed on the owner's
+    /// Desktop was a live possibility.
+    ///
+    /// So staging goes through `url(for: .itemReplacementDirectory,
+    /// appropriateFor:)` — inside the app's own sandbox, guaranteed to be on
+    /// the destination's volume — and the publish is `replaceItemAt` or a plain
+    /// rename onto the granted path. Both are documented; neither is an
+    /// argument. This test refuses a return to the sibling scheme, and refuses
+    /// a staging location that would not be on the destination's volume.
+    func testTheExportStagesWhereItNeedsNoGrantOfItsOwn() throws {
         let source = try String(
             contentsOf: try AudioExportTests.sourceFile("AudioExport.swift"), encoding: .utf8
         )
-        let start = try XCTUnwrap(source.range(of: "struct AudioExportStaging {"))
+        let start = try XCTUnwrap(
+            source.range(of: "struct AudioExportStaging {"),
+            "AudioExportStaging was renamed; this guard needs updating with it."
+        )
         let staging = String(source[start.lowerBound...])
 
         XCTAssertTrue(
-            staging.contains("let directory = self.destination.deletingLastPathComponent()"),
-            "Staging no longer derives its directory from the destination."
+            staging.contains("for: .itemReplacementDirectory"),
+            "Staging no longer uses the item-replacement directory."
         )
+        XCTAssertTrue(
+            staging.contains("appropriateFor: self.destination"),
+            "Without `appropriateFor:` the staged file may be on another volume, and the "
+                + "publish becomes a copy rather than an atomic rename."
+        )
+        XCTAssertTrue(
+            staging.contains("replaceItemAt(destination, withItemAt: stagedURL)"),
+            "The overwrite path no longer uses the sanctioned safe-save API."
+        )
+
+        // The sibling scheme, and every other location that would need an
+        // entitlement the test above refuses.
         for elsewhere in [
-            "NSTemporaryDirectory", "temporaryDirectory", "applicationSupportDirectory",
-            "homeDirectoryForCurrentUser", "URL(filePath: \"/"
+            "synth-partial",
+            "directory.appending",
+            "NSTemporaryDirectory",
+            "applicationSupportDirectory",
+            "homeDirectoryForCurrentUser",
+            "URL(filePath: \"/"
         ] {
             XCTAssertFalse(
                 staging.contains(elsewhere),
                 """
-                AudioExportStaging mentions \(elsewhere). Staging must sit beside the \
-                destination: anywhere else is either a cross-filesystem move, which is not \
-                atomic, or a location the app has no entitlement for.
+                AudioExportStaging mentions \(elsewhere). The staged file must live in the \
+                item-replacement directory: beside the destination needs a grant nobody has \
+                observed, and anywhere off that volume makes the publish a copy.
                 """
             )
         }

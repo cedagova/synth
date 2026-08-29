@@ -121,15 +121,20 @@ public struct AudioExportSettings: Sendable, Equatable, Codable {
     }
 }
 
-/// File names an export uses: the one it suggests, and the hidden sibling it
-/// stages the bytes in.
+/// The file name an export suggests, and the bound it has to respect.
 ///
-/// **Both live here, because they have to agree.** The staged name wraps the
-/// destination's own name, so its length is the destination's length plus a
-/// fixed overhead — and if the suggested name and the staged name derive their
-/// limits separately, the app can suggest a name in its own save panel whose
-/// staged sibling is then too long for the filesystem to create. Every bound
-/// below is computed from `maximumFileNameBytes`, once.
+/// **One bound, in one place.** An earlier shape of the staging wrote a hidden
+/// sibling of the destination, which meant the suggested name and the staged
+/// name each had to fit `NAME_MAX` with the sibling's marker and a UUID on top
+/// — and they were derived separately, 48 bytes apart, so the app could suggest
+/// a name in its own save panel whose staged file could not then be created.
+///
+/// `AudioExportStaging` now stages in the system's item-replacement directory
+/// under the destination's own name, which removes the overhead rather than
+/// budgeting for it: a name that fits at the destination fits there.
+/// `AudioExportTests` still asserts both halves, because the property that
+/// matters — everything the app suggests is creatable — is worth a test
+/// whichever way staging works.
 public enum AudioExportNaming {
     /// Characters a file name may not contain, plus the ones that make a name
     /// awkward rather than illegal.
@@ -140,18 +145,11 @@ public enum AudioExportNaming {
     /// reaches it in a third of the characters an English one does.
     public static let maximumFileNameBytes = 255
 
-    /// What `stagedFileName(for:)` adds around a destination's own name:
-    /// the leading dot, the `.synth-partial-` marker, and a UUID.
-    static let stagedNameOverheadBytes = 1 + ".synth-partial-".utf8.count + 36
-
-    /// The longest destination name whose staged sibling still fits.
+    /// The longest name the app will suggest.
     ///
-    /// 203 bytes. Anything the app itself suggests is capped here, so the
-    /// staged file for a suggestion is never truncated; a longer name the owner
-    /// typed themselves is still exported, because the staged name truncates
-    /// its embedded copy rather than refusing.
-    public static let maximumSuggestedNameBytes =
-        maximumFileNameBytes - stagedNameOverheadBytes
+    /// The same bound today, named separately so a staging scheme that needs
+    /// room of its own has one place to take it from.
+    public static let maximumSuggestedNameBytes = maximumFileNameBytes
 
     /// `"Prelude in C — Chamber.wav"`, with the preset dropped when it is the
     /// only one and the piece already says everything.
@@ -171,23 +169,6 @@ public enum AudioExportNaming {
         stem = stem.trimmingCharacters(in: .whitespaces)
         if stem.isEmpty { stem = "Untitled piece" }
         return "\(stem).\(format.fileExtension)"
-    }
-
-    /// The hidden sibling an export stages its bytes in, for a destination
-    /// called `destinationName`.
-    ///
-    /// Dot-prefixed so it is invisible in Finder, and uniquely suffixed so two
-    /// exports of one piece at once cannot collide. **The UUID carries the
-    /// uniqueness; the embedded destination name is only there to make a
-    /// leftover file self-explaining**, so it is the part that gives way when
-    /// the total would exceed `NAME_MAX`.
-    public static func stagedFileName(
-        for destinationName: String, uniqueSuffix: String = UUID().uuidString
-    ) -> String {
-        let overhead = 1 + ".synth-partial-".utf8.count + uniqueSuffix.utf8.count
-        let room = max(0, maximumFileNameBytes - overhead)
-        let embedded = truncated(destinationName, toByteCount: room)
-        return ".\(embedded).synth-partial-\(uniqueSuffix)"
     }
 
     /// `text` shortened to at most `byteCount` UTF-8 bytes, never splitting a

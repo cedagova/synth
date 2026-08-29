@@ -494,26 +494,48 @@ extension AudioExportError: LocalizedError {
 
 /// The staged file an export writes into, and the one rename that publishes it.
 ///
-/// **Same shape as `AssetStagingArea`, for the same reason.** Bytes are written
-/// to a hidden sibling of the destination and the finished file appears in one
-/// `rename(2)`; there is no instant at which the destination exists and is
-/// incomplete, and a crash, a cancel or a full disk leaves the destination
-/// exactly as it was — including untouched if a previous export of the same
-/// name is already there.
+/// **Same guarantee as `AssetStagingArea`**: bytes go somewhere else entirely
+/// and the finished file appears in one `rename(2)`, so there is no instant at
+/// which the destination exists and is incomplete, and a crash, a cancel or a
+/// full disk leaves the destination exactly as it was — including untouched if
+/// a previous export of the same name is already there.
 ///
-/// A *sibling*, not a file in Synth's own container, and that is deliberate:
-/// `rename(2)` is only atomic within one filesystem, so staging next to the
-/// destination is the only placement that is atomic for an export to an
-/// external drive as well as to the owner's Documents folder. It is also what
-/// `Data.write(options: .atomic)` does, which is why a save panel's grant
-/// covers it.
+/// **Staged in the system's item-replacement directory, not beside the
+/// destination.** The first version of this wrote a hidden sibling —
+/// `.<name>.synth-partial-<UUID>` — next to the file the owner chose, on the
+/// argument that a save panel's grant must cover it because that is what
+/// `Data.write(options: .atomic)` does. Plausible, and nothing proved it: under
+/// the App Sandbox, Powerbox issues its extension for the exact path the owner
+/// picked, and whether a hand-rolled `open(2)` at an *arbitrarily named*
+/// sibling falls inside that allowance is not something Apple documents. An
+/// export that worked in every test and failed on the owner's Desktop would
+/// have been the worst possible outcome for this leaf.
 ///
-/// The price of being a sibling is that the staged name has to fit in the same
-/// `NAME_MAX` the destination does, with the marker and the UUID on top.
-/// `AudioExportNaming` owns both names for that reason.
+/// `FileManager.url(for: .itemReplacementDirectory, appropriateFor:)` removes
+/// the question rather than arguing it. It is the documented companion to
+/// `replaceItemAt(_:withItemAt:)` and it gives two things at once:
+///
+/// * a directory the app can always write, inside its own sandbox, so staging
+///   needs no grant of its own; and
+/// * a guarantee that the directory is **on the same volume** as the
+///   destination, which is what keeps the publish a `rename(2)` — atomic — for
+///   an export to an external drive as much as to the owner's Documents folder.
+///
+/// The publish is then the sanctioned safe-save API for an overwrite, and a
+/// plain rename for a file that does not exist yet — which is exactly the
+/// operation a save panel's grant exists to permit.
+///
+/// The staged file carries the destination's own name, so it also stops needing
+/// a `NAME_MAX` budget of its own: the replacement directory is private, and a
+/// name that fits at the destination fits there.
 struct AudioExportStaging {
     let destination: URL
     let stagedURL: URL
+
+    /// The private directory the staged file lives in, removed whichever way
+    /// the export ends.
+    let replacementDirectory: URL
+
     private let fileManager: FileManager
 
     init(destination: URL, fileManager: FileManager) throws {
@@ -536,18 +558,33 @@ struct AudioExportStaging {
             )
         }
 
-        // `AudioExportNaming` owns both this name and the one the save panel
-        // suggests, so the app cannot suggest a destination whose staged
-        // sibling is too long for the filesystem to create.
-        self.stagedURL = directory.appending(
-            path: AudioExportNaming.stagedFileName(for: self.destination.lastPathComponent)
+        // `appropriateFor:` is what makes this the *destination's* volume, and
+        // therefore what makes the publish a rename rather than a copy. A fresh
+        // directory per call, so two exports of one name cannot collide without
+        // needing a unique file name of their own.
+        do {
+            self.replacementDirectory = try fileManager.url(
+                for: .itemReplacementDirectory,
+                in: .userDomainMask,
+                appropriateFor: self.destination,
+                create: true
+            )
+        } catch {
+            throw AudioExportError.destinationUnusable(
+                path: directoryPath,
+                reason: "Synth could not make a temporary folder on the same disk: "
+                    + (error as NSError).localizedDescription
+            )
+        }
+        self.stagedURL = replacementDirectory.appending(
+            path: self.destination.lastPathComponent
         )
     }
 
     func open(with opener: StagingFileOpening) throws -> AppendableFile {
-        // A leftover from a previous run cannot exist under a fresh UUID, but
-        // opening for *append* over one would silently concatenate two exports,
-        // so the guarantee is made structural rather than assumed.
+        // The directory is freshly created, so nothing can be here; opening for
+        // *append* over a leftover would silently concatenate two exports, so
+        // the guarantee is made structural rather than assumed.
         if fileManager.fileExists(atPath: stagedURL.path(percentEncoded: false)) {
             try? fileManager.removeItem(at: stagedURL)
         }
@@ -585,14 +622,21 @@ struct AudioExportStaging {
         }
     }
 
-    /// The moment the export becomes a file: one rename over the destination.
+    /// The moment the export becomes a file: one rename onto the destination.
+    ///
+    /// Two shapes, both documented, and neither of them a hand-rolled write at
+    /// a path nobody granted:
+    ///
+    /// * **the destination exists** — `replaceItemAt` is the sanctioned
+    ///   safe-save API. It renames the staged file into place and only then
+    ///   removes the old one, so an overwrite that fails leaves the previous
+    ///   export intact rather than deleting it first and hoping; and
+    /// * **it does not** — a plain rename onto the path the owner named, which
+    ///   is the operation a save panel's grant exists to permit.
     func publish() throws {
+        defer { removeReplacementDirectory() }
         do {
             if fileManager.fileExists(atPath: destination.path(percentEncoded: false)) {
-                // `replaceItemAt` is the sanctioned overwrite: it renames the
-                // staged file into place and only then removes the old one, so
-                // an overwrite that fails leaves the previous export intact
-                // rather than deleting it first and hoping.
                 _ = try fileManager.replaceItemAt(destination, withItemAt: stagedURL)
             } else {
                 try fileManager.moveItem(at: stagedURL, to: destination)
@@ -608,13 +652,19 @@ struct AudioExportStaging {
     /// Throw the staged bytes away. Best effort, and never touches the
     /// destination.
     func discard() {
-        guard fileManager.fileExists(atPath: stagedURL.path(percentEncoded: false)) else { return }
+        removeReplacementDirectory()
+    }
+
+    /// Removes the whole private directory, so a failed export leaves nothing
+    /// anywhere rather than a temporary folder nobody will ever look in.
+    private func removeReplacementDirectory() {
+        let path = replacementDirectory.path(percentEncoded: false)
+        guard fileManager.fileExists(atPath: path) else { return }
         do {
-            try fileManager.removeItem(at: stagedURL)
+            try fileManager.removeItem(at: replacementDirectory)
         } catch {
             NSLog("Synth: could not clean up the staged export at %@: %@",
-                  stagedURL.path(percentEncoded: false),
-                  (error as NSError).localizedDescription)
+                  path, (error as NSError).localizedDescription)
         }
     }
 }

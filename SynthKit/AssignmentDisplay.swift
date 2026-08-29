@@ -29,6 +29,9 @@ public enum AssignmentDisplay {
     /// What one press of Pan Left or Pan Right moves.
     public static let panStep: Double = 0.1
 
+    /// What one press of More Room or Less Room moves (D7).
+    public static let roomSendStep: Double = 0.1
+
     /// The fader position for a stored linear gain.
     public static func decibels(forVolume volume: Double) -> Double {
         guard volume > 0 else { return minimumDecibels }

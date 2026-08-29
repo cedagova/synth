@@ -84,8 +84,29 @@ public struct LineVoiceInstance: @unchecked Sendable {
     public let vtable: SynthLineVoice
     public let release: @Sendable () -> Void
 
-    public init(vtable: SynthLineVoice, release: @escaping @Sendable () -> Void) {
+    /// True when the provider meant to build a sounding voice and could not, so
+    /// this line renders silence it did not ask for.
+    ///
+    /// **Not the same thing as a voice that renders silence on purpose.** A
+    /// line whose instrument is not downloaded is *deliberately* quiet and
+    /// already carries a sentence saying so; this is the other case — the
+    /// instrument is here, the allocation failed, and nobody would otherwise
+    /// know. INS002 chose silence over quietly substituting a synth patch when
+    /// `sample_voice_create` cannot allocate, because an unasked-for substitute
+    /// is the end state issue #24 gates; this flag is what stops the remaining
+    /// failure, silence nobody was told about.
+    ///
+    /// Defaulted to false, so a provider that cannot fail to build a voice says
+    /// nothing about it.
+    public let didFailToBuild: Bool
+
+    public init(
+        vtable: SynthLineVoice,
+        didFailToBuild: Bool = false,
+        release: @escaping @Sendable () -> Void
+    ) {
         self.vtable = vtable
+        self.didFailToBuild = didFailToBuild
         self.release = release
     }
 }

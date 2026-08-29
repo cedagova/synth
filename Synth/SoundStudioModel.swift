@@ -90,20 +90,43 @@ final class SoundStudioModel {
     private(set) var renaming: SoundEntry?
     var renameText = ""
 
-    /// The editor. Always present: an empty editor is a real state, and a
+    /// The synth editor. Always present: an empty editor is a real state, and a
     /// screen that had to cope with `nil` would be a worse one.
     let editor: SoundEditorModel
+
+    /// The instrument-customization editor, for a downloaded instrument or one
+    /// of the owner's variants (REQ-021, REQ-023).
+    ///
+    /// **A second editor rather than a mode of the first.** The two share the
+    /// library, the list and the status line, and share nothing else: a synth
+    /// patch has fifteen panels of parameters and an instrument has eight
+    /// gated controls over read-only samples. Folding them into one model would
+    /// mean every control asking which kind of sound it was looking at, which is
+    /// exactly how a screen ends up showing a knob that does nothing.
+    let instrumentEditor: InstrumentEditorModel
+
+    /// Whether the pane on the right is showing the instrument editor.
+    ///
+    /// Derived from what is selected rather than stored, so it cannot disagree
+    /// with the list.
+    var isEditingInstrument: Bool { selectedSound?.kind == .instrument }
+
+    /// The name a Save as Variant sheet starts with, and the field it edits.
+    private(set) var isNamingVariant = false
+    var variantNameDraft = ""
 
     /// Bumped so the screen can move keyboard focus where a menu command asked
     /// for it — the same mechanism the piece library uses for Find.
     private(set) var searchFocusRequests = 0
     private(set) var listFocusRequests = 0
 
-    init(store: LibraryStore, editor: SoundEditorModel) {
+    init(store: LibraryStore, editor: SoundEditorModel, instrumentEditor: InstrumentEditorModel) {
         self.library = store.sounds
         self.presets = store.presets
         self.editor = editor
+        self.instrumentEditor = instrumentEditor
         editor.onSaved = { [weak self] entry in self?.absorbSavedSound(entry) }
+        instrumentEditor.onSaved = { [weak self] entry in self?.absorbSavedSound(entry) }
     }
 
     // MARK: Derived state
@@ -169,9 +192,25 @@ final class SoundStudioModel {
         selection = shown.first?.id
     }
 
+    /// Hand the selection to whichever editor can actually edit it.
+    ///
+    /// Exactly one is open at a time, and the other is closed rather than left
+    /// holding a stale sound — which is what stops an unsaved edit in one editor
+    /// outliving a jump to a sound of the other kind.
     private func loadSelectionIntoEditor() {
-        guard let entry = selectedSound else { return editor.close() }
-        editor.load(entry)
+        guard let entry = selectedSound else {
+            editor.close()
+            instrumentEditor.close()
+            return
+        }
+        switch entry.kind {
+        case .synth:
+            instrumentEditor.close()
+            editor.load(entry)
+        case .instrument:
+            editor.close()
+            instrumentEditor.load(entry)
+        }
     }
 
     // MARK: Creating and copying
@@ -362,13 +401,53 @@ final class SoundStudioModel {
         }
     }
 
+    /// Why this entry cannot be changed in place, in its own words.
+    ///
+    /// Two read-only origins with two different next steps, and the owner is
+    /// owed the right one: duplicate a shipped patch, save a variant of a
+    /// downloaded instrument whose samples nothing may write to.
     private func refuseShipped(_ entry: SoundEntry, verb: String) {
+        if entry.origin == .instrument {
+            alert = SoundAlert(
+                title: "“\(entry.name)” cannot be \(verb)",
+                message: "It is a downloaded instrument. Its samples are read-only and it has no "
+                    + "row of its own, so there is nothing here to change.",
+                recovery: "Customize it and save a named variant instead; the downloaded library "
+                    + "stays exactly as it was installed."
+            )
+            return
+        }
         alert = SoundAlert(
             title: "“\(entry.name)” cannot be \(verb)",
             message: "It is one of Synth's own sounds, and those stay as they are so every "
                 + "Synth has the same starting collection.",
             recovery: "Duplicate it to get an editable copy of your own; the original is untouched."
         )
+    }
+
+    // MARK: Named variants (REQ-023)
+
+    /// Begin naming a variant of whatever the instrument editor is showing.
+    func beginVariantNaming() {
+        guard instrumentEditor.isOpen else { return }
+        variantNameDraft = instrumentEditor.suggestedVariantName()
+        isNamingVariant = true
+    }
+
+    func cancelVariantNaming() {
+        isNamingVariant = false
+        variantNameDraft = ""
+    }
+
+    /// Save the working customization as a named sound of the owner's own, and
+    /// select it — because the next thing they want is to assign it.
+    func commitVariantNaming() {
+        let requested = variantNameDraft
+        isNamingVariant = false
+        variantNameDraft = ""
+        guard let created = instrumentEditor.saveAsVariant(named: requested) else { return }
+        reload()
+        selection = created.id
     }
 
     /// The sound the editor just saved, folded back into the list in place.
@@ -386,6 +465,14 @@ final class SoundStudioModel {
         }
         selection = entry.id
         statusMessage = "Saved “\(entry.name)”."
+    }
+
+    /// How many downloaded instruments the library is offering.
+    var instrumentCount: Int { sounds.count { $0.origin == .instrument } }
+
+    /// How many of the owner's sounds are instrument variants (REQ-023).
+    var variantCount: Int {
+        sounds.count { $0.origin == .user && $0.kind == .instrument }
     }
 
     /// "New Sound", then "New Sound 2". Deterministic and non-colliding for the

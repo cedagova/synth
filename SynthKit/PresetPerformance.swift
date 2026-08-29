@@ -233,6 +233,63 @@ public struct ResolvedLine: Equatable, Sendable, Identifiable {
         )
     }
 
+    /// This line with a different sound in it, everything else kept.
+    ///
+    /// For a live edit: the sound the owner is turning a knob on has changed
+    /// but nothing about which line it is, what the mix does, or what the owner
+    /// has been told has. Written as a copy rather than a `var` so a
+    /// `ResolvedLine` remains a value nothing can quietly change underneath a
+    /// view.
+    public func replacing(content: SoundContent) -> ResolvedLine {
+        ResolvedLine(
+            lineID: lineID,
+            name: name,
+            source: source,
+            content: content,
+            instrumentResolution: instrumentResolution,
+            advice: advice,
+            acceptsSubstitution: acceptsSubstitution,
+            substitute: substitute,
+            mixer: mixer
+        )
+    }
+
+    /// This line with a different mix on it, everything else kept.
+    public func replacing(mixer: LineMixerState) -> ResolvedLine {
+        ResolvedLine(
+            lineID: lineID,
+            name: name,
+            source: source,
+            content: content,
+            instrumentResolution: instrumentResolution,
+            advice: advice,
+            acceptsSubstitution: acceptsSubstitution,
+            substitute: substitute,
+            mixer: mixer
+        )
+    }
+
+    /// This line with one more thing the owner has to be told, for a fact only
+    /// discovered once the render program was built.
+    ///
+    /// `LineRenderHealth` is the caller: a voice that could not be allocated is
+    /// not knowable until `makeVoice` has run, and a line that is silently
+    /// silent is exactly what issue #24 forbids.
+    public func adding(advice extra: LineInstrumentAdvice) -> ResolvedLine {
+        guard !advice.contains(extra) else { return self }
+        return ResolvedLine(
+            lineID: lineID,
+            name: name,
+            source: source,
+            content: content,
+            instrumentResolution: instrumentResolution,
+            advice: advice + [extra],
+            acceptsSubstitution: acceptsSubstitution,
+            substitute: substitute,
+            mixer: mixer
+        )
+    }
+
     /// What VoiceOver says a mixer strip is.
     public var accessibilityDescription: String {
         var sentence = "\(name), \(source.displayName)"

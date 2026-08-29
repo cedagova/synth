@@ -44,6 +44,17 @@ public final class LibraryStore: @unchecked Sendable {
     /// `InstrumentDownloadManager`'s, and it has to be handed one explicitly.
     public let instruments: InstrumentAssetStore
 
+    /// The loaded-instrument cache every line and the customization editor
+    /// share (INS002, INS003).
+    ///
+    /// **One per store, because sharing is the whole memory story.** The
+    /// orchestral reference has eighteen lines and several of them are the same
+    /// section; a cache per screen would map the same 40 MB of violin samples
+    /// twice and fault in two copies of their attacks. It also makes the editor
+    /// measure the *same* loaded instrument the engine is playing, so a
+    /// capability the editor offers is a capability the render core has.
+    public let sampledInstruments: SampledInstrumentLibrary
+
     /// Stores whose rows belong to a piece and must go when it does.
     ///
     /// Always contains `presets`, plus anything the caller added. The cascade,
@@ -88,6 +99,7 @@ public final class LibraryStore: @unchecked Sendable {
             database: database, assetsRootURL: container.assetsURL, fileManager: fileManager
         )
         self.instruments = instruments
+        self.sampledInstruments = SampledInstrumentLibrary(store: instruments)
         self.sounds = SoundLibrary(
             database: database,
             instruments: instruments,

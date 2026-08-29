@@ -29,6 +29,21 @@ struct AssignmentPanel: View {
             PresetBar(model: model)
             Divider()
 
+            // A line that is silent because its instrument is missing must not
+            // be something the owner only finds by scrolling to it (issue #24).
+            if let banner = model.instrumentBanner {
+                Label(banner, systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.orange.opacity(0.18))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel(banner)
+                    .accessibilityAddTraits(.updatesFrequently)
+                Divider()
+            }
+
             if model.isReady {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
@@ -215,6 +230,7 @@ private struct LineStrip: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            instrumentAdviceRows
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -330,6 +346,67 @@ private struct LineStrip: View {
         )
     }
 
+    // MARK: The instrument flags (issue #24)
+
+    /// Everything the owner has to be told about this line, and the one button
+    /// that changes what it plays.
+    ///
+    /// **A line with a missing instrument is silent until this button is
+    /// pressed.** That is the whole gate: quietly playing a synth patch where a
+    /// cello was assigned would be the pleasanter failure and the wrong one, so
+    /// the line says what is wrong, what it is doing about it, and offers the
+    /// substitution as a choice rather than making it.
+    @ViewBuilder
+    private var instrumentAdviceRows: some View {
+        ForEach(Array(line.advice.enumerated()), id: \.offset) { _, advice in
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(advice.badge)
+                    .font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(
+                        advice.isSilent
+                            ? AnyShapeStyle(.orange.opacity(0.25))
+                            : AnyShapeStyle(.secondary.opacity(0.18)),
+                        in: Capsule()
+                    )
+                    .accessibilityHidden(true)
+
+                Text(advice.explanation)
+                    .font(.caption)
+                    .foregroundStyle(advice.isSilent ? .primary : .secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(line.name): \(advice.badge). \(advice.explanation)")
+        }
+
+        if let offer = AssignmentDisplay.substitutionOffer(line) {
+            Button { model.acceptSubstitution(forLine: line.lineID) } label: {
+                Label(offer, systemImage: "speaker.wave.2")
+            }
+            .buttonStyle(.borderless)
+            .font(.caption)
+            .accessibilityLabel(offer)
+            .accessibilityHint(
+                "This line is silent because its instrument is missing. Pressing this plays a "
+                + "stand-in sound until the instrument is available; downloading the instrument "
+                + "puts it back."
+            )
+        }
+
+        if let withdrawal = AssignmentDisplay.substitutionWithdrawal(line) {
+            Button { model.withdrawSubstitution(forLine: line.lineID) } label: {
+                Label(withdrawal, systemImage: "speaker.slash")
+            }
+            .buttonStyle(.borderless)
+            .font(.caption)
+            .accessibilityLabel(withdrawal)
+            .accessibilityHint("The line goes back to silence until its instrument is available.")
+        }
+    }
+
     // MARK: The mix
 
     private var mixRow: some View {
@@ -402,6 +479,36 @@ private struct LineStrip: View {
                     .accessibilityLabel("Pan of “\(line.name)”")
                     .accessibilityValue(AssignmentDisplay.spokenPan(line.mixer.pan))
             }
+
+            // D7's per-line room send. Beside pan rather than in the instrument
+            // editor, because it is a property of how this line sits in this
+            // mix and not of what the sound is — which is also why it works the
+            // same for a synth line and a sampled one.
+            HStack(spacing: 6) {
+                Text("Room")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+
+                Slider(
+                    value: roomSendBinding,
+                    in: 0...1,
+                    onEditingChanged: { isEditing in
+                        guard !isEditing else { return }
+                        model.commitMixer(forLine: line.lineID, describedAs: "room send")
+                    }
+                )
+                .accessibilityLabel("Room send of the line “\(line.name)”")
+                .accessibilityValue(AssignmentDisplay.spokenRoomSend(line.mixer.roomSend))
+                .accessibilityHint("How much of this line reaches the shared room. Zero is dry.")
+
+                Text(AssignmentDisplay.roomSendText(line.mixer.roomSend))
+                    .font(.caption)
+                    .monospacedDigit()
+                    .frame(width: 58, alignment: .trailing)
+                    .accessibilityLabel("Room send of “\(line.name)”")
+                    .accessibilityValue(AssignmentDisplay.spokenRoomSend(line.mixer.roomSend))
+            }
         }
     }
 
@@ -420,6 +527,13 @@ private struct LineStrip: View {
         Binding(
             get: { line.mixer.pan },
             set: { model.previewPan($0, forLine: line.lineID) }
+        )
+    }
+
+    private var roomSendBinding: Binding<Double> {
+        Binding(
+            get: { line.mixer.roomSend },
+            set: { model.previewRoomSend($0, forLine: line.lineID) }
         )
     }
 }

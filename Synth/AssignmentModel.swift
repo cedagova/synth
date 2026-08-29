@@ -196,7 +196,8 @@ final class AssignmentModel {
 
             let preset = try store.presets.activePreset(for: inventory, palette: palette)
             let performance = try PresetPerformance.resolve(
-                preset, inventory: inventory, library: store.sounds
+                preset, inventory: inventory, library: store.sounds,
+                instruments: store.instruments
             )
 
             presets = try store.presets.presets(forPieceID: score.pieceID)
@@ -223,11 +224,42 @@ final class AssignmentModel {
             // below, which builds the same program out of live channels instead
             // of frozen patches so that editing an assigned sound is heard on
             // that line while the piece plays (REQ-018).
-            try engine.setVoices(voices(for: resolved.lines))
+            let assignment = voices(for: resolved.lines)
+            try engine.setVoices(assignment)
             resolved.applyMixer(to: engine)
+            flagSilentLines()
         } catch {
             alert = AssignmentAlert(title: "Could not put this preset on the audio engine", error)
         }
+    }
+
+    /// Flag any line whose voice could not be built, so it is not silently
+    /// silent (issue #24, carried forward from INS002).
+    ///
+    /// **Read here, immediately after the program is built, and nowhere else.**
+    /// By the time `setVoices` has returned, every voice the program needs has
+    /// been through `makeVoice`, so every allocation failure has already been
+    /// recorded — no polling, no timer, and nothing on the audio thread. INS002
+    /// chose silence over a substitute sound when `sample_voice_create` cannot
+    /// allocate, precisely because an unasked-for substitute is the state this
+    /// leaf gates; a line that is quietly *silent* would be the same violation
+    /// by the other route, which is why this reads the count and says so.
+    private func flagSilentLines() {
+        guard let program = engine.loadedProgram else { return }
+        let silent = LineRenderHealth.silentLines(in: program, resolvedAs: lines)
+        guard !silent.isEmpty else { return }
+
+        for report in silent {
+            guard let index = lines.firstIndex(where: { $0.lineID == report.lineID }) else {
+                continue
+            }
+            lines[index] = lines[index].adding(advice: report.advice)
+        }
+
+        let names = silent.map(\.soundName).joined(separator: ", ")
+        statusMessage = silent.count == 1
+            ? "\(names) could not be given a voice, so that line is playing silence."
+            : "\(names) could not be given voices, so those lines are playing silence."
     }
 
     private func currentPerformance() -> PresetPerformance? {
@@ -254,8 +286,15 @@ final class AssignmentModel {
     /// because neither can ever be edited again.
     private var channels: [String: SynthPatchLiveVoices] = [:]
 
+    /// The same idea for a sampled instrument: one channel per *variant*, so
+    /// moving a tone control reaches every line playing that variant and no
+    /// other line.
+    private var instrumentChannels: [String: SampledInstrumentLiveVoices] = [:]
+
     private func channelKey(for line: ResolvedLine) -> String {
-        if case .library(let soundID, _) = line.source { return "sound:\(soundID)" }
+        if let soundID = line.source.soundID, case .library = line.source {
+            return "sound:\(soundID)"
+        }
         return "line:\(line.lineID.rawValue)"
     }
 
@@ -265,19 +304,55 @@ final class AssignmentModel {
     /// rebuild produces always starts from what the store says — an unsaved
     /// edit published into a channel does not survive a rebuild, which is the
     /// right answer: the preset references the *library* sound.
+    ///
+    /// **The decision about what a line actually plays is not made here.**
+    /// `ResolvedLine.voiceProvider` makes it, once, so live playback and an
+    /// offline render cannot disagree about whether a missing instrument goes
+    /// quiet or gets substituted. This only supplies the two things that
+    /// decision needs from the app: the shared instrument cache, and the live
+    /// channel a sound's edits are published through.
     private func voices(for lines: [ResolvedLine]) -> LineVoiceAssignment {
-        var byLine: [ScoreLineID: any LineVoiceProvider] = [:]
         var kept: [String: SynthPatchLiveVoices] = [:]
+        var keptInstruments: [String: SampledInstrumentLiveVoices] = [:]
+
         for line in lines {
             let key = channelKey(for: line)
-            let channel = channels[key] ?? SynthPatchLiveVoices(patch: line.patch)
-            channel.apply(line.patch)
-            kept[key] = channel
-            byLine[line.lineID] = SynthPatchVoiceProvider(live: channel)
+            switch line.content {
+            case .synth(let patch):
+                let channel = channels[key] ?? SynthPatchLiveVoices(patch: patch)
+                channel.apply(patch)
+                kept[key] = channel
+            case .instrument(let variant):
+                let channel = instrumentChannels[key]
+                    ?? SampledInstrumentLiveVoices(customization: variant.customization)
+                channel.apply(variant.customization)
+                keptInstruments[key] = channel
+            }
         }
         // Only the channels this preset still uses; a sound that is no longer
         // assigned anywhere should not keep a channel alive.
         channels = kept
+        instrumentChannels = keptInstruments
+
+        var byLine: [ScoreLineID: any LineVoiceProvider] = [:]
+        for line in lines {
+            let key = channelKey(for: line)
+            switch line.content {
+            case .synth:
+                // A synth line still goes through its channel rather than
+                // through `ResolvedLine.voiceProvider`'s frozen patch, because
+                // that is what makes an edit audible without a rebuild
+                // (REQ-018). The line's own decision is unaffected: a synth
+                // sound has no missing-asset case to decide about.
+                guard let channel = channels[key] else { continue }
+                byLine[line.lineID] = SynthPatchVoiceProvider(live: channel)
+            case .instrument:
+                byLine[line.lineID] = line.voiceProvider(
+                    instruments: store.sampledInstruments,
+                    live: { [instrumentChannels] soundID in instrumentChannels["sound:\(soundID)"] }
+                )
+            }
+        }
         return LineVoiceAssignment(providersByLine: byLine)
     }
 
@@ -295,13 +370,24 @@ final class AssignmentModel {
         // Kept in step so a later refresh can tell a patch edit (no rebuild
         // needed) from a change of which sound a line plays (rebuild needed).
         for index in lines.indices where channelKey(for: lines[index]) == "sound:\(soundID)" {
-            lines[index] = ResolvedLine(
-                lineID: lines[index].lineID,
-                name: lines[index].name,
-                source: lines[index].source,
-                patch: patch,
-                mixer: lines[index].mixer
-            )
+            lines[index] = lines[index].replacing(content: .synth(patch))
+        }
+    }
+
+    /// The instrument editor moved a control on the variant `soundID`. Every
+    /// line that plays it hears the change on the next block, and no other line
+    /// does.
+    ///
+    /// The instrument half of the same requirement, through the same shape:
+    /// a publish into the running voices rather than a rebuild, so a tone
+    /// control moved during a passage is heard on the notes already sounding.
+    func publishEditedVariant(id soundID: String, variant: InstrumentVariant) {
+        guard !isSuspendedByPlayThrough,
+              let channel = instrumentChannels["sound:\(soundID)"] else { return }
+        let result = channel.apply(variant.customization)
+        guard result.reachedAnyVoice else { return }
+        for index in lines.indices where channelKey(for: lines[index]) == "sound:\(soundID)" {
+            lines[index] = lines[index].replacing(content: .instrument(variant))
         }
     }
 
@@ -379,7 +465,8 @@ final class AssignmentModel {
             let inventory = try store.lineInventory(for: score)
             self.inventory = inventory
             lines = try PresetPerformance.resolve(
-                preset, inventory: inventory, library: store.sounds
+                preset, inventory: inventory, library: store.sounds,
+                instruments: store.instruments
             ).lines
         } catch {
             alert = AssignmentAlert(title: "Could not re-read this piece's line names", error)
@@ -419,6 +506,73 @@ final class AssignmentModel {
         assign(soundID: ordered[index].id, toLine: line.lineID)
     }
 
+    // MARK: Missing instruments (issue #24)
+
+    /// Every line the owner has something to be told about.
+    var flaggedLines: [ResolvedLine] { lines.filter { !$0.advice.isEmpty } }
+
+    /// Every line that is currently producing no sound at all.
+    var silentLines: [ResolvedLine] { lines.filter(\.isSilent) }
+
+    /// One sentence for the panel's own banner, or nil when nothing is wrong.
+    var instrumentBanner: String? {
+        let silent = silentLines
+        guard !silent.isEmpty else { return nil }
+        let names = silent.map(\.name).joined(separator: ", ")
+        return silent.count == 1
+            ? "\(names) is silent — its instrument is not available. See the note on that line."
+            : "\(silent.count) lines are silent because their instruments are not available "
+                + "(\(names))."
+    }
+
+    /// The owner has read the flag and asked to hear something on this line
+    /// while its instrument is missing (issue #24's explicit acknowledgment).
+    ///
+    /// **The only path to a substituted line.** Nothing infers this, no default
+    /// grants it, and it is recorded in the preset so the answer survives a
+    /// relaunch. Until it is pressed the line renders silence, which is the
+    /// whole point: a piece that quietly plays a synth patch where a cello was
+    /// assigned is the state this leaf exists to prevent.
+    func acceptSubstitution(forLine lineID: ScoreLineID) {
+        guard let preset = activePreset,
+              let line = lines.first(where: { $0.lineID == lineID }),
+              let substitute = line.substitute else { return }
+
+        write("play a substitute on “\(line.name)”") { _ in
+            activePreset = try store.presets.setAcceptsSubstitution(
+                true, forLine: lineID, in: preset
+            )
+            reloadPresetAndApply()
+            statusMessage = "“\(line.name)” is playing “\(substitute.name)” until "
+                + "“\(line.source.displayName)” is available."
+        }
+    }
+
+    /// Take the substitute back off: the line returns to silence and its flag.
+    func withdrawSubstitution(forLine lineID: ScoreLineID) {
+        guard let preset = activePreset,
+              let line = lines.first(where: { $0.lineID == lineID }) else { return }
+
+        write("stop the substitute on “\(line.name)”") { _ in
+            activePreset = try store.presets.setAcceptsSubstitution(
+                false, forLine: lineID, in: preset
+            )
+            reloadPresetAndApply()
+            statusMessage = "“\(line.name)” is silent again until "
+                + "“\(line.source.displayName)” is available."
+        }
+    }
+
+    /// The Mix menu's version, acting on whichever line is selected.
+    func toggleSubstitutionOnSelectedLine() {
+        guard let line = selectedLine else { return }
+        if line.acceptsSubstitution {
+            withdrawSubstitution(forLine: line.lineID)
+        } else if line.canOfferSubstitution {
+            acceptSubstitution(forLine: line.lineID)
+        }
+    }
+
     // MARK: The mixer (REQ-008)
 
     /// A slider being dragged: heard now, written when the drag ends.
@@ -445,6 +599,22 @@ final class AssignmentModel {
     func setPan(_ pan: Double, forLine lineID: ScoreLineID) {
         previewPan(pan, forLine: lineID)
         commitMixer(forLine: lineID, describedAs: "pan")
+    }
+
+    /// D7's per-line room send, on the same preview-then-commit split as volume
+    /// and pan: every intermediate value is heard, only the last one is written.
+    func previewRoomSend(_ send: Double, forLine lineID: ScoreLineID) {
+        preview(ofLine: lineID) { $0.roomSend = min(max(send, 0), 1) }
+    }
+
+    func setRoomSend(_ send: Double, forLine lineID: ScoreLineID) {
+        previewRoomSend(send, forLine: lineID)
+        commitMixer(forLine: lineID, describedAs: "room send")
+    }
+
+    func nudgeRoomSendOnSelectedLine(by delta: Double) {
+        guard let line = selectedLine else { return }
+        setRoomSend(line.mixer.roomSend + delta, forLine: line.lineID)
     }
 
     func setMuted(_ isMuted: Bool, forLine lineID: ScoreLineID) {
@@ -541,16 +711,11 @@ final class AssignmentModel {
         strip.pan = Float(state.pan)
         strip.isMuted = state.isMuted
         strip.isSoloed = state.isSoloed
+        strip.roomSend = Float(state.roomSend)
     }
 
     private func withMixer(_ mixer: LineMixerState, on line: ResolvedLine) -> ResolvedLine {
-        ResolvedLine(
-            lineID: line.lineID,
-            name: line.name,
-            source: line.source,
-            patch: line.patch,
-            mixer: mixer
-        )
+        line.replacing(mixer: mixer)
     }
 
     // MARK: Presets (REQ-024)
@@ -685,7 +850,8 @@ final class AssignmentModel {
             self.inventory = inventory
             let preset = try store.presets.activePreset(for: inventory, palette: palette)
             let performance = try PresetPerformance.resolve(
-                preset, inventory: inventory, library: store.sounds
+                preset, inventory: inventory, library: store.sounds,
+                instruments: store.instruments
             )
             presets = try store.presets.presets(forPieceID: score.pieceID)
             activePreset = preset

@@ -119,6 +119,12 @@ final class SoundEditorModel {
         switch entry.origin {
         case .shipped:
             parts.append("one of Synth's own sounds")
+        case .instrument:
+            // Unreachable: `load` refuses an instrument entry outright, because
+            // a synth panel over an instrument would be exactly the fake
+            // REQ-021 forbids. Answered rather than crashed on, in the same
+            // words `InstrumentEditorModel` uses.
+            parts.append("a downloaded instrument")
         case .user:
             parts.append("your sound")
             parts.append("revision \(entry.revision)")
@@ -167,22 +173,28 @@ final class SoundEditorModel {
         // from the editor puts the piece back on what the library holds.
         restoreStoredPatch(of: self.entry)
 
+        // An instrument variant belongs to `InstrumentEditorModel`. Refused
+        // here rather than approximated: this panel's controls are a synth's,
+        // and showing them over a sampled cello would be a screen full of knobs
+        // that do nothing, which is precisely what REQ-021 calls faking.
+        guard let patch = entry.synthPatch else { return close() }
+
         self.entry = entry
-        self.patch = entry.patch
-        self.savedPatch = entry.patch
+        self.patch = patch
+        self.savedPatch = patch
         self.statusMessage = nil
 
-        auditionChannel.apply(entry.patch)
-        if isPlayingPieceThroughSound { playbackChannel.apply(entry.patch) }
+        auditionChannel.apply(patch)
+        if isPlayingPieceThroughSound { playbackChannel.apply(patch) }
         startAuditionIfNeeded()
     }
 
     /// The row was renamed or re-filed. The patch did not change, so nothing is
     /// published and nothing becomes dirty; only the heading moves.
     func adoptRenamed(_ entry: SoundEntry) {
-        guard self.entry?.id == entry.id else { return }
+        guard self.entry?.id == entry.id, let stored = entry.synthPatch else { return }
         self.entry = entry
-        self.savedPatch = entry.patch
+        self.savedPatch = stored
         if patch.name != entry.name {
             patch.name = entry.name
             patch.identifier = entry.id
@@ -238,8 +250,8 @@ final class SoundEditorModel {
         do {
             let stored = try library.update(entry, patch: patch)
             self.entry = stored
-            self.savedPatch = stored.patch
-            self.patch = stored.patch
+            self.savedPatch = stored.synthPatch ?? patch
+            self.patch = stored.synthPatch ?? patch
             publishWorkingPatch()
             statusMessage = "Saved “\(stored.name)”."
             onSaved?(stored)

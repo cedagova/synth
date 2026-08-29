@@ -154,7 +154,7 @@ public struct SampledInstrumentVoiceProvider: LineVoiceProvider {
             // flag; #23's own failure behaviour for a vanished asset —
             // "silence-with-flag, never a crash" — is the same answer.
             instrument.recordVoiceAllocationFailure()
-            return LineVoiceInstance(vtable: vtable, release: {})
+            return LineVoiceInstance(vtable: vtable, didFailToBuild: true, release: {})
         }
 
         // The customization the voice starts on. Taken from the live channel

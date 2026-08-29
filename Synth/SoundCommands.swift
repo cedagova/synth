@@ -68,15 +68,38 @@ struct SoundCommands: Commands {
 
             Divider()
 
+            // Save and Revert act on whichever editor the selection opened, so
+            // ⌘S means the same thing whether a synth patch or an instrument
+            // variant is showing. The studio knows which; neither editor acts
+            // when it is not the open one.
             Button("Save Sound") {
                 model.studio?.editor.save()
+                model.studio?.instrumentEditor.save()
             }
             .keyboardShortcut("s", modifiers: .command)
 
             Button("Revert Sound") {
                 model.studio?.editor.revert()
+                model.studio?.instrumentEditor.revert()
             }
             .keyboardShortcut("z", modifiers: [.command, .option])
+
+            Divider()
+
+            // REQ-023's named variant, from the keyboard. Option-Command rather
+            // than Shift for the reason this whole menu records, and ⌥⌘V rather
+            // than ⌃⌘V because the Mix menu already holds ⌃⌘V for Next Preset —
+            // and the Mix menu comes first in the bar, so this one would lose
+            // the collision silently.
+            Button("Save as Instrument Variant…") {
+                model.studio?.beginVariantNaming()
+            }
+            .keyboardShortcut("v", modifiers: [.command, .option])
+
+            Button("Reset Instrument to Recorded") {
+                model.studio?.instrumentEditor.resetToRecorded()
+            }
+            .keyboardShortcut("0", modifiers: [.command, .option])
 
             Divider()
 

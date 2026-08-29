@@ -150,18 +150,49 @@ final class AppModel {
         guard let store else { return }
         if studio == nil {
             let editor = SoundEditorModel(store: store, playbackChannel: playbackChannel)
-            editor.onPlayThroughChanged = { [weak self] isPlayingThrough in
-                self?.playback?.setPlayingThroughEditedSound(isPlayingThrough)
-            }
-            // REQ-018 on an assigned line: an edit reaches every line of the
-            // open piece that plays this sound, while it plays, and nothing
-            // else.
-            editor.onPatchEdited = { [weak self] soundID, patch in
-                self?.playback?.assignment.publishEditedSound(id: soundID, patch: patch)
-            }
-            studio = SoundStudioModel(store: store, editor: editor)
+            let instrumentEditor = InstrumentEditorModel(store: store)
+            wireStudioToPlayback(editor: editor, instrumentEditor: instrumentEditor)
+            studio = SoundStudioModel(
+                store: store, editor: editor, instrumentEditor: instrumentEditor
+            )
         }
         isStudioShowing = true
+    }
+
+    /// Connect the two editors to the open piece.
+    ///
+    /// **Extracted so it can be tested.** The increment-004 effort review found
+    /// that nothing covered these closures: the behaviour was proved one layer
+    /// below, at `SoundEditorModel` and `AssignmentModel.publishEditedSound`,
+    /// so a wiring regression here — a closure dropped, or pointed at the wrong
+    /// model — would have passed every test while REQ-018 quietly stopped
+    /// working in the app. Increment 005 adds a second editor with the same
+    /// three closures, which doubles the surface, so this leaf closes the gap:
+    /// `AppModelWiringTests` calls this with stubs and asserts each closure
+    /// reaches the model it names.
+    ///
+    /// `nonisolated` on the parameters is not needed — everything here is main
+    /// actor — but `[weak self]` is: the editors outlive individual playbacks
+    /// and must not keep the app model alive through a closure.
+    func wireStudioToPlayback(
+        editor: SoundEditorModel,
+        instrumentEditor: InstrumentEditorModel
+    ) {
+        editor.onPlayThroughChanged = { [weak self] isPlayingThrough in
+            self?.playback?.setPlayingThroughEditedSound(isPlayingThrough)
+        }
+        // REQ-018 on an assigned line: an edit reaches every line of the
+        // open piece that plays this sound, while it plays, and nothing
+        // else.
+        editor.onPatchEdited = { [weak self] soundID, patch in
+            self?.playback?.assignment.publishEditedSound(id: soundID, patch: patch)
+        }
+        // The same requirement for a customized instrument (INS003): moving a
+        // tone control reaches every line playing that variant, on the notes
+        // already sounding, without rebuilding the program.
+        instrumentEditor.onVariantEdited = { [weak self] soundID, variant in
+            self?.playback?.assignment.publishEditedVariant(id: soundID, variant: variant)
+        }
     }
 
     func closeSoundStudio() {

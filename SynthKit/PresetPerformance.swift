@@ -390,9 +390,33 @@ public struct PresetPerformance: Sendable {
                 content = embedded.content
             }
 
-            let (resolution, advice) = try instrumentState(
+            let (resolution, raw) = try instrumentState(
                 of: content, source: source, instruments: instruments
             )
+
+            // The stand-in this line would fall back to, worked out whenever
+            // there is anything to fall back from — so the button can name it
+            // before it is pressed as well as after.
+            let stand: LineSubstitute? = raw.contains(where: \.isSilent)
+                ? substitute(for: entry, from: synthPalette)
+                : nil
+
+            // **What the line says has to match what it is doing.** Once the
+            // owner has accepted the stand-in, "this line is silent" is no
+            // longer true — it is audibly playing something — so the flag
+            // becomes the one that says so and stops counting as silent.
+            let advice: [LineInstrumentAdvice]
+            if line.acceptsSubstitution, let stand,
+               case .instrument(let variant) = content, raw.contains(where: \.isSilent) {
+                advice = [
+                    .substituted(
+                        instrumentName: variant.reference.instrumentName,
+                        substituteName: stand.name
+                    )
+                ]
+            } else {
+                advice = raw
+            }
 
             resolved.append(
                 ResolvedLine(
@@ -405,9 +429,7 @@ public struct PresetPerformance: Sendable {
                         for: entry, source: source, advice: advice
                     ),
                     acceptsSubstitution: line.acceptsSubstitution,
-                    substitute: advice.contains(where: \.isSilent) || line.acceptsSubstitution
-                        ? substitute(for: entry, from: synthPalette)
-                        : nil,
+                    substitute: stand,
                     mixer: line.mixer
                 )
             )

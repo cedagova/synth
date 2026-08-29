@@ -45,11 +45,24 @@ struct AssignmentPanel: View {
             }
 
             if model.isReady {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(model.lines) { line in
-                            LineStrip(model: model, line: line, focus: $focusedLine)
-                            Divider()
+                // **A `ScrollViewReader`, because focus alone does not scroll.**
+                // Driving the built app showed it: stepping down the lines with
+                // ⌃⌘N moved the selection and the spoken status all the way to
+                // the last line while the panel went on showing the first four.
+                // A keyboard-only owner would have been operating a line they
+                // could not see, which is not what REQ-027 asks for.
+                ScrollViewReader { scroller in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(model.lines) { line in
+                                LineStrip(model: model, line: line, focus: $focusedLine)
+                                    .id(line.lineID)
+                                Divider()
+                            }
+                        }
+                        .onChange(of: model.lineFocusRequests) { _, _ in
+                            guard let selected = model.selectedLineID else { return }
+                            scroller.scrollTo(selected, anchor: .center)
                         }
                     }
                 }

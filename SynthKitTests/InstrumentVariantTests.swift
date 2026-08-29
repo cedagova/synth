@@ -129,6 +129,43 @@ final class InstrumentVariantTests: XCTestCase {
         XCTAssertTrue(variant.customization.isAsRecorded)
     }
 
+    // MARK: What the owner reads
+
+    /// The sentence the variant row shows and VoiceOver reads, and the name the
+    /// Save as Variant sheet suggests from it.
+    ///
+    /// Pinned because the numbers in it reach the owner as a *name*: driving the
+    /// built app produced "Cello section — low +1e+01 dB", which is what
+    /// formatting twelve decibels with `%g` looks like when it escapes into
+    /// prose.
+    func testTheChangeSummaryReadsAsNumbersRatherThanAsFloatingPoint() {
+        var customization = InstrumentCustomization(toneLowDecibels: 12, toneHighDecibels: -12)
+        XCTAssertEqual(customization.changeSummary, "low +12 dB, high −12 dB")
+
+        customization = InstrumentCustomization(toneLowDecibels: 4.5)
+        XCTAssertEqual(customization.changeSummary, "low +4.5 dB")
+
+        customization = InstrumentCustomization(
+            dynamicsResponse: 1.5, attackSeconds: 0.12, releaseScale: 2.25
+        )
+        XCTAssertEqual(
+            customization.changeSummary, "dynamics 1.5×, attack +120 ms, release 2.25×"
+        )
+
+        customization = InstrumentCustomization(
+            vibratoDepthCents: 30, vibratoRateHz: 6.5, tuningOffsetCents: -8
+        )
+        XCTAssertEqual(
+            customization.changeSummary,
+            "vibrato 30 cents at 6.5 Hz, tuning −8 cents"
+        )
+
+        XCTAssertNil(
+            InstrumentCustomization.asRecorded.changeSummary,
+            "An unchanged instrument has nothing to summarise"
+        )
+    }
+
     // MARK: Installed instruments in the library
 
     private func installFixtureLibrary() throws -> AvailableInstrument {

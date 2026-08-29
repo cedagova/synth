@@ -249,8 +249,27 @@ final class InstrumentAssignmentTests: XCTestCase {
         let resolved = try XCTUnwrap(performance.lines.first { $0.lineID == line })
 
         XCTAssertTrue(resolved.acceptsSubstitution)
+
+        // **The flag has to match what the line is doing.** Before the
+        // acknowledgment it said "this line is silent"; the line is now audibly
+        // playing something, so leaving that sentence up would be the panel
+        // contradicting the mix. Driving the built app is what caught it.
         let advice = try XCTUnwrap(resolved.advice.first)
-        XCTAssertTrue(advice.isSilent, "The instrument is still missing")
+        guard case .substituted(let instrument, let substitute) = advice else {
+            return XCTFail("Expected substituted, got \(advice)")
+        }
+        XCTAssertEqual(instrument, "Cello section")
+        XCTAssertEqual(substitute, resolved.substitute?.name)
+        XCTAssertFalse(advice.isSilent, "It is playing the stand-in, not nothing")
+        XCTAssertFalse(resolved.isSilent)
+        XCTAssertTrue(
+            advice.explanation.contains("downloading the instrument puts it back"),
+            advice.explanation
+        )
+        XCTAssertTrue(
+            performance.silentLines.isEmpty,
+            "…so the panel's own banner has nothing to warn about either"
+        )
 
         let provider = resolved.voiceProvider(instruments: store.sampledInstruments)
         XCTAssertTrue(

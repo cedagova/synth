@@ -149,8 +149,17 @@ final class AppModelWiringTests: XCTestCase {
         let sound = try store().sounds.create(
             patch: patch(cutoff: 1_000), named: "Under Edit", in: .strings
         )
+        // The panel's palette is read when the piece opens, so a sound made
+        // after that has to be picked up before it can be assigned — which is
+        // exactly what returning from the studio does.
+        assignment.refreshFromStore()
         assignment.assign(soundID: sound.id, toLine: line)
         XCTAssertNil(assignment.alert, "Assigning should have succeeded")
+        XCTAssertTrue(
+            try XCTUnwrap(assignment.lines.first { $0.lineID == line })
+                .source.isLibrarySound(sound.id),
+            "The line should now hold a live reference to that sound"
+        )
 
         model.openSoundStudio()
         let studio = try XCTUnwrap(model.studio)
@@ -181,7 +190,9 @@ final class AppModelWiringTests: XCTestCase {
         let unrelated = try store().sounds.create(
             patch: patch(cutoff: 2_000), named: "Unrelated", in: .pads
         )
+        assignment.refreshFromStore()
         assignment.assign(soundID: assigned.id, toLine: line)
+        XCTAssertNil(assignment.alert, "Assigning should have succeeded")
 
         model.openSoundStudio()
         let studio = try XCTUnwrap(model.studio)
@@ -219,8 +230,13 @@ final class AppModelWiringTests: XCTestCase {
         let variant = try store().sounds.createVariant(
             InstrumentVariant(reference: reference), named: "Darker Cello", in: .strings
         )
+        assignment.refreshFromStore()
         assignment.assign(soundID: variant.id, toLine: line)
         XCTAssertNil(assignment.alert, "Assigning a variant should have succeeded")
+        XCTAssertEqual(
+            try XCTUnwrap(assignment.lines.first { $0.lineID == line }).content.kind, .instrument,
+            "The line should now be an instrument line"
+        )
 
         model.openSoundStudio()
         let studio = try XCTUnwrap(model.studio)

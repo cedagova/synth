@@ -221,11 +221,21 @@ extension InstrumentCustomization {
         return value < 0 ? "−\(text)" : "+\(text)"
     }
 
+    /// `value` to at most `places` decimals, with trailing zeros removed.
+    ///
+    /// **`%f`, not `%g`.** Driving the built app showed why: `%g`'s precision is
+    /// *significant digits*, so a twelve-decibel boost came out of
+    /// `changeSummary` as "1e+01 dB" and went straight into the name the Save
+    /// as Variant sheet suggested. A number the owner is about to accept as a
+    /// name has to read like a number.
     static func rounded(_ value: Double, places: Int) -> String {
         let scale = pow(10.0, Double(places))
         let snapped = (value * scale).rounded() / scale
-        return places == 0
-            ? String(Int(snapped))
-            : String(format: "%.\(places)g", snapped)
+        guard places > 0 else { return String(Int(snapped.rounded())) }
+
+        var text = String(format: "%.\(places)f", snapped)
+        while text.contains("."), text.hasSuffix("0") { text.removeLast() }
+        if text.hasSuffix(".") { text.removeLast() }
+        return text
     }
 }

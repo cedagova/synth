@@ -535,50 +535,69 @@ public final class SoundLibrary: @unchecked Sendable {
 
         do {
             return try database.withTransaction { _ -> SoundEntry in
-                guard let current = try catalog.storedSound(withID: entry.id) else {
-                    throw SoundLibraryError.soundNotFound(name: entry.name)
-                }
-
-                let changed = change(current)
-                guard changed.content.kind == current.kind else {
-                    // Unreachable through the public API — nothing offers to
-                    // turn a patch into a variant — and refused rather than
-                    // written, because `SoundCatalog.update` deliberately does
-                    // not touch the `kind` column and a silent disagreement
-                    // between the column and the document would make the row
-                    // unreadable on the next launch.
-                    throw SoundLibraryError.documentRejected(
-                        name: changed.name,
-                        reason: "a sound cannot change which engine plays it."
-                    )
-                }
-
-                // Identity and name live in the row. Whatever the incoming
-                // document claims about itself loses, every time.
-                let stored = Self.stamped(changed.content, id: current.id, name: changed.name)
-                let document = try encode(stored, named: changed.name)
-
-                let updated = SoundEntry(
-                    id: current.id,
-                    name: changed.name,
-                    category: changed.category,
-                    origin: .user,
-                    shippedOriginID: current.shippedOriginID,
-                    documentVersion: Self.documentVersion(of: stored),
-                    revision: current.revision + 1,
-                    createdAt: current.createdAt,
-                    updatedAt: timestamp,
-                    content: stored
-                )
-
-                try catalog.update(updated, document: document)
-                return updated
+                try self.applyMutation(to: entry, change: change, at: timestamp)
             }
         } catch let error as SoundLibraryError {
             throw error
         } catch {
             throw SoundLibraryError.storeFailed(name: entry.name, reason: Self.describe(error))
         }
+    }
+
+    /// The body of `mutate`'s transaction, as its own function.
+    ///
+    /// Extracted from the closure and excluded from optimization because the
+    /// Swift 6.2/6.3 optimizer crashes compiling this body at -O: its
+    /// CopyPropagation pass produces SIL that fails ownership verification on
+    /// the `SoundEntry` borrow across the `SoundContent` switches
+    /// (`changed.content.kind == current.kind`), and swift-frontend aborts.
+    /// The extraction confines `@_optimize(none)` to this one rarely-run
+    /// database write; behavior is unchanged. Re-test when the toolchain moves
+    /// past 6.3.
+    @_optimize(none)
+    private func applyMutation(
+        to entry: SoundEntry,
+        change: (SoundEntry) -> (name: String, category: SoundCategory, content: SoundContent),
+        at timestamp: String
+    ) throws -> SoundEntry {
+        guard let current = try catalog.storedSound(withID: entry.id) else {
+            throw SoundLibraryError.soundNotFound(name: entry.name)
+        }
+
+        let changed = change(current)
+        guard changed.content.kind == current.kind else {
+            // Unreachable through the public API — nothing offers to
+            // turn a patch into a variant — and refused rather than
+            // written, because `SoundCatalog.update` deliberately does
+            // not touch the `kind` column and a silent disagreement
+            // between the column and the document would make the row
+            // unreadable on the next launch.
+            throw SoundLibraryError.documentRejected(
+                name: changed.name,
+                reason: "a sound cannot change which engine plays it."
+            )
+        }
+
+        // Identity and name live in the row. Whatever the incoming
+        // document claims about itself loses, every time.
+        let stored = Self.stamped(changed.content, id: current.id, name: changed.name)
+        let document = try encode(stored, named: changed.name)
+
+        let updated = SoundEntry(
+            id: current.id,
+            name: changed.name,
+            category: changed.category,
+            origin: .user,
+            shippedOriginID: current.shippedOriginID,
+            documentVersion: Self.documentVersion(of: stored),
+            revision: current.revision + 1,
+            createdAt: current.createdAt,
+            updatedAt: timestamp,
+            content: stored
+        )
+
+        try catalog.update(updated, document: document)
+        return updated
     }
 
     /// `content` with the row's identity and name written into it, where the

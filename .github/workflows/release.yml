@@ -30,9 +30,17 @@ jobs:
       - name: Select Xcode
         run: |
           set -euo pipefail
-          newest="$(/bin/ls -d /Applications/Xcode*.app | sort -V | tail -1)"
-          echo "Selecting $newest"
-          sudo xcode-select -s "$newest"
+          # Xcode 26.3's Swift optimizer crashes (SIL verifier abort in
+          # CopyPropagation) compiling SynthKit at -O, so Release builds
+          # exclude it. Drop the exclusion once a newer Xcode builds clean.
+          /bin/ls -d /Applications/Xcode*.app | sort -V
+          chosen="$(/bin/ls -d /Applications/Xcode*.app | sort -V | grep -v 'Xcode_26\.3\.app' | tail -1)"
+          if [ -z "$chosen" ]; then
+            chosen="$(/bin/ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+            echo "WARNING: only the excluded Xcode is available; using $chosen"
+          fi
+          echo "Selecting $chosen"
+          sudo xcode-select -s "$chosen"
           xcodebuild -version
           uname -m
 

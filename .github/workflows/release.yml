@@ -1,0 +1,177 @@
+name: Release
+
+# Free-path distribution: tag vX.Y.Z -> tested arm64 Release build, ad-hoc
+# signed (no Developer ID yet), packaged as DMG + zip with SHA-256 sums,
+# published as a GitHub Release. Upgrading to Developer ID + notarization
+# later only changes the signing step.
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build, package, and publish
+    runs-on: macos-15
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          newest="$(/bin/ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          echo "Selecting $newest"
+          sudo xcode-select -s "$newest"
+          xcodebuild -version
+          uname -m
+
+      - name: Derive version from tag
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "Releasing version $version from tag $tag"
+
+      - name: Run tests
+        run: |
+          set -euo pipefail
+          xcodebuild test \
+            -project Synth.xcodeproj \
+            -scheme Synth \
+            -configuration Debug \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath .build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Build Release app
+        run: |
+          set -euo pipefail
+          xcodebuild build \
+            -project Synth.xcodeproj \
+            -scheme Synth \
+            -configuration Release \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath .build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            MARKETING_VERSION="$VERSION" \
+            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER"
+
+      - name: Sign (ad-hoc) and verify
+        run: |
+          set -euo pipefail
+          app=".build/DerivedData/Build/Products/Release/Synth.app"
+
+          # Sign nested code first, then the bundle with its entitlements.
+          # No hardened runtime: ad-hoc signatures carry no Team ID, so
+          # library validation would refuse the embedded framework.
+          if [ -d "$app/Contents/Frameworks" ]; then
+            find "$app/Contents/Frameworks" -maxdepth 1 \
+              \( -name '*.framework' -o -name '*.dylib' \) \
+              -exec codesign --force --sign - {} \;
+          fi
+          codesign --force --sign - \
+            --entitlements Synth/Synth.entitlements \
+            "$app"
+
+          codesign --verify --deep --strict --verbose=2 "$app"
+          lipo -archs "$app/Contents/MacOS/Synth" | grep -qx 'arm64'
+
+          built_version="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$app/Contents/Info.plist")"
+          test "$built_version" = "$VERSION"
+          codesign -d --entitlements - "$app" | grep -q 'app-sandbox'
+
+      - name: Package DMG and zip
+        run: |
+          set -euo pipefail
+          app=".build/DerivedData/Build/Products/Release/Synth.app"
+          dist="dist"
+          stage="$dist/stage"
+          mkdir -p "$stage"
+
+          ditto "$app" "$stage/Synth.app"
+          ln -s /Applications "$stage/Applications"
+          cat > "$stage/INSTALL.txt" <<'EOF'
+          Synth — install
+
+          1. Drag Synth.app onto the Applications shortcut in this window.
+          2. Open Synth from Applications. macOS will block the first launch
+             because this build is not notarized (it is a free, unsigned
+             distribution). To allow it:
+               - macOS 15 (Sequoia) or newer: open System Settings ->
+                 Privacy & Security, scroll down, and click "Open Anyway"
+                 next to the Synth message, then confirm.
+               - Older macOS: right-click Synth.app and choose Open, then Open.
+             Terminal alternative (removes the quarantine flag):
+               xattr -d com.apple.quarantine /Applications/Synth.app
+          3. This only has to be done once.
+
+          Requires macOS 14.0 or newer on Apple Silicon.
+          EOF
+
+          dmg="$dist/Synth-$VERSION.dmg"
+          hdiutil create -volname "Synth $VERSION" \
+            -srcfolder "$stage" -ov -format UDZO "$dmg"
+          hdiutil verify "$dmg"
+
+          # Prove the DMG mounts and carries the app, then detach.
+          mount_out="$(hdiutil attach -readonly -nobrowse "$dmg")"
+          mount_point="$(echo "$mount_out" | grep -o '/Volumes/.*$' | head -1)"
+          test -d "$mount_point/Synth.app"
+          hdiutil detach "$mount_point"
+
+          ditto -c -k --keepParent "$app" "$dist/Synth-$VERSION.zip"
+
+          ( cd "$dist" && shasum -a 256 "Synth-$VERSION.dmg" "Synth-$VERSION.zip" > SHA256SUMS.txt && cat SHA256SUMS.txt )
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cat > dist/release-notes.md <<EOF
+          Synth $VERSION — native macOS MusicXML player and synthesizer.
+
+          **Requires macOS 14.0+ on Apple Silicon (arm64).**
+
+          ## Install
+
+          1. Download \`Synth-$VERSION.dmg\` below and open it.
+          2. Drag **Synth.app** into **Applications**.
+          3. First launch: this build is not notarized, so macOS blocks it once.
+             - **macOS 15+:** open the app once (it will be blocked), then go to
+               **System Settings → Privacy & Security**, scroll down, and click
+               **"Open Anyway"**.
+             - **Older macOS:** right-click Synth.app → **Open** → **Open**.
+             - Terminal alternative: \`xattr -d com.apple.quarantine /Applications/Synth.app\`
+
+          ## Verify your download
+
+          \`\`\`
+          shasum -a 256 -c SHA256SUMS.txt
+          \`\`\`
+
+          ---
+          Built from \`$GITHUB_SHA\` by run $GITHUB_RUN_ID. Ad-hoc signed
+          (sandboxed); not notarized — the Gatekeeper step above is expected.
+          EOF
+
+          gh release create "$GITHUB_REF_NAME" \
+            "dist/Synth-$VERSION.dmg" \
+            "dist/Synth-$VERSION.zip" \
+            "dist/SHA256SUMS.txt" \
+            --title "Synth $VERSION" \
+            --notes-file dist/release-notes.md \
+            --verify-tag

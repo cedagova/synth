@@ -34,7 +34,7 @@ jobs:
           # CopyPropagation) compiling SynthKit at -O, so Release builds
           # exclude it. Drop the exclusion once a newer Xcode builds clean.
           /bin/ls -d /Applications/Xcode*.app | sort -V
-          chosen="$(/bin/ls -d /Applications/Xcode*.app | sort -V | grep -v 'Xcode_26\.3\.app' | tail -1)"
+          chosen="$(/bin/ls -d /Applications/Xcode*.app | sort -V | grep -v 'Xcode_26\.3' | tail -1)"
           if [ -z "$chosen" ]; then
             chosen="$(/bin/ls -d /Applications/Xcode*.app | sort -V | tail -1)"
             echo "WARNING: only the excluded Xcode is available; using $chosen"

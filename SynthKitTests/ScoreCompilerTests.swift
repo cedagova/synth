@@ -479,6 +479,38 @@ final class ScoreCompilerTests: XCTestCase {
         XCTAssertEqual(score.sourceMeasures[1].durationTicks, score.ticksPerQuarter * 4)
     }
 
+    func testAMeasureSplitAcrossASystemBreakPlaysAtItsWrittenLength() throws {
+        // An engraving that splits one 4/4 bar across a system break writes it
+        // as two underfull measures, neither marked `implicit`. Padding each
+        // to the notated length inserts half a bar of silence nobody wrote —
+        // the periodic dropouts in BWV 1046. When every part stops at the same
+        // early point, the written content is the measure's length.
+        func half(_ number: String, first: Bool) -> ScoreXML.Measure {
+            ScoreXML.Measure(
+                number: number,
+                items: (first
+                    ? [.attributes(ScoreXML.Attributes(divisions: 4, fifths: 0, time: (4, 4)))]
+                    : [])
+                    + [.note(ScoreXML.Note(pitch: "C4", duration: 8, type: "half"))]
+            )
+        }
+        let score = try compile(
+            ScoreXML.Score(parts: [
+                ScoreXML.Part(
+                    id: "P1", name: "Violin",
+                    measures: [half("1", first: true), half("2", first: false)]
+                )
+            ]).data()
+        )
+
+        let halfBar = score.ticksPerQuarter * 2
+        XCTAssertEqual(score.sourceMeasures.map(\.durationTicks), [halfBar, halfBar])
+        XCTAssertEqual(
+            score.playbackMeasures.map(\.startTicks), [0, halfBar],
+            "the second half must start where the first ends, not a full bar later"
+        )
+    }
+
     func testAVoiceThatOnlySpacesTheStaffIsNotOfferedAsALine() throws {
         let measure = ScoreXML.Measure(
             number: "1",

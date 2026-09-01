@@ -1307,13 +1307,15 @@ private struct Compilation {
             let notated = signature.map { $0.beats * ticksPerQuarter * 4 / max(1, $0.beatType) } ?? 0
             let content = measureContentTicks[index]
 
-            // A pickup is deliberately short, so its content is the truth. An
-            // ordinary measure takes whichever is longer: an over-full measure
-            // must not be clipped, and a part that stops writing rests early
-            // must not shorten the bar for everyone else.
-            let duration = measureIsPickup[index]
-                ? (content > 0 ? content : notated)
-                : max(content, notated)
+            // Content is the truth. `content` is the furthest any part
+            // reached, so one part that stops writing rests early cannot
+            // shorten the bar for everyone else — but when every part stops at
+            // the same early point the measure really is short: an engraving
+            // that splits one bar across a system break writes it as two
+            // underfull measures, and padding those to the notated length
+            // inserts silence nobody wrote. An empty measure keeps its notated
+            // length, and an over-full one is never clipped.
+            let duration = content > 0 ? content : notated
             return SourceMeasure(
                 index: index,
                 number: measureNumbers[index].isEmpty ? String(index + 1) : measureNumbers[index],

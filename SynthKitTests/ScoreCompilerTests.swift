@@ -586,6 +586,54 @@ final class ScoreCompilerTests: XCTestCase {
         XCTAssertEqual(score.lines.count, 1, "neither becomes a line of its own")
     }
 
+    func testACueNoteAdvancesItsVoiceWithoutSounding() throws {
+        // A cue note is silent but not weightless: it carries a duration and
+        // moves the musical position in its voice. A normal note written after
+        // two beats of cue must sound on beat three, not on beat one.
+        let measure = ScoreXML.Measure(
+            number: "1",
+            items: [
+                .attributes(ScoreXML.Attributes(divisions: 4, fifths: 0, time: (4, 4))),
+                .note(ScoreXML.Note(pitch: "E5", duration: 8, type: "half", extraChildren: ["<cue/>"])),
+                .note(ScoreXML.Note(pitch: "C4", duration: 8, type: "half"))
+            ]
+        )
+        let score = try compile(
+            ScoreXML.Score(parts: [ScoreXML.Part(id: "P1", name: "Piano", measures: [measure])]).data()
+        )
+
+        let line = try XCTUnwrap(score.lines.first)
+        XCTAssertEqual(line.notes.count, 1, "the cue note itself must not sound")
+        XCTAssertEqual(
+            line.notes.first?.startTicks, score.ticksPerQuarter * 2,
+            "the normal note sounds after the cue's two beats, not in their place"
+        )
+        XCTAssertEqual(score.sourceMeasures[0].durationTicks, score.ticksPerQuarter * 4)
+    }
+
+    func testAnAllCueStaffProducesNoLine() throws {
+        func cueMeasure(_ number: String, first: Bool) -> ScoreXML.Measure {
+            ScoreXML.Measure(
+                number: number,
+                items: (first
+                    ? [.attributes(ScoreXML.Attributes(divisions: 4, fifths: 0, time: (4, 4)))]
+                    : [])
+                    + [.note(ScoreXML.Note(pitch: "G3", duration: 16, type: "whole", extraChildren: ["<cue/>"]))]
+            )
+        }
+        let score = try compile(
+            ScoreXML.Score(parts: [
+                ScoreXML.Part(
+                    id: "P1", name: "Basso continuo",
+                    measures: [cueMeasure("1", first: true), cueMeasure("2", first: false)]
+                )
+            ]).data()
+        )
+
+        XCTAssertTrue(score.lines.isEmpty, "a staff of nothing but cues has nothing to play")
+        XCTAssertTrue(score.report.mentions(kind: "cue note"))
+    }
+
     // MARK: Timewise scores
 
     func testAScoreTimewiseDocumentCompilesLikeItsPartwiseTwin() throws {

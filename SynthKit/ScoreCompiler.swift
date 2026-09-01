@@ -647,6 +647,15 @@ private struct Compilation {
                 at: location,
                 detail: "cue staves are printed for orientation and are not played"
             )
+            // Unlike a grace note, a cue note carries a duration and still
+            // advances the musical position in its voice — only its sound is
+            // omitted. Skipping the advance would shift every later note in a
+            // voice that mixes cue and normal notes.
+            let isChord = note.child("chord") != nil
+            let duration = ticks(note.childInt("duration") ?? 0, state: state, at: location)
+            let onset = isChord ? lastOnset : cursor
+            lastOnset = onset
+            if !isChord { cursor = onset + duration }
             return
         }
 

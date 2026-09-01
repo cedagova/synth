@@ -236,7 +236,21 @@ final class PlaybackModel {
         navigator?.position(atMicroseconds: positionMicroseconds)
     }
 
-    var positionText: String { TransportDisplay.positionText(position) }
+    /// The scrubber's in-flight target, while a drag is under way. The readout
+    /// follows it live — the point of scrubbing is watching where you are —
+    /// but the engine, the loop and measure stepping keep reading the real
+    /// playhead until the drag commits.
+    var scrubMicroseconds: Int64?
+
+    /// What the readout shows: the drag target while scrubbing, the playhead
+    /// otherwise.
+    private var displayedMicroseconds: Int64 { scrubMicroseconds ?? positionMicroseconds }
+
+    private var displayedPosition: ScorePosition? {
+        navigator?.position(atMicroseconds: displayedMicroseconds)
+    }
+
+    var positionText: String { TransportDisplay.positionText(displayedPosition) }
 
     /// What the status line says after a jump.
     ///
@@ -250,15 +264,15 @@ final class PlaybackModel {
 
     var elapsedText: String {
         TransportDisplay.elapsedOfTotalText(
-            microseconds: positionMicroseconds,
+            microseconds: displayedMicroseconds,
             total: totalMicroseconds
         )
     }
 
     var spokenPosition: String {
         TransportDisplay.spokenPosition(
-            position,
-            microseconds: positionMicroseconds,
+            displayedPosition,
+            microseconds: displayedMicroseconds,
             total: totalMicroseconds
         )
     }

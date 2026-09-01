@@ -263,6 +263,8 @@ private struct EditableReadout: View {
     let help: String
     let accessibilityLabel: String
 
+    @State private var isHovering = false
+
     private var valueFont: Font { .system(.title, design: .rounded).weight(.medium) }
 
     var body: some View {
@@ -290,7 +292,17 @@ private struct EditableReadout: View {
                     .font(valueFont)
                     .monospacedDigit()
                     .contentTransition(.numericText())
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    // A quiet hover highlight, so "this big number is a
+                    // control" is discoverable without a tooltip.
+                    .background(
+                        isHovering ? AnyShapeStyle(.quaternary.opacity(0.6)) : AnyShapeStyle(.clear),
+                        in: RoundedRectangle(cornerRadius: 5)
+                    )
+                    .padding(.horizontal, -4)
                     .contentShape(Rectangle())
+                    .onHover { isHovering = $0 }
                     .onTapGesture {
                         begin()
                         focus = field
@@ -438,21 +450,21 @@ private struct TransportHero: View {
 private struct ScrubBar: View {
     @Bindable var model: PlaybackModel
 
-    /// The thumb while a drag is in flight; nil when the engine's position is
-    /// the truth. Committing only on release keeps a drag from spamming seeks.
-    @State private var draft: Double?
-
+    /// The in-flight thumb lives on the model (`scrubMicroseconds`) so the
+    /// readout above follows the drag live — watching where you are is the
+    /// point of scrubbing. The seek still commits only on release, so a drag
+    /// does not spam the engine.
     var body: some View {
         Slider(
             value: Binding(
-                get: { draft ?? Double(model.positionMicroseconds) },
-                set: { draft = $0 }
+                get: { Double(model.scrubMicroseconds ?? model.positionMicroseconds) },
+                set: { model.scrubMicroseconds = Int64($0) }
             ),
             in: 0...Double(max(1, model.totalMicroseconds)),
             onEditingChanged: { isDragging in
-                guard !isDragging, let target = draft else { return }
-                model.seek(toMicroseconds: Int64(target))
-                draft = nil
+                guard !isDragging, let target = model.scrubMicroseconds else { return }
+                model.seek(toMicroseconds: target)
+                model.scrubMicroseconds = nil
             }
         )
         .disabled(!model.isReady)

@@ -267,13 +267,19 @@ private struct EditableReadout: View {
 
     private var valueFont: Font { .system(.title, design: .rounded).weight(.medium) }
 
+    private var isEditing: Bool { focus == field }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label)
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            if focus == field {
+            ZStack(alignment: .leading) {
+                // The field is always in the hierarchy, only shown while
+                // focused: assigning a @FocusState value whose field is not
+                // rendered is silently dropped by SwiftUI, which is exactly
+                // the click-did-nothing bug this shape prevents.
                 TextField("", text: $draft)
                     .textFieldStyle(.plain)
                     .font(valueFont)
@@ -285,32 +291,45 @@ private struct EditableReadout: View {
                     }
                     .onExitCommand { focus = nil }
                     .frame(width: editingWidth)
+                    .opacity(isEditing ? 1 : 0)
+                    .allowsHitTesting(isEditing)
                     .accessibilityLabel("\(label), editing")
                     .accessibilityHint("Press Return to jump, Escape to cancel.")
-            } else {
-                Text(display)
-                    .font(valueFont)
-                    .monospacedDigit()
-                    .contentTransition(.numericText())
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1)
-                    // A quiet hover highlight, so "this big number is a
-                    // control" is discoverable without a tooltip.
-                    .background(
-                        isHovering ? AnyShapeStyle(.quaternary.opacity(0.6)) : AnyShapeStyle(.clear),
-                        in: RoundedRectangle(cornerRadius: 5)
-                    )
-                    .padding(.horizontal, -4)
-                    .contentShape(Rectangle())
-                    .onHover { isHovering = $0 }
-                    .onTapGesture {
-                        begin()
-                        focus = field
-                    }
-                    .help(help)
-                    .accessibilityLabel(accessibilityLabel)
-                    .accessibilityAddTraits([.isButton, .updatesFrequently])
-                    .accessibilityHint("Click to type a new value.")
+                    .accessibilityHidden(!isEditing)
+
+                if !isEditing {
+                    Text(display)
+                        .font(valueFont)
+                        .monospacedDigit()
+                        .contentTransition(.numericText())
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        // A quiet hover highlight, so "this big number is a
+                        // control" is discoverable without a tooltip.
+                        .background(
+                            isHovering
+                                ? AnyShapeStyle(.quaternary.opacity(0.6))
+                                : AnyShapeStyle(.clear),
+                            in: RoundedRectangle(cornerRadius: 5)
+                        )
+                        .padding(.horizontal, -4)
+                        .contentShape(Rectangle())
+                        .onHover { isHovering = $0 }
+                        .onTapGesture {
+                            begin()
+                            focus = field
+                        }
+                        .help(help)
+                        .accessibilityLabel(accessibilityLabel)
+                        .accessibilityAddTraits([.isButton, .updatesFrequently])
+                        .accessibilityHint("Click to type a new value.")
+                }
+            }
+            // Keyboard traversal can land in the field without a click or a
+            // menu command; the draft still has to start from where the music
+            // is.
+            .onChange(of: focus) { previous, current in
+                if current == field, previous != field { begin() }
             }
         }
     }

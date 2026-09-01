@@ -48,11 +48,12 @@ final class TransportDisplayTests: XCTestCase {
 
     // MARK: Measure and beat
 
-    func testABeatAlwaysCarriesOneDecimal() {
-        XCTAssertEqual(TransportDisplay.beatText(1), "1.0")
-        XCTAssertEqual(TransportDisplay.beatText(3.24), "3.2")
-        XCTAssertEqual(TransportDisplay.beatText(3.96), "4.0")
-        XCTAssertEqual(TransportDisplay.beatText(.nan), "1.0")
+    func testABeatIsNamedAsTheDiscreteBeatUnderWay() {
+        XCTAssertEqual(TransportDisplay.beatText(1), "1")
+        XCTAssertEqual(TransportDisplay.beatText(3.24), "3")
+        XCTAssertEqual(TransportDisplay.beatText(3.96), "3", "beat 4 has not arrived at 3.96")
+        XCTAssertEqual(TransportDisplay.beatText(0.2), "1", "beats start at 1")
+        XCTAssertEqual(TransportDisplay.beatText(.nan), "1")
     }
 
     private func position(
@@ -73,7 +74,7 @@ final class TransportDisplayTests: XCTestCase {
     func testThePositionReadoutNamesTheMeasureAndTheBeat() {
         XCTAssertEqual(
             TransportDisplay.positionText(position(measureNumber: "12", pass: 1, beat: 3.2)),
-            "Measure 12 · beat 3.2"
+            "Measure 12 · beat 3"
         )
     }
 
@@ -83,7 +84,7 @@ final class TransportDisplayTests: XCTestCase {
     func testThePassIsShownOnlyOnceThePieceIsRepeatingAMeasure() {
         XCTAssertEqual(
             TransportDisplay.positionText(position(measureNumber: "2", pass: 3, beat: 1)),
-            "Measure 2 (pass 3) · beat 1.0"
+            "Measure 2 (pass 3) · beat 1"
         )
     }
 
@@ -98,7 +99,7 @@ final class TransportDisplayTests: XCTestCase {
                 microseconds: 63_400_000,
                 total: 245_000_000
             ),
-            "Position: measure 12, pass 2, beat 3.2, 1 minute 3.4 seconds of 4 minutes 5 seconds."
+            "Position: measure 12, pass 2, beat 3, 1 minute 3.4 seconds of 4 minutes 5 seconds."
         )
         XCTAssertEqual(
             TransportDisplay.spokenPosition(nil, microseconds: 245_000_000, total: 245_000_000),

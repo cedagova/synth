@@ -67,11 +67,12 @@ public enum TransportDisplay {
 
     // MARK: Measure and beat
 
-    /// `3.2`, one decimal, always with the point.
+    /// `3` — the notated beat under way. Discrete on purpose: the readout
+    /// names the beat the player is in, the way a conductor counts, not a
+    /// decimal fraction of it. (Typed seeks still accept fractional beats.)
     public static func beatText(_ beat: Double) -> String {
-        guard beat.isFinite else { return "1.0" }
-        let tenths = Int((max(0, beat) * 10).rounded())
-        return "\(tenths / 10).\(tenths % 10)"
+        guard beat.isFinite else { return "1" }
+        return "\(max(1, Int(beat)))"
     }
 
     /// `Measure 12 · beat 3.2`, with the pass appended only when the piece is

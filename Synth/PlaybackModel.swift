@@ -109,11 +109,11 @@ final class PlaybackModel {
     var loopFromField = ""
     var loopToField = ""
 
-    /// The readout's in-place editors (the DAW-counter idiom: the display is
-    /// the input). Prefilled from the live position when editing begins;
-    /// ignored unless committed with Return.
-    var positionDraft = ""
-    var timeDraft = ""
+    /// The readout's in-place segment editor (the DAW-counter idiom: each
+    /// number in the display is the input for exactly that number). One draft
+    /// is enough — only one segment edits at a time. Prefilled when editing
+    /// begins; ignored unless committed with Return.
+    var segmentDraft = ""
 
     private(set) var loop: LoopRange?
 
@@ -559,41 +559,93 @@ final class PlaybackModel {
 
     // MARK: In-place readout editing
 
-    /// What the position editor starts from: "8", or "8 3.1" away from the
-    /// downbeat. Prefilled and select-all-replaced, so typing a bare measure
-    /// number is the common case.
-    func prefillPositionDraft() {
-        guard let position else {
-            positionDraft = ""
-            return
+    /// The individually editable numbers of the readout. Editing one replaces
+    /// exactly that component of the position and keeps the rest — which is
+    /// why it matters which segment was clicked.
+    enum ReadoutSegment {
+        case measure, beat, minutes, seconds, tenths
+    }
+
+    /// The elapsed time as the readout's segments show it, in tenths.
+    private var elapsedTenthsTotal: Int64 {
+        (max(0, positionMicroseconds) + 50_000) / 100_000
+    }
+
+    var elapsedMinutesText: String { "\((displayedTenthsTotal / 600))" }
+    var elapsedSecondsText: String {
+        let seconds = (displayedTenthsTotal / 10) % 60
+        return seconds < 10 ? "0\(seconds)" : "\(seconds)"
+    }
+    var elapsedTenthsText: String { "\(displayedTenthsTotal % 10)" }
+    var totalElapsedText: String { TransportDisplay.elapsedText(microseconds: totalMicroseconds) }
+
+    private var displayedTenthsTotal: Int64 {
+        (max(0, displayedMicroseconds) + 50_000) / 100_000
+    }
+
+    var measureText: String { displayedPosition?.measureNumber ?? "—" }
+    var beatText: String {
+        displayedPosition.map { TransportDisplay.beatText($0.beat) } ?? "—"
+    }
+    /// " (pass 2)" while a repeat is replaying a printed measure; empty
+    /// otherwise.
+    var passText: String {
+        guard let pass = displayedPosition?.pass, pass > 1 else { return "" }
+        return " (pass \(pass))"
+    }
+
+    /// What a segment's editor starts from — its current value, from the real
+    /// playhead.
+    func currentSegmentValue(_ segment: ReadoutSegment) -> String {
+        switch segment {
+        case .measure: return position?.measureNumber ?? ""
+        case .beat: return position.map { TransportDisplay.beatText($0.beat) } ?? ""
+        case .minutes: return "\(elapsedTenthsTotal / 600)"
+        case .seconds: return "\((elapsedTenthsTotal / 10) % 60)"
+        case .tenths: return "\(elapsedTenthsTotal % 10)"
         }
-        positionDraft = abs(position.beat - 1) < 0.05
-            ? position.measureNumber
-            : "\(position.measureNumber) \(TransportDisplay.beatText(position.beat))"
     }
 
-    /// "0:18.1", without the " of 3:41.4" the display appends.
-    func prefillTimeDraft() {
-        timeDraft = TransportDisplay.elapsedText(microseconds: positionMicroseconds)
-    }
+    /// Commits the segment editor: the typed value replaces that component of
+    /// the position, everything else stays where it is.
+    func commitSegment(_ segment: ReadoutSegment) {
+        let draft = segmentDraft.trimmingCharacters(in: .whitespaces)
+        guard !draft.isEmpty else { return }
 
-    /// Commits the position editor: "8" jumps to a measure, "8 3.5" to a beat
-    /// within it.
-    func commitPositionDraft() {
-        let parts = positionDraft
-            .split(whereSeparator: { $0.isWhitespace || $0 == "·" })
-            .map(String.init)
-        guard let measure = parts.first, !measure.isEmpty else { return }
-        measureField = measure
-        beatField = parts.count > 1 ? parts[1] : "1"
-        seekToTypedMeasure()
-    }
+        switch segment {
+        case .measure:
+            measureField = draft
+            beatField = position.map { TransportDisplay.beatText($0.beat) } ?? "1"
+            seekToTypedMeasure()
 
-    func commitTimeDraft() {
-        let trimmed = timeDraft.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return }
-        timeField = trimmed
-        seekToTypedTime()
+        case .beat:
+            guard let position else {
+                statusMessage = "There is no measure here to place a beat in."
+                return
+            }
+            measureField = position.measureNumber
+            beatField = draft
+            seekToTypedMeasure()
+
+        case .minutes, .seconds, .tenths:
+            guard let value = Int(draft), value >= 0 else {
+                statusMessage = "“\(draft)” is not a number."
+                return
+            }
+            var minutes = elapsedTenthsTotal / 600
+            var seconds = (elapsedTenthsTotal / 10) % 60
+            var tenths = elapsedTenthsTotal % 10
+            switch segment {
+            case .minutes: minutes = Int64(value)
+            case .seconds: seconds = Int64(value)
+            case .tenths: tenths = Int64(value)
+            default: break
+            }
+            // Overflow is arithmetic, not an error: typing 90 seconds means a
+            // minute and a half.
+            seek(toMicroseconds: ((minutes * 60 + seconds) * 10 + tenths) * 100_000)
+            statusMessage = jumpedMessage
+        }
     }
 
     func seekToTypedTime() {

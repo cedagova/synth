@@ -21,7 +21,10 @@ struct PlaybackScreen: View {
 
     fileprivate enum Field: Hashable {
         case measure
-        case time
+        case beat
+        case timeMinutes
+        case timeSeconds
+        case timeTenths
         case loopFrom
         case loopTo
     }
@@ -78,14 +81,8 @@ struct PlaybackScreen: View {
         )) {
             ExportSheet(model: model.export, subtitle: exportSubtitle)
         }
-        .onChange(of: model.measureFocusRequests) { _, _ in
-            model.prefillPositionDraft()
-            focus = .measure
-        }
-        .onChange(of: model.timeFocusRequests) { _, _ in
-            model.prefillTimeDraft()
-            focus = .time
-        }
+        .onChange(of: model.measureFocusRequests) { _, _ in focus = .measure }
+        .onChange(of: model.timeFocusRequests) { _, _ in focus = .timeMinutes }
         .task { await model.prepare() }
         // **No `.onDisappear { model.close() }`.**
         //
@@ -192,40 +189,61 @@ private struct PlaybackHeader: View {
 /// The single most important thing on this screen: where the music is.
 ///
 /// Measure, beat and elapsed time, always visible, never behind a disclosure —
-/// and each one is also the way there: the display is the input, the way a
-/// DAW's transport counter is. Click a value, type, Return jumps, Escape
-/// leaves it alone.
+/// and every number in it is the input for exactly that number, the way a
+/// DAW's segmented transport counter works. The words and punctuation stay;
+/// click a number, type, Return jumps, Escape leaves it alone. Which segment
+/// is clicked matters: editing the seconds keeps the minutes.
 private struct PositionReadout: View {
     @Bindable var model: PlaybackModel
     @FocusState.Binding var focus: PlaybackScreen.Field?
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 24) {
-            EditableReadout(
-                label: "Position",
-                display: model.positionText,
-                draft: $model.positionDraft,
-                field: .measure,
-                focus: $focus,
-                editingWidth: 200,
-                begin: { model.prefillPositionDraft() },
-                commit: { model.commitPositionDraft() },
-                help: "Click to type a measure — “12”, or “12 3.5” for a beat within it",
-                accessibilityLabel: "Position: \(model.positionText)"
-            )
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Position")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 0) {
+                    staticText("Measure ")
+                    SegmentField(
+                        model: model, segment: .measure, field: .measure,
+                        focus: $focus, editingWidth: 64,
+                        display: model.measureText, name: "Measure number"
+                    )
+                    staticText("\(model.passText) · beat ")
+                    SegmentField(
+                        model: model, segment: .beat, field: .beat,
+                        focus: $focus, editingWidth: 44,
+                        display: model.beatText, name: "Beat"
+                    )
+                }
+            }
 
-            EditableReadout(
-                label: "Elapsed",
-                display: model.elapsedText,
-                draft: $model.timeDraft,
-                field: .time,
-                focus: $focus,
-                editingWidth: 130,
-                begin: { model.prefillTimeDraft() },
-                commit: { model.commitTimeDraft() },
-                help: "Click to type a time — 1:23, or seconds alone",
-                accessibilityLabel: "Elapsed: \(model.spokenPosition)"
-            )
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Elapsed")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 0) {
+                    SegmentField(
+                        model: model, segment: .minutes, field: .timeMinutes,
+                        focus: $focus, editingWidth: 48,
+                        display: model.elapsedMinutesText, name: "Minutes"
+                    )
+                    staticText(":")
+                    SegmentField(
+                        model: model, segment: .seconds, field: .timeSeconds,
+                        focus: $focus, editingWidth: 48,
+                        display: model.elapsedSecondsText, name: "Seconds"
+                    )
+                    staticText(".")
+                    SegmentField(
+                        model: model, segment: .tenths, field: .timeTenths,
+                        focus: $focus, editingWidth: 32,
+                        display: model.elapsedTenthsText, name: "Tenths of a second"
+                    )
+                    staticText(" of \(model.totalElapsedText)")
+                }
+            }
 
             Spacer(minLength: 8)
 
@@ -248,88 +266,85 @@ private struct PositionReadout: View {
     }
 }
 
-/// One value of the readout: a large display that becomes a same-sized text
-/// field on click. Return commits; Escape or clicking away leaves the value
-/// untouched.
-private struct EditableReadout: View {
-    let label: String
-    let display: String
-    @Binding var draft: String
+/// The words of the readout: same size and weight as the numbers, but inert.
+private func staticText(_ text: String) -> some View {
+    Text(text)
+        .font(.system(.title, design: .rounded).weight(.medium))
+        .monospacedDigit()
+        .accessibilityHidden(true)
+}
+
+/// One number of the readout, editable in place: click, type, Return jumps.
+/// Escape or clicking away leaves the value untouched.
+private struct SegmentField: View {
+    @Bindable var model: PlaybackModel
+    let segment: PlaybackModel.ReadoutSegment
     let field: PlaybackScreen.Field
     @FocusState.Binding var focus: PlaybackScreen.Field?
     let editingWidth: CGFloat
-    let begin: () -> Void
-    let commit: () -> Void
-    let help: String
-    let accessibilityLabel: String
+    let display: String
+    let name: String
 
     @State private var isHovering = false
 
+    private var isEditing: Bool { focus == field }
     private var valueFont: Font { .system(.title, design: .rounded).weight(.medium) }
 
-    private var isEditing: Bool { focus == field }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        ZStack(alignment: .leading) {
+            // Always in the hierarchy, only shown while focused: assigning a
+            // @FocusState value whose field is not rendered is silently
+            // dropped by SwiftUI.
+            TextField("", text: $model.segmentDraft)
+                .textFieldStyle(.plain)
+                .font(valueFont)
+                .monospacedDigit()
+                .focused($focus, equals: field)
+                .onSubmit {
+                    model.commitSegment(segment)
+                    focus = nil
+                }
+                .onExitCommand { focus = nil }
+                .frame(width: isEditing ? editingWidth : 0)
+                .opacity(isEditing ? 1 : 0)
+                .allowsHitTesting(isEditing)
+                .accessibilityLabel("\(name), editing")
+                .accessibilityHint("Press Return to jump, Escape to cancel.")
+                .accessibilityHidden(!isEditing)
 
-            ZStack(alignment: .leading) {
-                // The field is always in the hierarchy, only shown while
-                // focused: assigning a @FocusState value whose field is not
-                // rendered is silently dropped by SwiftUI, which is exactly
-                // the click-did-nothing bug this shape prevents.
-                TextField("", text: $draft)
-                    .textFieldStyle(.plain)
+            if !isEditing {
+                Text(display)
                     .font(valueFont)
                     .monospacedDigit()
-                    .focused($focus, equals: field)
-                    .onSubmit {
-                        commit()
-                        focus = nil
+                    .contentTransition(.numericText())
+                    .padding(.horizontal, 3)
+                    .padding(.vertical, 1)
+                    // A quiet hover highlight, so "this number is a control"
+                    // is discoverable.
+                    .background(
+                        isHovering
+                            ? AnyShapeStyle(.quaternary.opacity(0.6))
+                            : AnyShapeStyle(.clear),
+                        in: RoundedRectangle(cornerRadius: 5)
+                    )
+                    .padding(.horizontal, -3)
+                    .contentShape(Rectangle())
+                    .onHover { isHovering = $0 }
+                    .onTapGesture {
+                        model.segmentDraft = model.currentSegmentValue(segment)
+                        focus = field
                     }
-                    .onExitCommand { focus = nil }
-                    .frame(width: editingWidth)
-                    .opacity(isEditing ? 1 : 0)
-                    .allowsHitTesting(isEditing)
-                    .accessibilityLabel("\(label), editing")
-                    .accessibilityHint("Press Return to jump, Escape to cancel.")
-                    .accessibilityHidden(!isEditing)
-
-                if !isEditing {
-                    Text(display)
-                        .font(valueFont)
-                        .monospacedDigit()
-                        .contentTransition(.numericText())
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        // A quiet hover highlight, so "this big number is a
-                        // control" is discoverable without a tooltip.
-                        .background(
-                            isHovering
-                                ? AnyShapeStyle(.quaternary.opacity(0.6))
-                                : AnyShapeStyle(.clear),
-                            in: RoundedRectangle(cornerRadius: 5)
-                        )
-                        .padding(.horizontal, -4)
-                        .contentShape(Rectangle())
-                        .onHover { isHovering = $0 }
-                        .onTapGesture {
-                            begin()
-                            focus = field
-                        }
-                        .help(help)
-                        .accessibilityLabel(accessibilityLabel)
-                        .accessibilityAddTraits([.isButton, .updatesFrequently])
-                        .accessibilityHint("Click to type a new value.")
-                }
+                    .help("Click to type a new value")
+                    .accessibilityLabel("\(name) \(display)")
+                    .accessibilityAddTraits([.isButton, .updatesFrequently])
+                    .accessibilityHint("Click to type a new value.")
             }
-            // Keyboard traversal can land in the field without a click or a
-            // menu command; the draft still has to start from where the music
-            // is.
-            .onChange(of: focus) { previous, current in
-                if current == field, previous != field { begin() }
+        }
+        // Keyboard traversal can land here without a click or a menu command;
+        // the draft still has to start from where the music is.
+        .onChange(of: focus) { previous, current in
+            if current == field, previous != field {
+                model.segmentDraft = model.currentSegmentValue(segment)
             }
         }
     }

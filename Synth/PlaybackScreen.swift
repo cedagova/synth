@@ -203,7 +203,7 @@ private struct PositionReadout: View {
                 Text("Position")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                HStack(spacing: 0) {
+                HStack(alignment: .firstTextBaseline, spacing: 0) {
                     staticText("Measure ")
                     SegmentField(
                         model: model, segment: .measure, field: .measure,
@@ -223,7 +223,7 @@ private struct PositionReadout: View {
                 Text("Elapsed")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                HStack(spacing: 0) {
+                HStack(alignment: .firstTextBaseline, spacing: 0) {
                     SegmentField(
                         model: model, segment: .minutes, field: .timeMinutes,
                         focus: $focus,
@@ -301,6 +301,9 @@ private struct SegmentField: View {
             Text(model.segmentDraft.isEmpty ? "0" : model.segmentDraft)
                 .font(valueFont)
                 .monospacedDigit()
+                // The same vertical padding the display carries, so opening
+                // the editor keeps the segment's height and nothing shifts.
+                .padding(.vertical, 1)
                 .opacity(0)
                 .frame(width: isEditing ? nil : 0)
                 .overlay(alignment: .leading) {

@@ -207,13 +207,13 @@ private struct PositionReadout: View {
                     staticText("Measure ")
                     SegmentField(
                         model: model, segment: .measure, field: .measure,
-                        focus: $focus, editingWidth: 64,
+                        focus: $focus,
                         display: model.measureText, name: "Measure number"
                     )
                     staticText("\(model.passText) · beat ")
                     SegmentField(
                         model: model, segment: .beat, field: .beat,
-                        focus: $focus, editingWidth: 44,
+                        focus: $focus,
                         display: model.beatText, name: "Beat"
                     )
                 }
@@ -226,19 +226,19 @@ private struct PositionReadout: View {
                 HStack(spacing: 0) {
                     SegmentField(
                         model: model, segment: .minutes, field: .timeMinutes,
-                        focus: $focus, editingWidth: 48,
+                        focus: $focus,
                         display: model.elapsedMinutesText, name: "Minutes"
                     )
                     staticText(":")
                     SegmentField(
                         model: model, segment: .seconds, field: .timeSeconds,
-                        focus: $focus, editingWidth: 48,
+                        focus: $focus,
                         display: model.elapsedSecondsText, name: "Seconds"
                     )
                     staticText(".")
                     SegmentField(
                         model: model, segment: .tenths, field: .timeTenths,
-                        focus: $focus, editingWidth: 32,
+                        focus: $focus,
                         display: model.elapsedTenthsText, name: "Tenths of a second"
                     )
                     staticText(" of \(model.totalElapsedText)")
@@ -281,7 +281,6 @@ private struct SegmentField: View {
     let segment: PlaybackModel.ReadoutSegment
     let field: PlaybackScreen.Field
     @FocusState.Binding var focus: PlaybackScreen.Field?
-    let editingWidth: CGFloat
     let display: String
     let name: String
 
@@ -292,24 +291,34 @@ private struct SegmentField: View {
 
     var body: some View {
         ZStack(alignment: .leading) {
-            // Always in the hierarchy, only shown while focused: assigning a
+            // A hidden text mirroring the draft sizes the editor, so opening
+            // it takes exactly the space the displayed value already had and
+            // it grows only as typed digits need it — no empty gap shoving
+            // the rest of the readout aside. The field itself is always in
+            // the hierarchy, only shown while focused: assigning a
             // @FocusState value whose field is not rendered is silently
             // dropped by SwiftUI.
-            TextField("", text: $model.segmentDraft)
-                .textFieldStyle(.plain)
+            Text(model.segmentDraft.isEmpty ? "0" : model.segmentDraft)
                 .font(valueFont)
                 .monospacedDigit()
-                .focused($focus, equals: field)
-                .onSubmit {
-                    model.commitSegment(segment)
-                    focus = nil
+                .opacity(0)
+                .frame(width: isEditing ? nil : 0)
+                .overlay(alignment: .leading) {
+                    TextField("", text: $model.segmentDraft)
+                        .textFieldStyle(.plain)
+                        .font(valueFont)
+                        .monospacedDigit()
+                        .focused($focus, equals: field)
+                        .onSubmit {
+                            model.commitSegment(segment)
+                            focus = nil
+                        }
+                        .onExitCommand { focus = nil }
+                        .opacity(isEditing ? 1 : 0)
+                        .allowsHitTesting(isEditing)
+                        .accessibilityLabel("\(name), editing")
+                        .accessibilityHint("Press Return to jump, Escape to cancel.")
                 }
-                .onExitCommand { focus = nil }
-                .frame(width: isEditing ? editingWidth : 0)
-                .opacity(isEditing ? 1 : 0)
-                .allowsHitTesting(isEditing)
-                .accessibilityLabel("\(name), editing")
-                .accessibilityHint("Press Return to jump, Escape to cancel.")
                 .accessibilityHidden(!isEditing)
 
             if !isEditing {

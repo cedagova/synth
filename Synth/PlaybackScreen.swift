@@ -31,7 +31,6 @@ struct PlaybackScreen: View {
     /// scrubber, transport — is never behind a tab.
     fileprivate enum Tab: Hashable {
         case navigate
-        case humanization
         case export
     }
 
@@ -60,8 +59,12 @@ struct PlaybackScreen: View {
                 // this line playing" is as much a part of listening to a piece
                 // as where the playhead is.
                 Divider()
-                AssignmentPanel(model: model.assignment)
-                    .frame(width: 420)
+                VStack(spacing: 0) {
+                    HumanizationBar(model: model)
+                    Divider()
+                    AssignmentPanel(model: model.assignment)
+                }
+                .frame(width: 420)
 
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -401,20 +404,17 @@ private struct ToolTabs: View {
         VStack(alignment: .leading, spacing: 16) {
             Picker("Tools", selection: $tab) {
                 Text("Go To & Loop").tag(PlaybackScreen.Tab.navigate)
-                Text("Humanization").tag(PlaybackScreen.Tab.humanization)
                 Text("Export").tag(PlaybackScreen.Tab.export)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .frame(maxWidth: 420)
+            .frame(maxWidth: 300)
             .accessibilityLabel("Playback tools")
 
             switch tab {
             case .navigate:
                 SeekControls(model: model, focus: $focus)
                 LoopControls(model: model, focus: $focus)
-            case .humanization:
-                HumanizationControls(model: model)
             case .export:
                 ExportControls(model: model)
             }
@@ -560,53 +560,51 @@ private struct LoopControls: View {
 
 // MARK: - Humanization (REQ-012)
 
-/// Exactly two controls, and deliberately no more: an enable and an amount.
-/// Anything deeper is the interpretive modelling D4 rules out.
-private struct HumanizationControls: View {
+/// Exactly two controls, and deliberately no more: an enable and an amount
+/// (anything deeper is the interpretive modelling D4 rules out). One quiet
+/// row above the preset panel, because the setting is part of the preset —
+/// stored with it like any other custom value — and rarely touched.
+private struct HumanizationBar: View {
     @Bindable var model: PlaybackModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeading("Humanization")
-
-            Toggle("Play with human unevenness", isOn: Binding(
+        HStack(spacing: 10) {
+            Toggle("Humanize", isOn: Binding(
                 get: { model.humanization.isEnabled },
                 set: { isEnabled in Task { await model.setHumanizationEnabled(isEnabled) } }
             ))
+            .toggleStyle(.switch)
+            .controlSize(.mini)
             .accessibilityLabel("Humanization")
-            .accessibilityHint("Off plays the score exactly as written.")
+            .accessibilityHint("Off plays the score exactly as written. Saved with the preset.")
 
-            HStack(spacing: 10) {
-                Text("Amount")
-                Slider(
-                    value: $model.intensityDraft,
-                    in: 0...100,
-                    step: 5,
-                    onEditingChanged: { isEditing in
-                        // Committed when the drag ends: re-realizing the piece
-                        // on every intermediate value would be pointless work
-                        // and would stutter a long score.
-                        guard !isEditing else { return }
-                        Task { await model.commitIntensity() }
-                    }
-                )
-                .frame(maxWidth: 260)
-                .disabled(!model.humanization.isEnabled)
-                .accessibilityLabel("Humanization amount")
-                .accessibilityValue("\(Int(model.intensityDraft)) percent")
+            Slider(
+                value: $model.intensityDraft,
+                in: 0...100,
+                step: 5,
+                onEditingChanged: { isEditing in
+                    // Committed when the drag ends: re-realizing the piece on
+                    // every intermediate value would stutter a long score.
+                    guard !isEditing else { return }
+                    Task { await model.commitIntensity() }
+                }
+            )
+            .controlSize(.small)
+            .frame(width: 150)
+            .disabled(!model.humanization.isEnabled)
+            .accessibilityLabel("Humanization amount")
+            .accessibilityValue("\(Int(model.intensityDraft)) percent")
 
-                Text("\(Int(model.intensityDraft))%")
-                    .monospacedDigit()
-                    .frame(width: 44, alignment: .leading)
-                    .accessibilityHidden(true)
-            }
+            Text("\(Int(model.intensityDraft))%")
+                .monospacedDigit()
+                .accessibilityHidden(true)
 
-            Text(model.humanization.isLiteral
-                 ? "Off: every note sounds exactly where and as the score writes it."
-                 : "The same piece at the same amount always sounds the same.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
         }
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 7)
     }
 }
 

@@ -307,7 +307,13 @@ public final class PresetLibrary: @unchecked Sendable, PieceDependentStore, Soun
         }
 
         return try write(preset) { current in
-            (name: current.name, isActive: current.isActive, content: PresetContent(lines: rebuilt))
+            (
+                name: current.name,
+                isActive: current.isActive,
+                // Only the lines are reconciled; the piece-wide values the
+                // preset holds (humanization) ride through untouched.
+                content: PresetContent(lines: rebuilt, humanization: current.content.humanization)
+            )
         }
     }
 
@@ -426,6 +432,19 @@ public final class PresetLibrary: @unchecked Sendable, PieceDependentStore, Soun
     ) throws -> Preset {
         try mutateLine(lineID, in: preset) { line in
             line.acceptsSubstitution = accepts
+        }
+    }
+
+    /// Replaces the preset's whole-piece humanization (REQ-012). Auto-saved,
+    /// like any other custom value the preset holds.
+    @discardableResult
+    public func setHumanization(
+        _ humanization: HumanizationSettings, in preset: Preset
+    ) throws -> Preset {
+        try write(preset) { current in
+            var content = current.content
+            content.humanization = humanization
+            return (name: current.name, isActive: current.isActive, content: content)
         }
     }
 

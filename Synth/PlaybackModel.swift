@@ -182,11 +182,17 @@ final class PlaybackModel {
         self.engine = engine
         self.assignment = AssignmentModel(store: store, engine: engine)
         self.export = ExportModel(pieceTitle: piece.title)
-        let stored = store.preferences.humanization()
-        self.humanization = stored
-        self.intensityDraft = Double(stored.intensity)
+        // The stored value lives on the piece's active preset and is adopted
+        // in `prepare()`, before the first realization; this is only the value
+        // for the instant before that.
+        self.humanization = .standard
+        self.intensityDraft = Double(HumanizationSettings.standard.intensity)
 
         wireExport()
+        assignment.onHumanizationLoaded = { [weak self] settings in
+            guard let self else { return }
+            Task { await self.adoptPresetHumanization(settings) }
+        }
     }
 
     /// Connect the export surface to this piece.
@@ -293,6 +299,15 @@ final class PlaybackModel {
             navigator = PlaybackNavigator(score: compiled)
 
             loadState = .preparing(.realizing)
+            // The active preset's humanization is read before the first
+            // realization so the piece opens under its stored setting rather
+            // than being realized twice. A piece with no preset yet realizes
+            // under the standard setting, which is also what its first preset
+            // will store.
+            if let preset = try? store.presets.activePreset(forPieceID: compiled.pieceID) {
+                humanization = preset.content.humanization
+                intensityDraft = Double(preset.content.humanization.intensity)
+            }
             let realized = await Self.realize(compiled, humanization: humanization)
             try loadIntoEngine(realized)
 
@@ -650,21 +665,26 @@ final class PlaybackModel {
         await apply(HumanizationSettings(isEnabled: humanization.isEnabled, intensity: intensity))
     }
 
-    private func apply(_ settings: HumanizationSettings) async {
+    /// A loaded or switched preset brought its own humanization: play under
+    /// it, but do not write it back — it is already what the preset stores.
+    func adoptPresetHumanization(_ settings: HumanizationSettings) async {
+        await apply(settings, savingToPreset: false)
+    }
+
+    private func apply(_ settings: HumanizationSettings, savingToPreset: Bool = true) async {
         guard settings != humanization else { return }
         humanization = settings
         intensityDraft = Double(settings.intensity)
 
-        // The choice is the owner's and outlives this piece, so it is written
-        // before anything else can fail — and a write that fails is reported,
-        // not discarded. The setting still applies to this session, which is
-        // right; what the owner must not be told is that it was saved when it
-        // was not, only to find humanization back on at the next launch with
-        // nothing having said why.
-        let saveFailure = await Self.persist(settings, to: store.preferences)
+        // The setting is part of the preset (REQ-024), saved the way a mixer
+        // move is: immediately, with a failure reported rather than discarded.
+        // The setting still applies to this session either way.
+        if savingToPreset {
+            assignment.saveHumanization(settings)
+        }
 
         guard let compiledScore else {
-            statusMessage = Self.humanizationMessage(settings, saveFailure: saveFailure)
+            statusMessage = Self.humanizationMessage(settings)
             return
         }
 
@@ -684,7 +704,7 @@ final class PlaybackModel {
                 try engine.start()
                 engine.play()
             }
-            statusMessage = Self.humanizationMessage(settings, saveFailure: saveFailure)
+            statusMessage = Self.humanizationMessage(settings)
             refreshTransport()
         } catch {
             statusMessage = "Could not apply the humanization change: \(error)"
@@ -693,31 +713,11 @@ final class PlaybackModel {
 
     /// Writes the choice off the main actor, returning the reason it could not
     /// be written, or nil.
-    private static func persist(
-        _ settings: HumanizationSettings,
-        to preferences: PreferenceStore
-    ) async -> String? {
-        await Task.detached(priority: .utility) { () -> String? in
-            do {
-                try preferences.setHumanization(settings)
-                return nil
-            } catch {
-                return (error as? LocalizedError)?.errorDescription
-                    ?? (error as NSError).localizedDescription
-            }
-        }.value
-    }
 
-    private static func humanizationMessage(
-        _ settings: HumanizationSettings,
-        saveFailure: String?
-    ) -> String {
-        let state = settings.isLiteral
-            ? "Humanization off — playing exactly as written"
-            : "Humanization on at \(settings.intensity)%"
-        guard let saveFailure else { return "\(state)." }
-        return "\(state) for this session only — the setting could not be saved, so it will be "
-            + "back to its last saved value next launch. \(saveFailure)"
+    private static func humanizationMessage(_ settings: HumanizationSettings) -> String {
+        settings.isLiteral
+            ? "Humanization off — playing exactly as written."
+            : "Humanization on at \(settings.intensity)%."
     }
 
     // MARK: The ticker

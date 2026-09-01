@@ -220,6 +220,56 @@ final class PresetLibraryTests: XCTestCase {
         XCTAssertEqual(performance.lines.count, 4)
     }
 
+    func testHumanizationIsStoredOnThePresetAndSurvivesARelaunch() throws {
+        let piece = try importFugue()
+        let score = try compile(piece)
+        let preset = try store.activePreset(for: score)
+
+        // A fresh preset carries the standard setting.
+        XCTAssertEqual(preset.content.humanization, .standard)
+
+        let chosen = HumanizationSettings(isEnabled: true, intensity: 85)
+        try store.presets.setHumanization(chosen, in: preset)
+
+        let reopened = try relaunch().activePreset(for: score)
+        XCTAssertEqual(reopened.content.humanization, chosen, "auto-saved means it is in the store")
+    }
+
+    func testAPresetDocumentWithoutHumanizationReadsAsStandard() throws {
+        // A document written before the field existed: additive at the same
+        // version, so it must decode — as the standard setting.
+        let piece = try importFugue()
+        let score = try compile(piece)
+        let preset = try store.activePreset(for: score)
+
+        var stripped = try JSONSerialization.jsonObject(
+            with: try PresetDocument.data(from: preset.content)
+        ) as! [String: Any]
+        var inner = stripped["preset"] as! [String: Any]
+        inner.removeValue(forKey: "humanization")
+        stripped["preset"] = inner
+        let oldDocument = try JSONSerialization.data(withJSONObject: stripped)
+
+        let decoded = try PresetDocument.content(from: oldDocument)
+        XCTAssertEqual(decoded.humanization, .standard)
+        XCTAssertEqual(decoded.lines.count, preset.content.lines.count)
+    }
+
+    func testReconcilingLinesKeepsTheStoredHumanization() throws {
+        let piece = try importFugue()
+        let score = try compile(piece)
+        let preset = try store.activePreset(for: score)
+
+        let chosen = HumanizationSettings(isEnabled: false, intensity: 20)
+        let saved = try store.presets.setHumanization(chosen, in: preset)
+
+        let inventory = try store.lineInventory(for: score)
+        let reconciled = try store.presets.reconcile(
+            saved, with: inventory, palette: try store.sounds.allSounds()
+        )
+        XCTAssertEqual(reconciled.content.humanization, chosen)
+    }
+
     /// A keyboard piece starts on the Default Voice, so a first open sounds
     /// exactly like increment 003 did.
     func testAKeyboardPieceStartsOnTheDefaultVoice() throws {

@@ -19,8 +19,22 @@ public struct HumanizationSettings: Equatable, Hashable, Sendable, Codable {
         self.intensity = min(100, max(0, intensity))
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case isEnabled, intensity
+    }
+
+    /// Through the designated initializer, so a stored document cannot smuggle
+    /// an out-of-range intensity past the clamp.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            isEnabled: try container.decode(Bool.self, forKey: .isEnabled),
+            intensity: try container.decode(Int.self, forKey: .intensity)
+        )
+    }
+
     /// What playback uses when the owner has not chosen: on, moderate.
-    public static let standard = HumanizationSettings(isEnabled: true, intensity: 40)
+    public static let standard = HumanizationSettings(isEnabled: true, intensity: 50)
 
     /// Strictly literal playback.
     public static let off = HumanizationSettings(isEnabled: false, intensity: 0)

@@ -375,12 +375,18 @@ extension PresetLine: Codable {
 /// Identity, name, active flag and timestamps are deliberately *not* here: they
 /// belong to the row (`Preset`), the same split `SoundEntry` uses. A preset
 /// renamed in the list must not need its document rewritten.
-public struct PresetContent: Equatable, Sendable, Codable {
+public struct PresetContent: Equatable, Sendable {
     /// One entry per line of the piece, in the compiled score's line order.
     public var lines: [PresetLine]
 
-    public init(lines: [PresetLine]) {
+    /// Whole-piece humanization (REQ-012), stored with the preset like any
+    /// other custom value. Piece-wide rather than per line, because
+    /// humanization shapes the one realized timeline every line shares.
+    public var humanization: HumanizationSettings
+
+    public init(lines: [PresetLine], humanization: HumanizationSettings = .standard) {
         self.lines = lines
+        self.humanization = humanization
     }
 
     /// Format version of the stored document. Bumping this requires adding a
@@ -402,6 +408,25 @@ public struct PresetContent: Equatable, Sendable, Codable {
             if case .library(_, let id) = line.assignment { return id }
             return nil
         })
+    }
+}
+
+extension PresetContent: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case lines, humanization
+    }
+
+    /// `humanization` is additive at the same document version, the
+    /// `LineMixerState.roomSend` precedent: a document from before the field
+    /// existed reads as the standard setting rather than failing.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            lines: try container.decode([PresetLine].self, forKey: .lines),
+            humanization: try container.decodeIfPresent(
+                HumanizationSettings.self, forKey: .humanization
+            ) ?? .standard
+        )
     }
 }
 

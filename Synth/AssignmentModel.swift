@@ -103,6 +103,10 @@ final class AssignmentModel {
 
     private var score: CompiledScore?
 
+    /// Hands a loaded preset's whole-piece humanization to the transport,
+    /// which owns re-realization. Installed by `PlaybackModel`.
+    var onHumanizationLoaded: ((HumanizationSettings) -> Void)?
+
     init(store: LibraryStore, engine: PlaybackEngine) {
         self.store = store
         self.engine = engine
@@ -204,6 +208,7 @@ final class AssignmentModel {
             activePreset = preset
             lines = performance.lines
             keepSelectionValid()
+            onHumanizationLoaded?(preset.content.humanization)
 
             if applyingToEngine { applyToEngine(performance) }
             if let verb {
@@ -756,6 +761,18 @@ final class AssignmentModel {
         }
     }
 
+    /// Stores the whole-piece humanization on the active preset, like any
+    /// other custom value the preset holds (REQ-024). Auto-saved.
+    func saveHumanization(_ settings: HumanizationSettings) {
+        guard let preset = activePreset, preset.content.humanization != settings else { return }
+        do {
+            activePreset = try store.presets.setHumanization(settings, in: preset)
+            presets = try store.presets.presets(forPieceID: preset.pieceID)
+        } catch {
+            alert = AssignmentAlert(title: "Could not save the humanization change", error)
+        }
+    }
+
     private func writeStrip(_ state: LineMixerState, toLine lineID: ScoreLineID) {
         guard !isSuspendedByPlayThrough, let strip = engine.mixer(for: lineID) else { return }
         strip.gain = Float(state.volume)
@@ -908,6 +925,7 @@ final class AssignmentModel {
             activePreset = preset
             lines = performance.lines
             keepSelectionValid()
+            onHumanizationLoaded?(preset.content.humanization)
             applyToEngine(performance)
         } catch {
             alert = AssignmentAlert(title: "Could not re-read this piece's presets", error)

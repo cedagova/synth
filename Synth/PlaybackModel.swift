@@ -601,7 +601,11 @@ final class PlaybackModel {
         case .measure: return position?.measureNumber ?? ""
         case .beat: return position.map { TransportDisplay.beatText($0.beat) } ?? ""
         case .minutes: return "\(elapsedTenthsTotal / 600)"
-        case .seconds: return "\((elapsedTenthsTotal / 10) % 60)"
+        case .seconds:
+            // Zero-padded exactly as displayed, so opening the editor keeps
+            // the width it already had instead of jolting the line.
+            let seconds = (elapsedTenthsTotal / 10) % 60
+            return seconds < 10 ? "0\(seconds)" : "\(seconds)"
         case .tenths: return "\(elapsedTenthsTotal % 10)"
         }
     }

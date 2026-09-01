@@ -657,6 +657,7 @@ private struct PlaybackStatusBar: View {
                     .accessibilityLabel(status)
             }
             Spacer(minLength: 8)
+            EngineStatsReadout(model: model)
             if case .preparing = model.loadState {
                 ProgressView()
                     .controlSize(.small)
@@ -670,6 +671,46 @@ private struct PlaybackStatusBar: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.bar)
         .overlay(alignment: .top) { Divider() }
+    }
+}
+
+/// Live render-thread telemetry, so "why did the sound cut out?" is answered
+/// by a number instead of a guess. Late blocks climbing during a dropout means
+/// the engine missed its deadline; counters staying flat means the silence
+/// happened after the engine — the output device (Bluetooth, most often).
+private struct EngineStatsReadout: View {
+    @Bindable var model: PlaybackModel
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { _ in
+            let stats = model.renderStatistics
+            if stats.renderedBlocks > 0 {
+                Text(text(for: stats))
+                    .font(.caption.monospaced())
+                    .foregroundStyle(stats.overloadBlocks > 0 ? .orange : .secondary)
+                    .help(
+                        "Render thread health. Late blocks took over 85% of their "
+                        + "real-time deadline; a forced pause is sustained overload. "
+                        + "If sound drops while these stay flat, the engine delivered "
+                        + "audio and the output device lost it."
+                    )
+                    .accessibilityLabel(accessibilityText(for: stats))
+            }
+        }
+    }
+
+    private func text(for stats: PlaybackEngine.RenderStatistics) -> String {
+        var parts = [
+            "late \(stats.overloadBlocks)/\(stats.renderedBlocks)",
+            String(format: "peak %.2f", stats.peakLevel)
+        ]
+        if stats.overloadPauses > 0 { parts.insert("paused \(stats.overloadPauses)×", at: 1) }
+        return parts.joined(separator: " · ")
+    }
+
+    private func accessibilityText(for stats: PlaybackEngine.RenderStatistics) -> String {
+        "Engine: \(stats.overloadBlocks) late blocks of \(stats.renderedBlocks), "
+        + "\(stats.overloadPauses) forced pauses, peak level \(String(format: "%.2f", stats.peakLevel))"
     }
 }
 

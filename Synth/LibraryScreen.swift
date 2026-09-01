@@ -115,25 +115,27 @@ struct LibraryScreen: View {
             ForEach(model.visiblePieces) { piece in
                 PieceRow(piece: piece)
                     .tag(piece.id)
-                    // Double-click opens, the way a list of documents does.
-                    // Simultaneous rather than exclusive so a single click
-                    // still selects.
-                    .simultaneousGesture(
-                        TapGesture(count: 2).onEnded {
-                            model.selection = piece.id
-                            open(piece)
-                        }
-                    )
-                    .contextMenu {
-                        Button("Play Piece") {
-                            model.selection = piece.id
-                            open(piece)
-                        }
-                        Divider()
-                        Button("Remove Piece…", role: .destructive) {
-                            model.requestRemoval(of: piece)
-                        }
-                    }
+            }
+        }
+        // Double-click opens, the way a list of documents does. A row-level
+        // TapGesture would steal the click from the List and break single-click
+        // selection on macOS, so both the menu and the open action hang off the
+        // List's own selection instead.
+        .contextMenu(forSelectionType: PieceRecord.ID.self) { ids in
+            if let piece = piece(for: ids) {
+                Button("Play Piece") {
+                    model.selection = piece.id
+                    open(piece)
+                }
+                Divider()
+                Button("Remove Piece…", role: .destructive) {
+                    model.requestRemoval(of: piece)
+                }
+            }
+        } primaryAction: { ids in
+            if let piece = piece(for: ids) {
+                model.selection = piece.id
+                open(piece)
             }
         }
         .focused($focus, equals: .list)
@@ -142,6 +144,11 @@ struct LibraryScreen: View {
         .onDeleteCommand { model.requestRemovalOfSelection() }
         .accessibilityLabel("Library pieces")
         .accessibilityHint("Choose a piece with the up and down arrow keys. Press Delete to remove it.")
+    }
+
+    private func piece(for ids: Set<PieceRecord.ID>) -> PieceRecord? {
+        guard let id = ids.first else { return nil }
+        return model.visiblePieces.first { $0.id == id }
     }
 
     private var removalConfirmationBinding: Binding<Bool> {

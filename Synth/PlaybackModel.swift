@@ -569,6 +569,61 @@ final class PlaybackModel {
         statusMessage = "Loop off."
     }
 
+    /// The A of A–B looping: marks the measure under the playhead as the
+    /// loop's first measure. Capturing while listening is how every practice
+    /// looper works — the owner hears the spot, they do not know its number.
+    func captureLoopStart() {
+        guard let measure = measureUnderPlayhead else { return }
+        loopFromField = measure
+        let to = loopToField.trimmingCharacters(in: .whitespaces)
+        if to.isEmpty {
+            statusMessage = "Loop will start at measure \(measure). Mark the end when you reach it."
+        } else {
+            setLoopFromFields()
+        }
+    }
+
+    /// The B: marks the measure under the playhead as the loop's last measure
+    /// and starts looping. With no start marked, the loop is this one measure.
+    func captureLoopEnd() {
+        guard let measure = measureUnderPlayhead else { return }
+        loopToField = measure
+        if loopFromField.trimmingCharacters(in: .whitespaces).isEmpty {
+            loopFromField = measure
+        }
+        setLoopFromFields()
+    }
+
+    /// The printed number of the measure being played — or the last measure,
+    /// for a playhead resting past the end.
+    private var measureUnderPlayhead: String? {
+        position?.measureNumber ?? navigator?.lastMeasureNumber
+    }
+
+    // MARK: Measure stepping
+
+    /// One playback measure back or forward — the practice player's arrow
+    /// keys. Stepping back from partway through a measure returns to that
+    /// measure's own start first, the way track-skip returns to a track's
+    /// start before jumping to the previous one.
+    func stepMeasure(by delta: Int) {
+        guard let navigator, navigator.playbackMeasureCount > 0 else { return }
+
+        var index: Int
+        if let position {
+            index = position.playbackMeasureIndex
+            if delta > 0 || position.beat < 1.5 { index += delta }
+        } else {
+            // Past the end of the piece: back lands on the last measure.
+            index = delta < 0 ? navigator.playbackMeasureCount - 1 : 0
+        }
+        index = max(0, min(navigator.playbackMeasureCount - 1, index))
+
+        guard let target = navigator.microseconds(atPlaybackMeasureIndex: index) else { return }
+        seek(toMicroseconds: target)
+        statusMessage = jumpedMessage
+    }
+
     func toggleLoop() {
         if loop == nil { setLoopFromFields() } else { clearLoop() }
     }

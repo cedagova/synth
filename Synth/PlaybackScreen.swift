@@ -433,9 +433,31 @@ private struct SeekControls: View {
             SectionHeading("Go to")
 
             HStack(spacing: 8) {
+                // Whole-measure stepping from wherever the music is: the
+                // practice player's arrow keys, no numbers needed.
+                Button {
+                    model.stepMeasure(by: -1)
+                } label: {
+                    Image(systemName: "arrow.backward.to.line")
+                }
+                .help("Previous measure (back inside a measure returns to its start)")
+                .accessibilityLabel("Previous measure")
+                .disabled(!model.isReady)
+
+                Button {
+                    model.stepMeasure(by: 1)
+                } label: {
+                    Image(systemName: "arrow.forward.to.line")
+                }
+                .help("Next measure")
+                .accessibilityLabel("Next measure")
+                .disabled(!model.isReady)
+
+                Divider().frame(height: 18)
+
                 Text("Measure")
                 TextField("12", text: $model.measureField)
-                    .frame(width: 70)
+                    .frame(width: 64)
                     .focused($focus, equals: .measure)
                     .onSubmit { model.seekToTypedMeasure() }
                     .accessibilityLabel("Measure number to jump to")
@@ -443,7 +465,7 @@ private struct SeekControls: View {
 
                 Text("beat")
                 TextField("1", text: $model.beatField)
-                    .frame(width: 56)
+                    .frame(width: 48)
                     .focused($focus, equals: .beat)
                     .onSubmit { model.seekToTypedMeasure() }
                     .accessibilityLabel("Beat within that measure")
@@ -456,7 +478,7 @@ private struct SeekControls: View {
 
                 Text("Time")
                 TextField("1:23", text: $model.timeField)
-                    .frame(width: 88)
+                    .frame(width: 72)
                     .focused($focus, equals: .time)
                     .onSubmit { model.seekToTypedTime() }
                     .accessibilityLabel("Elapsed time to jump to")
@@ -477,32 +499,59 @@ private struct LoopControls: View {
     @FocusState.Binding var focus: PlaybackScreen.Field?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             SectionHeading("Loop")
+
+            // A–B capture, the way every practice looper works: mark the spot
+            // while hearing it. The typed range below is the fine-tune.
+            HStack(spacing: 8) {
+                Button {
+                    model.captureLoopStart()
+                } label: {
+                    Label("Start Here", systemImage: "arrow.down.to.line")
+                }
+                .help("Loop from the measure playing now")
+                .accessibilityLabel("Start the loop at the current measure")
+                .disabled(!model.isReady)
+
+                Button {
+                    model.captureLoopEnd()
+                } label: {
+                    Label("End Here", systemImage: "arrow.down.to.line.compact")
+                }
+                .help("Loop until the measure playing now, then repeat")
+                .accessibilityLabel("End the loop at the current measure and start looping")
+                .disabled(!model.isReady)
+
+                Button {
+                    model.clearLoop()
+                } label: {
+                    Label("Clear", systemImage: "repeat.circle.fill")
+                }
+                .help("Stop looping")
+                .accessibilityLabel("Stop looping")
+                .disabled(!model.isLooping)
+            }
 
             HStack(spacing: 8) {
                 Text("From measure")
                 TextField("6", text: $model.loopFromField)
-                    .frame(width: 64)
+                    .frame(width: 56)
                     .focused($focus, equals: .loopFrom)
                     .onSubmit { model.setLoopFromFields() }
                     .accessibilityLabel("First measure of the loop")
 
                 Text("to")
                 TextField("7", text: $model.loopToField)
-                    .frame(width: 64)
+                    .frame(width: 56)
                     .focused($focus, equals: .loopTo)
                     .onSubmit { model.setLoopFromFields() }
                     .accessibilityLabel("Last measure of the loop, played in full")
 
-                Button(model.isLooping ? "Update Loop" : "Set Loop") {
+                Button(model.isLooping ? "Update" : "Set Loop") {
                     model.setLoopFromFields()
                 }
                 .accessibilityLabel("Loop over that range of measures")
-
-                Button("Clear Loop") { model.clearLoop() }
-                    .accessibilityLabel("Stop looping")
-                    .disabled(!model.isLooping)
             }
             .textFieldStyle(.roundedBorder)
         }

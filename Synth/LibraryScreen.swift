@@ -62,9 +62,6 @@ struct LibraryScreen: View {
                 )
             }
         }
-        .safeAreaInset(edge: .bottom) {
-            LibraryStatusBar(model: model)
-        }
         .confirmationDialog(
             model.pendingRemoval.map { "Remove “\($0.title)” from your library?" } ?? "",
             isPresented: removalConfirmationBinding,
@@ -210,11 +207,6 @@ private struct PieceRow: View {
             }
 
             Spacer(minLength: 8)
-
-            Text(piece.sourceFormat == .compressedMusicXML ? "MXL" : "MusicXML")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .accessibilityHidden(true)
         }
         .padding(.vertical, 4)
         .contentShape(Rectangle())
@@ -378,66 +370,5 @@ private struct NoSearchResultsView: View {
             Button("Clear the Search") { model.clearSearch() }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-/// Where the library lives, what it holds, and what just happened.
-private struct LibraryStatusBar: View {
-    @Bindable var model: LibraryModel
-
-    var body: some View {
-        HStack(spacing: 16) {
-            Label {
-                Text(model.containerPath)
-                    .font(.callout.monospaced())
-                    .textSelection(.enabled)
-            } icon: {
-                Image(systemName: "internaldrive")
-            }
-            .accessibilityLabel("Library folder \(model.containerPath)")
-
-            Divider().frame(height: 14)
-
-            Text("Store schema v\(model.schemaVersion)")
-                .accessibilityLabel("Store schema version \(model.schemaVersion)")
-
-            Divider().frame(height: 14)
-
-            Text(countDescription)
-                .accessibilityLabel(countDescription)
-
-            if model.isWorking {
-                ProgressView()
-                    .controlSize(.small)
-                    .accessibilityLabel("Working")
-            }
-
-            Spacer(minLength: 8)
-
-            if let status = model.statusMessage {
-                Text(status)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    // Announced rather than merely displayed, so a VoiceOver
-                    // user hears the result of an import or a removal.
-                    .accessibilityAddTraits(.updatesFrequently)
-                    .accessibilityLabel(status)
-            }
-        }
-        .font(.callout)
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.bar)
-        .overlay(alignment: .top) { Divider() }
-    }
-
-    /// "3 pieces", or "2 of 7 pieces" while a search is narrowing the list.
-    private var countDescription: String {
-        let total = model.pieces.count
-        let shown = model.visiblePieces.count
-        let noun = total == 1 ? "piece" : "pieces"
-        return shown == total ? "\(total) \(noun)" : "\(shown) of \(total) \(noun)"
     }
 }

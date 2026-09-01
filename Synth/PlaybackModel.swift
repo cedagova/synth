@@ -120,8 +120,6 @@ final class PlaybackModel {
     /// happens when the drag ends.
     var intensityDraft: Double
 
-    var isReportShown = false
-
     /// Bumped so the view can move keyboard focus to a field a menu command
     /// asked for — the same mechanism the library uses for Find.
     private(set) var measureFocusRequests = 0
@@ -252,18 +250,6 @@ final class PlaybackModel {
             total: totalMicroseconds
         )
     }
-
-    /// Both reports, kept apart. They answer different questions and merging
-    /// them would lose which stage could not honour what (REQ-014).
-    var compilationReport: NotationReport? { compiledScore?.report }
-    var realizationReport: NotationReport? { timeline?.report }
-
-    /// How many distinct findings the piece has across both stages.
-    var reportEntryCount: Int {
-        (compilationReport?.entries.count ?? 0) + (realizationReport?.entries.count ?? 0)
-    }
-
-    var hasReportFindings: Bool { reportEntryCount > 0 }
 
     /// The piece's own title line, for the screen's header.
     var subtitle: String { piece.subtitleDescription }

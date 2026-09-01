@@ -60,11 +60,6 @@ struct PlaybackScreen: View {
                 AssignmentPanel(model: model.assignment)
                     .frame(width: 420)
 
-                if model.isReportShown {
-                    Divider()
-                    NotationReportPanel(model: model)
-                        .frame(width: 340)
-                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -175,30 +170,9 @@ private struct PlaybackHeader: View {
             .accessibilityLabel("Now open: \(model.piece.accessibilityDescription)")
 
             Spacer(minLength: 8)
-
-            Button {
-                model.isReportShown.toggle()
-            } label: {
-                Label(reportLabel, systemImage: "list.bullet.rectangle")
-            }
-            .accessibilityLabel(reportAccessibilityLabel)
-            .accessibilityHint("Lists every marking in this score that Synth did not turn into sound.")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-    }
-
-    private var reportLabel: String {
-        model.hasReportFindings ? "Report (\(model.reportEntryCount))" : "Report"
-    }
-
-    private var reportAccessibilityLabel: String {
-        let state = model.isReportShown ? "shown" : "hidden"
-        guard model.hasReportFindings else {
-            return "Notation report, nothing unhonoured, \(state)"
-        }
-        let count = model.reportEntryCount
-        return "Notation report, \(count) finding\(count == 1 ? "" : "s"), \(state)"
     }
 }
 
@@ -543,101 +517,6 @@ private struct ExportControls: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-}
-
-// MARK: - Report (REQ-014)
-
-/// Everything this piece asked for that Synth did not do.
-///
-/// **Two lists, never merged.** Compilation reports notation it could not even
-/// read; realization reports notation it read and then could not sound. They
-/// are produced by different stages and mean different things, and an owner
-/// deciding whether a marking is missing from the file or missing from the app
-/// needs to be able to tell which is which.
-private struct NotationReportPanel: View {
-    @Bindable var model: PlaybackModel
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Notation report")
-                    .font(.headline)
-
-                if model.compilationReport == nil && model.realizationReport == nil {
-                    Text("The report appears once the piece has been compiled.")
-                        .foregroundStyle(.secondary)
-                } else if !model.hasReportFindings {
-                    Label(
-                        "Synth honoured everything it found in this score.",
-                        systemImage: "checkmark.circle"
-                    )
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel("Synth honoured everything it found in this score.")
-                } else {
-                    ReportSection(
-                        title: "Could not be read from the file",
-                        explanation: "Notation the score compiler met and could not turn into "
-                            + "anything playable, plus every fallback it had to apply.",
-                        report: model.compilationReport
-                    )
-                    ReportSection(
-                        title: "Could not be sounded",
-                        explanation: "Notation Synth read correctly but could not perform, "
-                            + "such as an ornament on a note too short to hold one.",
-                        report: model.realizationReport
-                    )
-                }
-            }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .background(.quaternary.opacity(0.25))
-        .accessibilityLabel("Notation report for \(model.piece.title)")
-    }
-}
-
-private struct ReportSection: View {
-    let title: String
-    let explanation: String
-    let report: NotationReport?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-            Text(explanation)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            let entries = report?.entries ?? []
-            if entries.isEmpty {
-                Text("Nothing.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Image(systemName: entry.category == .notHonored
-                              ? "questionmark.circle"
-                              : "arrow.triangle.branch")
-                            .foregroundStyle(.secondary)
-                            .accessibilityHidden(true)
-                        Text(entry.displayText)
-                            .font(.callout)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .accessibilityElement(children: .combine)
-                    .accessibilityLabel("\(title): \(entry.displayText)")
-                }
-            }
-
-            if let truncated = report?.truncatedKindCount, truncated > 0 {
-                Text("\(truncated) further kinds of finding were not listed.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
         }
     }

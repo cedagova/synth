@@ -103,11 +103,6 @@ struct PlaybackCommands: Commands {
             // Both were observed by driving the built app, not reasoned about.
             .keyboardShortcut("u", modifiers: .command)
 
-            Button("Show Notation Report") {
-                model.playback?.isReportShown.toggle()
-            }
-            .keyboardShortcut("r", modifiers: [.command, .shift])
-
             Divider()
 
             // Shift-Command-E, not Command-E: plain Command-E is Use Selection

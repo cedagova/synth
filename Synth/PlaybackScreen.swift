@@ -17,6 +17,7 @@ struct PlaybackScreen: View {
     let close: () -> Void
 
     @FocusState private var focus: Field?
+    @State private var tab: Tab = .navigate
 
     fileprivate enum Field: Hashable {
         case measure
@@ -24,6 +25,14 @@ struct PlaybackScreen: View {
         case time
         case loopFrom
         case loopTo
+    }
+
+    /// The secondary tools, one at a time. Playing itself — position,
+    /// scrubber, transport — is never behind a tab.
+    fileprivate enum Tab: Hashable {
+        case navigate
+        case humanization
+        case export
     }
 
     var body: some View {
@@ -36,16 +45,10 @@ struct PlaybackScreen: View {
                     PositionReadout(model: model)
                     Divider()
                     ScrollView {
-                        VStack(alignment: .leading, spacing: 20) {
-                            TransportControls(model: model)
+                        VStack(alignment: .leading, spacing: 24) {
+                            TransportHero(model: model)
                             Divider()
-                            SeekControls(model: model, focus: $focus)
-                            Divider()
-                            LoopControls(model: model, focus: $focus)
-                            Divider()
-                            HumanizationControls(model: model)
-                            Divider()
-                            ExportControls(model: model)
+                            ToolTabs(model: model, tab: $tab, focus: $focus)
                         }
                         .padding(20)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -73,8 +76,14 @@ struct PlaybackScreen: View {
         )) {
             ExportSheet(model: model.export, subtitle: exportSubtitle)
         }
-        .onChange(of: model.measureFocusRequests) { _, _ in focus = .measure }
-        .onChange(of: model.timeFocusRequests) { _, _ in focus = .time }
+        .onChange(of: model.measureFocusRequests) { _, _ in
+            tab = .navigate
+            focus = .measure
+        }
+        .onChange(of: model.timeFocusRequests) { _, _ in
+            tab = .navigate
+            focus = .time
+        }
         .task { await model.prepare() }
         // **No `.onDisappear { model.close() }`.**
         //
@@ -209,6 +218,18 @@ private struct PositionReadout: View {
 
             Spacer(minLength: 8)
 
+            // The loop chip lives up here rather than only on the Go To & Loop
+            // tab: a loop keeps steering playback while other tabs are open,
+            // and steering the owner cannot see reads as a stuck transport.
+            if let description = model.loopDescription {
+                Label(description, systemImage: "repeat")
+                    .font(.callout)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(.quaternary.opacity(0.6), in: Capsule())
+                    .accessibilityLabel(description)
+            }
+
             TransportStateBadge(model: model)
         }
         .padding(.horizontal, 20)
@@ -263,63 +284,139 @@ private struct TransportStateBadge: View {
     }
 }
 
-// MARK: - Transport
+// MARK: - Transport hero
 
-private struct TransportControls: View {
+/// Playing, front and centre: a scrubber and the transport, styled the way
+/// every media player styles them — icon buttons around one prominent
+/// play/pause. Nothing here is ever behind a tab.
+private struct TransportHero: View {
     @Bindable var model: PlaybackModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeading("Transport")
+        VStack(spacing: 14) {
+            ScrubBar(model: model)
 
-            HStack(spacing: 10) {
-                Button {
+            HStack(spacing: 22) {
+                Spacer(minLength: 0)
+
+                transportIcon("arrow.counterclockwise", size: 17) {
                     model.goToStart()
-                } label: {
-                    Label("Go to Start", systemImage: "backward.end.fill")
                 }
+                .help("Restart from the beginning")
                 .accessibilityLabel("Go to the start of the piece")
-                .disabled(!model.isReady)
 
-                Button {
+                transportIcon("gobackward.5", size: 20) {
                     model.skip(byMicroseconds: -PlaybackModel.skipMicroseconds)
-                } label: {
-                    Label("Back 5s", systemImage: "gobackward.5")
                 }
+                .help("Back 5 seconds")
                 .accessibilityLabel("Skip back five seconds")
-                .disabled(!model.isReady)
 
                 Button {
                     model.togglePlayPause()
                 } label: {
-                    Label(
-                        model.isPlaying ? "Pause" : "Play",
-                        systemImage: model.isPlaying ? "pause.fill" : "play.fill"
-                    )
-                    .frame(minWidth: 66)
+                    Image(systemName: model.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 22, weight: .semibold))
+                        .frame(width: 52, height: 52)
                 }
+                .buttonStyle(.borderedProminent)
+                .clipShape(Circle())
                 // Deliberately no `.defaultAction`: Return belongs to whichever
                 // seek field has focus, and Command-Return on the Playback menu
                 // is the unambiguous keyboard path.
+                .help(model.isPlaying ? "Pause" : "Play")
                 .accessibilityLabel(model.isPlaying ? "Pause playback" : "Start playback")
                 .accessibilityHint("Also on the Playback menu as Command Return.")
                 .disabled(!model.isReady)
 
-                Button {
-                    model.stop()
-                } label: {
-                    Label("Stop", systemImage: "stop.fill")
-                }
-                .accessibilityLabel("Stop playback and return to the start")
-                .disabled(!model.isReady)
-
-                Button {
+                transportIcon("goforward.5", size: 20) {
                     model.skip(byMicroseconds: PlaybackModel.skipMicroseconds)
-                } label: {
-                    Label("Forward 5s", systemImage: "goforward.5")
                 }
+                .help("Forward 5 seconds")
                 .accessibilityLabel("Skip forward five seconds")
-                .disabled(!model.isReady)
+
+                transportIcon("stop.fill", size: 17) {
+                    model.stop()
+                }
+                .help("Stop and return to the start")
+                .accessibilityLabel("Stop playback and return to the start")
+
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    private func transportIcon(
+        _ symbol: String, size: CGFloat, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: size, weight: .medium))
+                .frame(width: 36, height: 36)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.borderless)
+        .disabled(!model.isReady)
+    }
+}
+
+/// Direct-manipulation position: drag anywhere in the piece. The readout above
+/// stays the precise truth; this is the coarse, immediate way there.
+private struct ScrubBar: View {
+    @Bindable var model: PlaybackModel
+
+    /// The thumb while a drag is in flight; nil when the engine's position is
+    /// the truth. Committing only on release keeps a drag from spamming seeks.
+    @State private var draft: Double?
+
+    var body: some View {
+        Slider(
+            value: Binding(
+                get: { draft ?? Double(model.positionMicroseconds) },
+                set: { draft = $0 }
+            ),
+            in: 0...Double(max(1, model.totalMicroseconds)),
+            onEditingChanged: { isDragging in
+                guard !isDragging, let target = draft else { return }
+                model.seek(toMicroseconds: Int64(target))
+                draft = nil
+            }
+        )
+        .disabled(!model.isReady)
+        .accessibilityLabel("Playback position")
+        .accessibilityValue(model.elapsedText)
+    }
+}
+
+// MARK: - Tool tabs
+
+/// The practice and configuration tools, one surface at a time. Go To and
+/// Loop are how a practising player moves; humanization and export are set
+/// once and left alone — none of them need to crowd the transport.
+private struct ToolTabs: View {
+    @Bindable var model: PlaybackModel
+    @Binding var tab: PlaybackScreen.Tab
+    @FocusState.Binding var focus: PlaybackScreen.Field?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Picker("Tools", selection: $tab) {
+                Text("Go To & Loop").tag(PlaybackScreen.Tab.navigate)
+                Text("Humanization").tag(PlaybackScreen.Tab.humanization)
+                Text("Export").tag(PlaybackScreen.Tab.export)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: 420)
+            .accessibilityLabel("Playback tools")
+
+            switch tab {
+            case .navigate:
+                SeekControls(model: model, focus: $focus)
+                LoopControls(model: model, focus: $focus)
+            case .humanization:
+                HumanizationControls(model: model)
+            case .export:
+                ExportControls(model: model)
             }
         }
     }
@@ -408,14 +505,6 @@ private struct LoopControls: View {
                     .disabled(!model.isLooping)
             }
             .textFieldStyle(.roundedBorder)
-
-            if let description = model.loopDescription {
-                Label(description, systemImage: "repeat")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel(description)
-                    .accessibilityAddTraits(.updatesFrequently)
-            }
         }
     }
 }

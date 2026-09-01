@@ -71,6 +71,12 @@ struct PlaybackScreen: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        // Clicking empty space takes focus out of whatever field had it —
+        // an open segment editor closes (unchanged) instead of lingering.
+        // Child controls consume their own clicks, so this fires only for
+        // clicks that landed on nothing.
+        .contentShape(Rectangle())
+        .onTapGesture { focus = nil }
         .safeAreaInset(edge: .bottom) { PlaybackStatusBar(model: model) }
         .overlay { preparationOverlay }
         // An explicit binding rather than `$model.export.isPresented`: `export`
@@ -347,6 +353,13 @@ private struct SegmentField: View {
                 if current == field, previous != field {
                     model.segmentDraft = model.currentSegmentValue(segment)
                 }
+            }
+            // Guarded as typed: a letter, a second dot, or an over-long value
+            // never even appears in the field.
+            .onChange(of: model.segmentDraft) { _, newValue in
+                guard isEditing else { return }
+                let sanitized = PlaybackModel.sanitizedDraft(newValue, for: segment)
+                if sanitized != newValue { model.segmentDraft = sanitized }
             }
     }
 }

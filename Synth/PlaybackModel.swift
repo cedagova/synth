@@ -594,6 +594,29 @@ final class PlaybackModel {
         return " (pass \(pass))"
     }
 
+    /// What the segment editor lets the owner type, enforced keystroke by
+    /// keystroke: ASCII digits everywhere, one dot in the beat, and a hard
+    /// length cap per segment. A disallowed character is simply not entered.
+    static func sanitizedDraft(_ text: String, for segment: ReadoutSegment) -> String {
+        let maxLength: Int
+        switch segment {
+        case .measure: maxLength = 4
+        case .beat: maxLength = 4
+        case .minutes: maxLength = 3
+        case .seconds: maxLength = 2
+        case .tenths: maxLength = 1
+        }
+        var kept = ""
+        for character in text {
+            if character.isASCII && character.isNumber {
+                kept.append(character)
+            } else if character == ".", segment == .beat, !kept.contains(".") {
+                kept.append(character)
+            }
+        }
+        return String(kept.prefix(maxLength))
+    }
+
     /// What a segment's editor starts from — its current value, from the real
     /// playhead.
     func currentSegmentValue(_ segment: ReadoutSegment) -> String {

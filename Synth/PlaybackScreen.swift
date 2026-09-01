@@ -17,11 +17,10 @@ struct PlaybackScreen: View {
     let close: () -> Void
 
     @FocusState private var focus: Field?
-    @State private var tab: Tab = .navigate
+    @State private var tab: Tab = .loop
 
     fileprivate enum Field: Hashable {
         case measure
-        case beat
         case time
         case loopFrom
         case loopTo
@@ -30,7 +29,7 @@ struct PlaybackScreen: View {
     /// The secondary tools, one at a time. Playing itself — position,
     /// scrubber, transport — is never behind a tab.
     fileprivate enum Tab: Hashable {
-        case navigate
+        case loop
         case export
     }
 
@@ -41,7 +40,7 @@ struct PlaybackScreen: View {
 
             HStack(alignment: .top, spacing: 0) {
                 VStack(spacing: 0) {
-                    PositionReadout(model: model)
+                    PositionReadout(model: model, focus: $focus)
                     Divider()
                     ScrollView {
                         VStack(alignment: .leading, spacing: 24) {
@@ -80,11 +79,11 @@ struct PlaybackScreen: View {
             ExportSheet(model: model.export, subtitle: exportSubtitle)
         }
         .onChange(of: model.measureFocusRequests) { _, _ in
-            tab = .navigate
+            model.prefillPositionDraft()
             focus = .measure
         }
         .onChange(of: model.timeFocusRequests) { _, _ in
-            tab = .navigate
+            model.prefillTimeDraft()
             focus = .time
         }
         .task { await model.prepare() }
@@ -192,32 +191,41 @@ private struct PlaybackHeader: View {
 
 /// The single most important thing on this screen: where the music is.
 ///
-/// Measure, beat and elapsed time, always visible, never behind a disclosure,
-/// and spoken as one sentence rather than as three anonymous numbers.
+/// Measure, beat and elapsed time, always visible, never behind a disclosure —
+/// and each one is also the way there: the display is the input, the way a
+/// DAW's transport counter is. Click a value, type, Return jumps, Escape
+/// leaves it alone.
 private struct PositionReadout: View {
     @Bindable var model: PlaybackModel
+    @FocusState.Binding var focus: PlaybackScreen.Field?
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 24) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Position")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text(model.positionText)
-                    .font(.system(.title, design: .rounded).weight(.medium))
-                    .monospacedDigit()
-                    .contentTransition(.numericText())
-            }
+            EditableReadout(
+                label: "Position",
+                display: model.positionText,
+                draft: $model.positionDraft,
+                field: .measure,
+                focus: $focus,
+                editingWidth: 200,
+                begin: { model.prefillPositionDraft() },
+                commit: { model.commitPositionDraft() },
+                help: "Click to type a measure — “12”, or “12 3.5” for a beat within it",
+                accessibilityLabel: "Position: \(model.positionText)"
+            )
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Elapsed")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text(model.elapsedText)
-                    .font(.system(.title, design: .rounded).weight(.medium))
-                    .monospacedDigit()
-                    .contentTransition(.numericText())
-            }
+            EditableReadout(
+                label: "Elapsed",
+                display: model.elapsedText,
+                draft: $model.timeDraft,
+                field: .time,
+                focus: $focus,
+                editingWidth: 130,
+                begin: { model.prefillTimeDraft() },
+                commit: { model.commitTimeDraft() },
+                help: "Click to type a time — 1:23, or seconds alone",
+                accessibilityLabel: "Elapsed: \(model.spokenPosition)"
+            )
 
             Spacer(minLength: 8)
 
@@ -237,11 +245,62 @@ private struct PositionReadout: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
-        // One element, one sentence, and marked as changing so VoiceOver reads
-        // it on demand rather than interrupting continuously.
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(model.spokenPosition)
-        .accessibilityAddTraits(.updatesFrequently)
+    }
+}
+
+/// One value of the readout: a large display that becomes a same-sized text
+/// field on click. Return commits; Escape or clicking away leaves the value
+/// untouched.
+private struct EditableReadout: View {
+    let label: String
+    let display: String
+    @Binding var draft: String
+    let field: PlaybackScreen.Field
+    @FocusState.Binding var focus: PlaybackScreen.Field?
+    let editingWidth: CGFloat
+    let begin: () -> Void
+    let commit: () -> Void
+    let help: String
+    let accessibilityLabel: String
+
+    private var valueFont: Font { .system(.title, design: .rounded).weight(.medium) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if focus == field {
+                TextField("", text: $draft)
+                    .textFieldStyle(.plain)
+                    .font(valueFont)
+                    .monospacedDigit()
+                    .focused($focus, equals: field)
+                    .onSubmit {
+                        commit()
+                        focus = nil
+                    }
+                    .onExitCommand { focus = nil }
+                    .frame(width: editingWidth)
+                    .accessibilityLabel("\(label), editing")
+                    .accessibilityHint("Press Return to jump, Escape to cancel.")
+            } else {
+                Text(display)
+                    .font(valueFont)
+                    .monospacedDigit()
+                    .contentTransition(.numericText())
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        begin()
+                        focus = field
+                    }
+                    .help(help)
+                    .accessibilityLabel(accessibilityLabel)
+                    .accessibilityAddTraits([.isButton, .updatesFrequently])
+                    .accessibilityHint("Click to type a new value.")
+            }
+        }
     }
 }
 
@@ -308,6 +367,12 @@ private struct TransportHero: View {
                 .help("Restart from the beginning")
                 .accessibilityLabel("Go to the start of the piece")
 
+                transportIcon("arrow.backward.to.line", size: 16) {
+                    model.stepMeasure(by: -1)
+                }
+                .help("Previous measure (back inside a measure returns to its start)")
+                .accessibilityLabel("Previous measure")
+
                 transportIcon("gobackward.5", size: 20) {
                     model.skip(byMicroseconds: -PlaybackModel.skipMicroseconds)
                 }
@@ -336,6 +401,12 @@ private struct TransportHero: View {
                 }
                 .help("Forward 5 seconds")
                 .accessibilityLabel("Skip forward five seconds")
+
+                transportIcon("arrow.forward.to.line", size: 16) {
+                    model.stepMeasure(by: 1)
+                }
+                .help("Next measure")
+                .accessibilityLabel("Next measure")
 
                 transportIcon("stop.fill", size: 17) {
                     model.stop()
@@ -403,7 +474,7 @@ private struct ToolTabs: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Picker("Tools", selection: $tab) {
-                Text("Go To & Loop").tag(PlaybackScreen.Tab.navigate)
+                Text("Loop").tag(PlaybackScreen.Tab.loop)
                 Text("Export").tag(PlaybackScreen.Tab.export)
             }
             .pickerStyle(.segmented)
@@ -412,82 +483,11 @@ private struct ToolTabs: View {
             .accessibilityLabel("Playback tools")
 
             switch tab {
-            case .navigate:
-                SeekControls(model: model, focus: $focus)
+            case .loop:
                 LoopControls(model: model, focus: $focus)
             case .export:
                 ExportControls(model: model)
             }
-        }
-    }
-}
-
-// MARK: - Seeking
-
-private struct SeekControls: View {
-    @Bindable var model: PlaybackModel
-    @FocusState.Binding var focus: PlaybackScreen.Field?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeading("Go to")
-
-            HStack(spacing: 8) {
-                // Whole-measure stepping from wherever the music is: the
-                // practice player's arrow keys, no numbers needed.
-                Button {
-                    model.stepMeasure(by: -1)
-                } label: {
-                    Image(systemName: "arrow.backward.to.line")
-                }
-                .help("Previous measure (back inside a measure returns to its start)")
-                .accessibilityLabel("Previous measure")
-                .disabled(!model.isReady)
-
-                Button {
-                    model.stepMeasure(by: 1)
-                } label: {
-                    Image(systemName: "arrow.forward.to.line")
-                }
-                .help("Next measure")
-                .accessibilityLabel("Next measure")
-                .disabled(!model.isReady)
-
-                Divider().frame(height: 18)
-
-                Text("Measure")
-                TextField("12", text: $model.measureField)
-                    .frame(width: 64)
-                    .focused($focus, equals: .measure)
-                    .onSubmit { model.seekToTypedMeasure() }
-                    .accessibilityLabel("Measure number to jump to")
-                    .accessibilityHint("Type the printed measure number and press Return.")
-
-                Text("beat")
-                TextField("1", text: $model.beatField)
-                    .frame(width: 48)
-                    .focused($focus, equals: .beat)
-                    .onSubmit { model.seekToTypedMeasure() }
-                    .accessibilityLabel("Beat within that measure")
-                    .accessibilityHint("Beats start at 1 and may be fractional, such as 2.5.")
-
-                Button("Go") { model.seekToTypedMeasure() }
-                    .accessibilityLabel("Jump to that measure and beat")
-
-                Divider().frame(height: 18)
-
-                Text("Time")
-                TextField("1:23", text: $model.timeField)
-                    .frame(width: 72)
-                    .focused($focus, equals: .time)
-                    .onSubmit { model.seekToTypedTime() }
-                    .accessibilityLabel("Elapsed time to jump to")
-                    .accessibilityHint("Minutes and seconds, such as 1 colon 23, or seconds alone.")
-
-                Button("Go") { model.seekToTypedTime() }
-                    .accessibilityLabel("Jump to that elapsed time")
-            }
-            .textFieldStyle(.roundedBorder)
         }
     }
 }

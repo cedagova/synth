@@ -109,6 +109,12 @@ final class PlaybackModel {
     var loopFromField = ""
     var loopToField = ""
 
+    /// The readout's in-place editors (the DAW-counter idiom: the display is
+    /// the input). Prefilled from the live position when editing begins;
+    /// ignored unless committed with Return.
+    var positionDraft = ""
+    var timeDraft = ""
+
     private(set) var loop: LoopRange?
 
     /// The humanization the owner has chosen (REQ-012). Exactly two controls,
@@ -535,6 +541,45 @@ final class PlaybackModel {
             return
         }
         seek(toMicroseconds: microseconds)
+    }
+
+    // MARK: In-place readout editing
+
+    /// What the position editor starts from: "8", or "8 3.1" away from the
+    /// downbeat. Prefilled and select-all-replaced, so typing a bare measure
+    /// number is the common case.
+    func prefillPositionDraft() {
+        guard let position else {
+            positionDraft = ""
+            return
+        }
+        positionDraft = abs(position.beat - 1) < 0.05
+            ? position.measureNumber
+            : "\(position.measureNumber) \(TransportDisplay.beatText(position.beat))"
+    }
+
+    /// "0:18.1", without the " of 3:41.4" the display appends.
+    func prefillTimeDraft() {
+        timeDraft = TransportDisplay.elapsedText(microseconds: positionMicroseconds)
+    }
+
+    /// Commits the position editor: "8" jumps to a measure, "8 3.5" to a beat
+    /// within it.
+    func commitPositionDraft() {
+        let parts = positionDraft
+            .split(whereSeparator: { $0.isWhitespace || $0 == "·" })
+            .map(String.init)
+        guard let measure = parts.first, !measure.isEmpty else { return }
+        measureField = measure
+        beatField = parts.count > 1 ? parts[1] : "1"
+        seekToTypedMeasure()
+    }
+
+    func commitTimeDraft() {
+        let trimmed = timeDraft.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        timeField = trimmed
+        seekToTypedTime()
     }
 
     func seekToTypedTime() {

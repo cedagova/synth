@@ -276,6 +276,14 @@ private func staticText(_ text: String) -> some View {
 
 /// One number of the readout, editable in place: click, type, Return jumps.
 /// Escape or clicking away leaves the value untouched.
+///
+/// **The layout is always one plain `Text`, full stop.** While editing it
+/// mirrors the draft (with its glyphs hidden) and the actual field floats
+/// over it as an overlay, which never participates in layout. That single
+/// rule is what keeps the readout rock-steady: rows align text baselines
+/// because every element genuinely is text, opening the editor cannot change
+/// any height or width, and the line moves only when typed digits actually
+/// widen the mirrored value.
 private struct SegmentField: View {
     @Bindable var model: PlaybackModel
     let segment: PlaybackModel.ReadoutSegment
@@ -290,75 +298,56 @@ private struct SegmentField: View {
     private var valueFont: Font { .system(.title, design: .rounded).weight(.medium) }
 
     var body: some View {
-        ZStack(alignment: .leading) {
-            // A hidden text mirroring the draft sizes the editor, so opening
-            // it takes exactly the space the displayed value already had and
-            // it grows only as typed digits need it — no empty gap shoving
-            // the rest of the readout aside. The field itself is always in
-            // the hierarchy, only shown while focused: assigning a
-            // @FocusState value whose field is not rendered is silently
-            // dropped by SwiftUI.
-            Text(model.segmentDraft.isEmpty ? "0" : model.segmentDraft)
-                .font(valueFont)
-                .monospacedDigit()
-                // The same vertical padding the display carries, so opening
-                // the editor keeps the segment's height and nothing shifts.
-                .padding(.vertical, 1)
-                .opacity(0)
-                .frame(width: isEditing ? nil : 0)
-                .overlay(alignment: .leading) {
-                    TextField("", text: $model.segmentDraft)
-                        .textFieldStyle(.plain)
-                        .font(valueFont)
-                        .monospacedDigit()
-                        .focused($focus, equals: field)
-                        .onSubmit {
-                            model.commitSegment(segment)
-                            focus = nil
-                        }
-                        .onExitCommand { focus = nil }
-                        .opacity(isEditing ? 1 : 0)
-                        .allowsHitTesting(isEditing)
-                        .accessibilityLabel("\(name), editing")
-                        .accessibilityHint("Press Return to jump, Escape to cancel.")
-                }
-                .accessibilityHidden(!isEditing)
-
-            if !isEditing {
-                Text(display)
+        Text(isEditing ? (model.segmentDraft.isEmpty ? "0" : model.segmentDraft) : display)
+            .font(valueFont)
+            .monospacedDigit()
+            // Hidden, not removed, while the field draws the same glyphs on
+            // top — so the element keeps being the text that sizes the line.
+            .foregroundStyle(isEditing ? AnyShapeStyle(.clear) : AnyShapeStyle(.primary))
+            .padding(.horizontal, 3)
+            .background(
+                isHovering && !isEditing
+                    ? AnyShapeStyle(.quaternary.opacity(0.6))
+                    : AnyShapeStyle(.clear),
+                in: RoundedRectangle(cornerRadius: 5)
+            )
+            .padding(.horizontal, -3)
+            .overlay(alignment: .leadingFirstTextBaseline) {
+                TextField("", text: $model.segmentDraft)
+                    .textFieldStyle(.plain)
                     .font(valueFont)
                     .monospacedDigit()
-                    .contentTransition(.numericText())
-                    .padding(.horizontal, 3)
-                    .padding(.vertical, 1)
-                    // A quiet hover highlight, so "this number is a control"
-                    // is discoverable.
-                    .background(
-                        isHovering
-                            ? AnyShapeStyle(.quaternary.opacity(0.6))
-                            : AnyShapeStyle(.clear),
-                        in: RoundedRectangle(cornerRadius: 5)
-                    )
-                    .padding(.horizontal, -3)
-                    .contentShape(Rectangle())
-                    .onHover { isHovering = $0 }
-                    .onTapGesture {
-                        model.segmentDraft = model.currentSegmentValue(segment)
-                        focus = field
+                    .fixedSize()
+                    .focused($focus, equals: field)
+                    .onSubmit {
+                        model.commitSegment(segment)
+                        focus = nil
                     }
-                    .help("Click to type a new value")
-                    .accessibilityLabel("\(name) \(display)")
-                    .accessibilityAddTraits([.isButton, .updatesFrequently])
-                    .accessibilityHint("Click to type a new value.")
+                    .onExitCommand { focus = nil }
+                    .opacity(isEditing ? 1 : 0)
+                    .allowsHitTesting(isEditing)
+                    .accessibilityLabel("\(name), editing")
+                    .accessibilityHint("Press Return to jump, Escape to cancel.")
+                    .accessibilityHidden(!isEditing)
             }
-        }
-        // Keyboard traversal can land here without a click or a menu command;
-        // the draft still has to start from where the music is.
-        .onChange(of: focus) { previous, current in
-            if current == field, previous != field {
+            .contentShape(Rectangle())
+            .onHover { isHovering = $0 }
+            .onTapGesture {
+                guard !isEditing else { return }
                 model.segmentDraft = model.currentSegmentValue(segment)
+                focus = field
             }
-        }
+            .help("Click to type a new value")
+            .accessibilityLabel("\(name) \(display)")
+            .accessibilityAddTraits([.isButton, .updatesFrequently])
+            .accessibilityHint("Click to type a new value.")
+            // Keyboard traversal can land here without a click or a menu
+            // command; the draft still has to start from where the music is.
+            .onChange(of: focus) { previous, current in
+                if current == field, previous != field {
+                    model.segmentDraft = model.currentSegmentValue(segment)
+                }
+            }
     }
 }
 

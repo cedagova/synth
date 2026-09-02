@@ -25,6 +25,59 @@ final class MusicXMLScoreTests: XCTestCase {
         XCTAssertEqual(metadata.creditWords, ["Das Wohltemperierte Klavier"])
     }
 
+    /// A score with an empty header whose title and composer exist only as
+    /// page text engraved over the first measure — the BWV 1046 shape. The
+    /// big bold words are the title, the first right-justified words the
+    /// composer; a tempo mark and an arranger line must fool neither.
+    func testReadsTitleAndComposerFromFirstMeasureHeadingWords() throws {
+        let xml = Data("""
+            <?xml version="1.0" encoding="UTF-8"?>
+            <score-partwise version="3.1">
+              <part-list><score-part id="P1"><part-name>Violino</part-name></score-part></part-list>
+              <part id="P1">
+                <measure number="1">
+                  <direction placement="above">
+                    <direction-type>
+                      <words font-size="17" font-weight="bold" justify="center">Brandenburgisches Konzert Nr. 1.</words>
+                    </direction-type>
+                  </direction>
+                  <direction placement="above">
+                    <direction-type>
+                      <words font-size="10" justify="right">Johann Sebastian Bach</words>
+                    </direction-type>
+                  </direction>
+                  <direction placement="above">
+                    <direction-type>
+                      <words font-size="10" justify="right">Klavierauszug: Someone Else</words>
+                    </direction-type>
+                  </direction>
+                  <direction placement="above">
+                    <direction-type><words>Allegro.</words></direction-type>
+                  </direction>
+                </measure>
+                <measure number="2">
+                  <direction placement="above">
+                    <direction-type>
+                      <words font-size="17" font-weight="bold">Not The Title</words>
+                    </direction-type>
+                  </direction>
+                </measure>
+              </part>
+            </score-partwise>
+            """.utf8)
+
+        let metadata = try MusicXMLScore.metadata(from: xml)
+
+        XCTAssertNil(metadata.workTitle)
+        XCTAssertNil(metadata.composer)
+        XCTAssertEqual(metadata.headingTitle, "Brandenburgisches Konzert Nr. 1.")
+        XCTAssertEqual(metadata.headingComposer, "Johann Sebastian Bach")
+        XCTAssertFalse(
+            metadata.headingWords.contains { $0.text == "Not The Title" },
+            "only the first measure's words are a heading"
+        )
+    }
+
     func testAcceptsATimewiseScore() throws {
         let xml = Data("""
             <?xml version="1.0" encoding="UTF-8"?>

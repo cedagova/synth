@@ -107,7 +107,7 @@ public struct MusicXMLImporter: Sendable {
         let record = PieceRecord(
             id: pieceID,
             title: Self.title(from: metadata, sourceFileName: fileName),
-            composer: metadata.composer,
+            composer: metadata.composer ?? metadata.headingComposer,
             workTitle: metadata.workTitle,
             workNumber: metadata.workNumber,
             movementTitle: metadata.movementTitle,
@@ -352,10 +352,16 @@ public struct MusicXMLImporter: Sendable {
     /// The owner-facing title, with the fallbacks the issue calls for.
     ///
     /// Order: the work title, then the movement title, then the first credit
-    /// line an engraver put on the page, then the source file's own name. A
-    /// piece is never nameless and a missing field never fails an import.
+    /// line an engraver put on the page, then the big or bold words engraved
+    /// over the first measure, then the source file's own name. A piece is
+    /// never nameless and a missing field never fails an import.
     static func title(from metadata: MusicXMLScoreMetadata, sourceFileName: String) -> String {
-        let candidates = [metadata.workTitle, metadata.movementTitle, metadata.creditWords.first]
+        let candidates = [
+            metadata.workTitle,
+            metadata.movementTitle,
+            metadata.creditWords.first,
+            metadata.headingTitle
+        ]
         if let declared = candidates.compactMap({ $0 }).first(where: { !$0.isEmpty }) {
             return declared
         }

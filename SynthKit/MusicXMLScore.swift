@@ -19,6 +19,27 @@ struct MusicXMLScoreMetadata: Equatable, Sendable {
     /// only human-readable title here and leave `work-title` empty.
     var creditWords: [String] = []
 
+    /// `<direction><words>` of the first measure, with the engraving
+    /// attributes that say what each one is. Some scores carry their only
+    /// title and composer here, as page text over the first system.
+    var headingWords: [MusicXMLHeadingWord] = []
+
+    /// The engraved title, when the first measure's page text names one: the
+    /// words an engraver made big or bold. A tempo word ("Allegro") is
+    /// neither, so it does not qualify.
+    var headingTitle: String? {
+        headingWords
+            .filter { $0.isBold || ($0.fontSize ?? 0) >= 14 }
+            .max { ($0.fontSize ?? 0) < ($1.fontSize ?? 0) }?
+            .text
+    }
+
+    /// The engraved composer: the first right-justified words of the heading
+    /// that are not the title — where an engraver puts the author's name.
+    var headingComposer: String? {
+        headingWords.first { $0.justify == "right" && $0.text != headingTitle }?.text
+    }
+
     /// The MusicXML score roots this build accepts.
     static let acceptedRootElements: Set<String> = ["score-partwise", "score-timewise"]
 
@@ -26,6 +47,15 @@ struct MusicXMLScoreMetadata: Equatable, Sendable {
     /// other well-formed XML (or a MusicXML *opus*, which lists scores rather
     /// than being one).
     var isMusicXMLScore: Bool { Self.acceptedRootElements.contains(rootElement) }
+}
+
+/// One `<words>` element from the first measure's directions, with the
+/// engraving attributes that distinguish a page heading from a tempo mark.
+struct MusicXMLHeadingWord: Equatable, Sendable {
+    var text: String
+    var fontSize: Double?
+    var isBold: Bool
+    var justify: String?
 }
 
 /// Why a MusicXML document could not be read.
@@ -73,7 +103,8 @@ enum MusicXMLScore {
             movementTitle: scanner.movementTitle,
             movementNumber: scanner.movementNumber,
             composer: scanner.composer ?? scanner.untypedCreator,
-            creditWords: scanner.creditWords
+            creditWords: scanner.creditWords,
+            headingWords: scanner.headingWords
         )
     }
 }
@@ -91,6 +122,7 @@ private final class MusicXMLScanner: NSObject, XMLParserDelegate {
     private(set) var movementNumber: String?
     private(set) var composer: String?
     private(set) var creditWords: [String] = []
+    private(set) var headingWords: [MusicXMLHeadingWord] = []
 
     /// A type-less `<creator>`: the composer of last resort, resolved only
     /// after the whole document has been read so a typed composer appearing
@@ -107,9 +139,20 @@ private final class MusicXMLScanner: NSObject, XMLParserDelegate {
     /// `type` of the `creator` currently being read.
     private var creatorType: String?
 
+    /// How many `<measure>` elements have started. The page heading lives in
+    /// the first one; everything after streams past uncaptured.
+    private var measuresSeen = 0
+
+    /// Attributes of the `<words>` element being read, when it is one the
+    /// heading keeps.
+    private var pendingHeadingAttributes: [String: String]?
+
     /// How many credit-words to keep. A title fallback needs the first one;
     /// a couple more cost nothing and make the choice inspectable.
     private static let maximumCreditWords = 4
+
+    /// Enough for a title, a composer, an arranger and a few tempo marks.
+    private static let maximumHeadingWords = 8
 
     /// Paths, relative to the root element, whose text we capture.
     private static let capturedPaths: Set<[String]> = [
@@ -131,8 +174,24 @@ private final class MusicXMLScanner: NSObject, XMLParserDelegate {
         path.append(elementName)
         if rootElement == nil { rootElement = elementName }
 
+        if elementName == "measure" { measuresSeen += 1 }
+
         let relative = Array(path.dropFirst())
-        guard buffer == nil, Self.capturedPaths.contains(relative) else { return }
+        guard buffer == nil else { return }
+
+        // The first measure's direction words: the page text an engraver put
+        // over the opening system, where some scores keep their only title
+        // and composer.
+        if measuresSeen == 1,
+           headingWords.count < Self.maximumHeadingWords,
+           relative.suffix(3) == ["direction", "direction-type", "words"] {
+            buffer = ""
+            bufferDepth = path.count
+            pendingHeadingAttributes = attributeDict
+            return
+        }
+
+        guard Self.capturedPaths.contains(relative) else { return }
 
         buffer = ""
         bufferDepth = path.count
@@ -167,6 +226,20 @@ private final class MusicXMLScanner: NSObject, XMLParserDelegate {
 
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let relative = Array(path.dropFirst())
+
+        if let attributes = pendingHeadingAttributes {
+            pendingHeadingAttributes = nil
+            if !value.isEmpty {
+                headingWords.append(MusicXMLHeadingWord(
+                    text: value,
+                    fontSize: attributes["font-size"].flatMap(Double.init),
+                    isBold: attributes["font-weight"]?.lowercased() == "bold",
+                    justify: attributes["justify"]?.lowercased()
+                ))
+            }
+            return
+        }
+
         guard !value.isEmpty else {
             creatorType = nil
             return

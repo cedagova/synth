@@ -243,6 +243,50 @@ final class LibraryModel {
         }
     }
 
+    // MARK: - Editing piece info
+
+    /// The piece whose title and composer are being edited, or nil.
+    private(set) var editingInfoPiece: PieceRecord?
+    var infoTitleDraft = ""
+    var infoComposerDraft = ""
+
+    func beginInfoEdit(of piece: PieceRecord) {
+        editingInfoPiece = piece
+        infoTitleDraft = piece.title
+        infoComposerDraft = piece.composer ?? ""
+    }
+
+    func cancelInfoEdit() {
+        editingInfoPiece = nil
+    }
+
+    /// Writes the edited names. The owner's edit is ground truth: extraction
+    /// only ever provided the starting value.
+    func commitInfoEdit() async {
+        guard let piece = editingInfoPiece else { return }
+        let title = infoTitleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return }
+        let composerText = infoComposerDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        do {
+            try store.pieces.updateNames(
+                pieceID: piece.id,
+                title: title,
+                composer: composerText.isEmpty ? nil : composerText
+            )
+            editingInfoPiece = nil
+            await reload()
+            selection = piece.id
+            statusMessage = "Saved “\(title)”."
+        } catch {
+            alert = LibraryAlert(
+                title: "Could not save the new name",
+                message: (error as NSError).localizedDescription,
+                recovery: "Your library is unchanged."
+            )
+        }
+    }
+
     // MARK: - Removing
 
     /// Asks for confirmation. REQ-003: removal is never one keystroke.

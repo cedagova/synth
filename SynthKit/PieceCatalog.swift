@@ -111,6 +111,18 @@ public final class PieceCatalog: PieceCatalogWriting, PieceCatalogDeleting, @unc
         )
     }
 
+    /// Replaces the owner-facing title and composer of one piece.
+    ///
+    /// The owner's edit is ground truth over anything the importer derived:
+    /// re-importing the same content is a duplicate and never rewrites the
+    /// record, so an edited name can only be changed by editing it again.
+    public func updateNames(pieceID: String, title: String, composer: String?) throws {
+        try database.execute(
+            "UPDATE \(Self.tableName) SET title = ?, composer = ? WHERE id = ?;",
+            [.text(title), Self.optional(composer), .text(pieceID)]
+        )
+    }
+
     public func delete(pieceID: String) throws {
         try database.execute(
             "DELETE FROM \(Self.tableName) WHERE id = ?;",

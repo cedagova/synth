@@ -62,6 +62,9 @@ struct LibraryScreen: View {
                 )
             }
         }
+        .sheet(isPresented: infoEditBinding) {
+            PieceInfoSheet(model: model)
+        }
         .confirmationDialog(
             model.pendingRemoval.map { "Remove “\($0.title)” from your library?" } ?? "",
             isPresented: removalConfirmationBinding,
@@ -124,6 +127,9 @@ struct LibraryScreen: View {
                     model.selection = piece.id
                     open(piece)
                 }
+                Button("Edit Info…") {
+                    model.beginInfoEdit(of: piece)
+                }
                 Divider()
                 Button("Remove Piece…", role: .destructive) {
                     model.requestRemoval(of: piece)
@@ -146,6 +152,13 @@ struct LibraryScreen: View {
     private func piece(for ids: Set<PieceRecord.ID>) -> PieceRecord? {
         guard let id = ids.first else { return nil }
         return model.visiblePieces.first { $0.id == id }
+    }
+
+    private var infoEditBinding: Binding<Bool> {
+        Binding(
+            get: { model.editingInfoPiece != nil },
+            set: { if !$0 { model.cancelInfoEdit() } }
+        )
     }
 
     private var removalConfirmationBinding: Binding<Bool> {
@@ -183,6 +196,42 @@ struct LibraryScreen: View {
             }
         }
         return types.isEmpty ? [.item] : types
+    }
+}
+
+/// The owner's names for a piece: title and composer, edited in place and
+/// stored as ground truth over whatever the importer derived from the file.
+private struct PieceInfoSheet: View {
+    @Bindable var model: LibraryModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Edit Info")
+                .font(.headline)
+
+            Form {
+                TextField("Title", text: $model.infoTitleDraft)
+                    .accessibilityLabel("Piece title")
+                TextField("Composer", text: $model.infoComposerDraft)
+                    .accessibilityLabel("Composer")
+                    .accessibilityHint("Leave empty for an unknown composer.")
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") { model.cancelInfoEdit() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Save") { Task { await model.commitInfoEdit() } }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(
+                        model.infoTitleDraft
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                            .isEmpty
+                    )
+            }
+        }
+        .padding(20)
+        .frame(width: 380)
     }
 }
 

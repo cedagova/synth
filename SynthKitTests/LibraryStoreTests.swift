@@ -78,6 +78,34 @@ final class LibraryStoreTests: XCTestCase {
         XCTAssertEqual(try store.storedContentFileCount(), 2)
     }
 
+    /// The owner can rename a piece and its composer; the edit is stored and
+    /// survives a relaunch, and re-importing the same file (a duplicate)
+    /// never claws the derived names back.
+    func testEditedNamesPersistAndSurviveAReimport() throws {
+        let store = try LibraryStore.open(container: container, appVersion: "1.0 (1)")
+        let source = sandboxRoot.appending(path: "prelude.musicxml")
+        try MusicXMLFixtures.score(workTitle: "Derived Title", composer: "Derived Composer")
+            .write(to: source)
+        let piece = try store.makeImporter().importPiece(from: source).piece
+
+        try store.pieces.updateNames(
+            pieceID: piece.id, title: "My Title", composer: "My Composer"
+        )
+        let reimported = try store.makeImporter().importPiece(from: source)
+        XCTAssertTrue(reimported.isDuplicate)
+        store.close()
+
+        let reopened = try LibraryStore.open(container: container, appVersion: "1.0 (1)")
+        defer { reopened.close() }
+        let stored = try XCTUnwrap(try reopened.pieces.piece(withID: piece.id))
+        XCTAssertEqual(stored.title, "My Title")
+        XCTAssertEqual(stored.composer, "My Composer")
+
+        // Clearing the composer stores an absence, not an empty string.
+        try reopened.pieces.updateNames(pieceID: piece.id, title: "My Title", composer: nil)
+        XCTAssertNil(try XCTUnwrap(try reopened.pieces.piece(withID: piece.id)).composer)
+    }
+
     func testWriteAheadLoggingIsEnabled() throws {
         let store = try LibraryStore.open(container: container, appVersion: "1.0 (1)")
         defer { store.close() }

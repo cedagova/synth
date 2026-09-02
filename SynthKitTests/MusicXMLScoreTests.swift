@@ -63,7 +63,16 @@ final class MusicXMLScoreTests: XCTestCase {
                 <measure number="2">
                   <direction placement="above">
                     <direction-type>
-                      <words font-size="17" font-weight="bold">Not The Title</words>
+                      <words font-size="17" font-weight="bold">Same Size, Later</words>
+                    </direction-type>
+                  </direction>
+                </measure>
+                <measure number="3"/><measure number="4"/><measure number="5"/>
+                <measure number="6"/><measure number="7"/><measure number="8"/>
+                <measure number="9">
+                  <direction placement="above">
+                    <direction-type>
+                      <words font-size="20" font-weight="bold">Past The Window</words>
                     </direction-type>
                   </direction>
                 </measure>
@@ -80,9 +89,46 @@ final class MusicXMLScoreTests: XCTestCase {
         XCTAssertEqual(metadata.headingTitle, "Brandenburgisches Konzert Nr. 1.")
         XCTAssertEqual(metadata.headingComposer, "Johann Sebastian Bach")
         XCTAssertFalse(
-            metadata.headingWords.contains { $0.text == "Not The Title" },
-            "only the first measure's words are a heading"
+            metadata.headingWords.contains { $0.text == "Past The Window" },
+            "words beyond the opening measures are not a heading"
         )
+    }
+
+    /// The canon files anchor their page text to later opening measures —
+    /// title over measure 3, composer block over measure 5 — with an empty
+    /// header everywhere else. The window has to reach them.
+    func testReadsAHeadingAnchoredToLaterOpeningMeasures() throws {
+        let xml = Data("""
+            <?xml version="1.0" encoding="UTF-8"?>
+            <score-partwise version="3.1">
+              <part-list><score-part id="P1"><part-name/></score-part></part-list>
+              <part id="P1">
+                <measure number="1"/>
+                <measure number="2"/>
+                <measure number="3">
+                  <direction placement="above">
+                    <direction-type>
+                      <words font-size="17" font-weight="bold" justify="center">Kanon zu 4 Stimmen, in a-Moll.</words>
+                    </direction-type>
+                  </direction>
+                </measure>
+                <measure number="4"/>
+                <measure number="5">
+                  <direction placement="above">
+                    <direction-type>
+                      <words font-size="10" justify="right">Johann Sebastian Bach
+            BWV 1073</words>
+                    </direction-type>
+                  </direction>
+                </measure>
+              </part>
+            </score-partwise>
+            """.utf8)
+
+        let metadata = try MusicXMLScore.metadata(from: xml)
+
+        XCTAssertEqual(metadata.headingTitle, "Kanon zu 4 Stimmen, in a-Moll.")
+        XCTAssertEqual(metadata.headingComposer, "Johann Sebastian Bach")
     }
 
     func testAcceptsATimewiseScore() throws {

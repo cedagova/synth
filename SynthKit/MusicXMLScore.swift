@@ -31,19 +31,19 @@ struct MusicXMLScoreMetadata: Equatable, Sendable {
         creditEntries.first { $0.fontSize == nil || $0.isBold || ($0.fontSize ?? 0) >= 14 }?.text
     }
 
-    /// `<direction><words>` of the first measure, with the engraving
-    /// attributes that say what each one is. Some scores carry their only
-    /// title and composer here, as page text over the first system.
+    /// `<direction><words>` of the first part's opening measures, with the
+    /// engraving attributes that say what each one is. Some scores carry
+    /// their only title and composer here, as page text over the first
+    /// system — anchored to whichever measure happens to sit under it.
     var headingWords: [MusicXMLStyledWords] = []
 
-    /// The engraved title, when the first measure's page text names one: the
-    /// words an engraver made big or bold. A tempo word ("Allegro") is
-    /// neither, so it does not qualify.
+    /// The engraved title, when the opening measures' page text names one:
+    /// the words an engraver made big or bold. A tempo word ("Allegro") is
+    /// neither, so it does not qualify. Ties on size go to the earliest.
     var headingTitle: String? {
-        headingWords
-            .filter { $0.isBold || ($0.fontSize ?? 0) >= 14 }
-            .max { ($0.fontSize ?? 0) < ($1.fontSize ?? 0) }?
-            .text
+        let candidates = headingWords.filter { $0.isBold || ($0.fontSize ?? 0) >= 14 }
+        guard let best = candidates.map({ $0.fontSize ?? 0 }).max() else { return nil }
+        return candidates.first { ($0.fontSize ?? 0) == best }?.text
     }
 
     /// The engraved composer: the first right-justified words of the heading
@@ -159,9 +159,12 @@ private final class MusicXMLScanner: NSObject, XMLParserDelegate {
     /// `type` of the `creator` currently being read.
     private var creatorType: String?
 
-    /// How many `<measure>` elements have started. The page heading lives in
-    /// the first one; everything after streams past uncaptured.
+    /// How many `<measure>` and `<part>` elements have started. Page-heading
+    /// text is anchored to whichever opening measure sits under it, so the
+    /// window is the first part's first few measures; everything after
+    /// streams past uncaptured.
     private var measuresSeen = 0
+    private var partsSeen = 0
 
     /// Attributes of the styled words element being read, and which list it
     /// belongs to.
@@ -174,6 +177,18 @@ private final class MusicXMLScanner: NSObject, XMLParserDelegate {
 
     /// Enough for a title, a composer, an arranger and a few tempo marks.
     private static let maximumHeadingWords = 8
+
+    /// How many opening measures may carry heading text. Engravers anchor a
+    /// page heading to the measure under it, which is not always the first.
+    private static let headingMeasureWindow = 8
+
+    /// True while `<words>` still count as page heading. A timewise score
+    /// nests a `<part>` inside every measure, so the part guard applies only
+    /// to partwise documents.
+    private var headingWindowIsOpen: Bool {
+        guard (1...Self.headingMeasureWindow).contains(measuresSeen) else { return false }
+        return rootElement == "score-timewise" || partsSeen <= 1
+    }
 
     /// Paths, relative to the root element, whose text we capture.
     private static let capturedPaths: Set<[String]> = [
@@ -195,14 +210,15 @@ private final class MusicXMLScanner: NSObject, XMLParserDelegate {
         if rootElement == nil { rootElement = elementName }
 
         if elementName == "measure" { measuresSeen += 1 }
+        if elementName == "part" { partsSeen += 1 }
 
         let relative = Array(path.dropFirst())
         guard buffer == nil else { return }
 
-        // The first measure's direction words: the page text an engraver put
-        // over the opening system, where some scores keep their only title
+        // The opening measures' direction words: the page text an engraver
+        // put over the first system, where some scores keep their only title
         // and composer.
-        if measuresSeen == 1,
+        if headingWindowIsOpen,
            headingWords.count < Self.maximumHeadingWords,
            relative.suffix(3) == ["direction", "direction-type", "words"] {
             buffer = ""

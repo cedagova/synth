@@ -289,6 +289,21 @@ final class LibraryQueryTests: XCTestCase {
         XCTAssertEqual(piece(title: "X").subtitleDescription, "Unknown composer")
     }
 
+    /// The title is usually derived from the work or movement title, so the
+    /// subtitle (and the spoken sentence) must not say the same thing twice.
+    func testTheSubtitleDoesNotRepeatTheTitle() {
+        let record = piece(title: "Fugue in C minor", composer: "J. S. Bach", workTitle: "Fugue in C minor")
+        XCTAssertEqual(record.subtitleDescription, "J. S. Bach")
+        XCTAssertEqual(record.accessibilityDescription, "Fugue in C minor, composer J. S. Bach")
+
+        // A work line that adds something beyond the title still shows.
+        let numbered = piece(
+            title: "Fugue in C minor", composer: "J. S. Bach",
+            workTitle: "Fugue in C minor", workNumber: "BWV 847"
+        )
+        XCTAssertEqual(numbered.subtitleDescription, "J. S. Bach — Fugue in C minor (BWV 847)")
+    }
+
     // MARK: - Sort control wording
 
     func testSortDirectionWordingSuitsTheField() {

@@ -47,23 +47,31 @@ extension PieceRecord {
     }
 
     /// The secondary line under the title: composer, then work, then movement.
+    ///
+    /// The title itself is usually derived from one of these fields, so any
+    /// segment that would just repeat the line above is dropped — "Fugue in C
+    /// minor / J. S. Bach", not "… / J. S. Bach — Fugue in C minor". A work
+    /// that adds something (a catalogue number, say) still shows.
     public var subtitleDescription: String {
         [composerDescription, workDescription, movementDescription]
             .compactMap { $0 }
+            .filter { $0 != title }
             .joined(separator: " — ")
     }
 
     /// What VoiceOver speaks for this piece's row.
     ///
     /// Spelled out rather than punctuated so it is heard as a sentence:
-    /// "Prelude in C, composer Bach, movement 2. Andante".
+    /// "Prelude in C, composer Bach, movement 2. Andante". The same
+    /// repetition rule as the subtitle: a field the title already speaks is
+    /// not spoken twice.
     public var accessibilityDescription: String {
         var spoken = title
         spoken += ", composer \(composerDescription)"
-        if let work = workDescription {
+        if let work = workDescription, work != title {
             spoken += ", work \(work)"
         }
-        if let movement = movementDescription {
+        if let movement = movementDescription, movement != title {
             spoken += ", movement \(movement)"
         }
         return spoken

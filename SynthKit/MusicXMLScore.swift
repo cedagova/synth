@@ -15,14 +15,26 @@ struct MusicXMLScoreMetadata: Equatable, Sendable {
     var movementNumber: String?
     var composer: String?
 
-    /// `credit/credit-words` in document order. Engravers routinely put the
-    /// only human-readable title here and leave `work-title` empty.
-    var creditWords: [String] = []
+    /// `credit/credit-words` in document order, with engraving attributes.
+    /// Engravers routinely put the only human-readable title here and leave
+    /// `work-title` empty — but they also put page footers here, so the
+    /// attributes matter.
+    var creditEntries: [MusicXMLStyledWords] = []
+
+    /// The credit texts alone, in document order.
+    var creditWords: [String] { creditEntries.map(\.text) }
+
+    /// The first credit that plausibly is a title: unstyled (a bare credit is
+    /// how most exporters write the title), bold, or set large. A credit set
+    /// visibly small — an 8pt "BWV 1046 - S. #" page footer — is not one.
+    var creditTitle: String? {
+        creditEntries.first { $0.fontSize == nil || $0.isBold || ($0.fontSize ?? 0) >= 14 }?.text
+    }
 
     /// `<direction><words>` of the first measure, with the engraving
     /// attributes that say what each one is. Some scores carry their only
     /// title and composer here, as page text over the first system.
-    var headingWords: [MusicXMLHeadingWord] = []
+    var headingWords: [MusicXMLStyledWords] = []
 
     /// The engraved title, when the first measure's page text names one: the
     /// words an engraver made big or bold. A tempo word ("Allegro") is
@@ -36,8 +48,15 @@ struct MusicXMLScoreMetadata: Equatable, Sendable {
 
     /// The engraved composer: the first right-justified words of the heading
     /// that are not the title — where an engraver puts the author's name.
+    /// Only the first line of that block: engravers stack the composer over
+    /// the catalogue number and the arranger inside one element.
     var headingComposer: String? {
-        headingWords.first { $0.justify == "right" && $0.text != headingTitle }?.text
+        headingWords
+            .first { $0.justify == "right" && $0.text != headingTitle }?
+            .text
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { !$0.isEmpty }
     }
 
     /// The MusicXML score roots this build accepts.
@@ -49,9 +68,10 @@ struct MusicXMLScoreMetadata: Equatable, Sendable {
     var isMusicXMLScore: Bool { Self.acceptedRootElements.contains(rootElement) }
 }
 
-/// One `<words>` element from the first measure's directions, with the
-/// engraving attributes that distinguish a page heading from a tempo mark.
-struct MusicXMLHeadingWord: Equatable, Sendable {
+/// One piece of engraved text — a `<credit-words>` or a first-measure
+/// `<direction><words>` — with the attributes that distinguish a title from
+/// a tempo mark or a page footer.
+struct MusicXMLStyledWords: Equatable, Sendable {
     var text: String
     var fontSize: Double?
     var isBold: Bool
@@ -103,7 +123,7 @@ enum MusicXMLScore {
             movementTitle: scanner.movementTitle,
             movementNumber: scanner.movementNumber,
             composer: scanner.composer ?? scanner.untypedCreator,
-            creditWords: scanner.creditWords,
+            creditEntries: scanner.creditEntries,
             headingWords: scanner.headingWords
         )
     }
@@ -121,8 +141,8 @@ private final class MusicXMLScanner: NSObject, XMLParserDelegate {
     private(set) var movementTitle: String?
     private(set) var movementNumber: String?
     private(set) var composer: String?
-    private(set) var creditWords: [String] = []
-    private(set) var headingWords: [MusicXMLHeadingWord] = []
+    private(set) var creditEntries: [MusicXMLStyledWords] = []
+    private(set) var headingWords: [MusicXMLStyledWords] = []
 
     /// A type-less `<creator>`: the composer of last resort, resolved only
     /// after the whole document has been read so a typed composer appearing
@@ -143,9 +163,10 @@ private final class MusicXMLScanner: NSObject, XMLParserDelegate {
     /// the first one; everything after streams past uncaptured.
     private var measuresSeen = 0
 
-    /// Attributes of the `<words>` element being read, when it is one the
-    /// heading keeps.
-    private var pendingHeadingAttributes: [String: String]?
+    /// Attributes of the styled words element being read, and which list it
+    /// belongs to.
+    private var pendingWordsAttributes: [String: String]?
+    private var pendingWordsAreCredit = false
 
     /// How many credit-words to keep. A title fallback needs the first one;
     /// a couple more cost nothing and make the choice inspectable.
@@ -160,8 +181,7 @@ private final class MusicXMLScanner: NSObject, XMLParserDelegate {
         ["work", "work-number"],
         ["movement-title"],
         ["movement-number"],
-        ["identification", "creator"],
-        ["credit", "credit-words"]
+        ["identification", "creator"]
     ]
 
     func parser(
@@ -187,7 +207,18 @@ private final class MusicXMLScanner: NSObject, XMLParserDelegate {
            relative.suffix(3) == ["direction", "direction-type", "words"] {
             buffer = ""
             bufferDepth = path.count
-            pendingHeadingAttributes = attributeDict
+            pendingWordsAttributes = attributeDict
+            pendingWordsAreCredit = false
+            return
+        }
+
+        // Credits keep their attributes too: an 8pt page footer and a title
+        // both live in credit-words, and only the styling tells them apart.
+        if relative == ["credit", "credit-words"], creditEntries.count < Self.maximumCreditWords {
+            buffer = ""
+            bufferDepth = path.count
+            pendingWordsAttributes = attributeDict
+            pendingWordsAreCredit = true
             return
         }
 
@@ -227,15 +258,20 @@ private final class MusicXMLScanner: NSObject, XMLParserDelegate {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let relative = Array(path.dropFirst())
 
-        if let attributes = pendingHeadingAttributes {
-            pendingHeadingAttributes = nil
+        if let attributes = pendingWordsAttributes {
+            pendingWordsAttributes = nil
             if !value.isEmpty {
-                headingWords.append(MusicXMLHeadingWord(
+                let words = MusicXMLStyledWords(
                     text: value,
                     fontSize: attributes["font-size"].flatMap(Double.init),
                     isBold: attributes["font-weight"]?.lowercased() == "bold",
                     justify: attributes["justify"]?.lowercased()
-                ))
+                )
+                if pendingWordsAreCredit {
+                    creditEntries.append(words)
+                } else {
+                    headingWords.append(words)
+                }
             }
             return
         }
@@ -261,10 +297,6 @@ private final class MusicXMLScanner: NSObject, XMLParserDelegate {
                 untypedCreator = untypedCreator ?? value
             }
             creatorType = nil
-        case ["credit", "credit-words"]:
-            if creditWords.count < Self.maximumCreditWords {
-                creditWords.append(value)
-            }
         default:
             break
         }

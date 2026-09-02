@@ -33,6 +33,9 @@ final class MusicXMLScoreTests: XCTestCase {
         let xml = Data("""
             <?xml version="1.0" encoding="UTF-8"?>
             <score-partwise version="3.1">
+              <credit page="1">
+                <credit-words font-size="8" justify="center">BWV 1046 - S. #</credit-words>
+              </credit>
               <part-list><score-part id="P1"><part-name>Violino</part-name></score-part></part-list>
               <part id="P1">
                 <measure number="1">
@@ -43,7 +46,9 @@ final class MusicXMLScoreTests: XCTestCase {
                   </direction>
                   <direction placement="above">
                     <direction-type>
-                      <words font-size="10" justify="right">Johann Sebastian Bach</words>
+                      <words font-size="10" justify="right">Johann Sebastian Bach
+            BWV 1046
+            Continuo-Aussetzung: A. Arranger</words>
                     </direction-type>
                   </direction>
                   <direction placement="above">
@@ -70,6 +75,8 @@ final class MusicXMLScoreTests: XCTestCase {
 
         XCTAssertNil(metadata.workTitle)
         XCTAssertNil(metadata.composer)
+        XCTAssertEqual(metadata.creditWords, ["BWV 1046 - S. #"])
+        XCTAssertNil(metadata.creditTitle, "an 8pt page footer is not a title")
         XCTAssertEqual(metadata.headingTitle, "Brandenburgisches Konzert Nr. 1.")
         XCTAssertEqual(metadata.headingComposer, "Johann Sebastian Bach")
         XCTAssertFalse(

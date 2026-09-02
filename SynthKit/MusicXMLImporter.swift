@@ -352,14 +352,14 @@ public struct MusicXMLImporter: Sendable {
     /// The owner-facing title, with the fallbacks the issue calls for.
     ///
     /// Order: the work title, then the movement title, then the first credit
-    /// line an engraver put on the page, then the big or bold words engraved
-    /// over the first measure, then the source file's own name. A piece is
-    /// never nameless and a missing field never fails an import.
+    /// that plausibly is a title, then the big or bold words engraved over
+    /// the first measure, then the source file's own name. A piece is never
+    /// nameless and a missing field never fails an import.
     static func title(from metadata: MusicXMLScoreMetadata, sourceFileName: String) -> String {
         let candidates = [
             metadata.workTitle,
             metadata.movementTitle,
-            metadata.creditWords.first,
+            metadata.creditTitle,
             metadata.headingTitle
         ]
         if let declared = candidates.compactMap({ $0 }).first(where: { !$0.isEmpty }) {

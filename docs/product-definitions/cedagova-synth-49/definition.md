@@ -93,8 +93,11 @@ Four independently meaningful product outcomes (see graph):
   piece (the 12-line BWV 1046) into the existing overload-pause behavior on
   the supported hardware baseline; if a piece does overload, the existing
   visible pause-with-reason behavior remains the failure mode.
-- **Off states:** disabling expression or mastering returns to bit-exact
-  current-style rendering so trust in determinism is inspectable.
+- **Off states:** with expression off, staging neutral, tuning at its
+  default, and mastering off, rendering uses only written notation plus
+  uniform humanization — no phrase dynamics, room, or master processing —
+  and remains deterministic per REQ-003. No bit-comparison against
+  pre-delivery builds is promised.
 
 ## Requirements and acceptance
 
@@ -109,16 +112,21 @@ Four independently meaningful product outcomes (see graph):
 - **REQ-003 (deterministic expression):** with expression on, dynamics vary
   over phrases and cadences beyond written dynamics; two renders of the
   same piece+preset are byte-identical; export equals live playback.
-- **REQ-004 (honest bypass):** expression off + staging neutral + mastering
-  off reproduces the pre-feature rendering character (uniform jitter only).
+- **REQ-004 (honest bypass):** expression off + staging neutral + tuning
+  at default + mastering off renders with only written notation plus
+  uniform humanization — audibly free of phrase dynamics, room, and master
+  processing — and deterministically (REQ-003). No bit-comparison against
+  pre-delivery builds is promised.
 - **REQ-005 (master headroom):** no export clips (true peak ≤ −1 dBFS) and
   quiet pieces are not exported inaudibly low; two different pieces export
   at comparable perceived loudness.
 - **REQ-006 (tuning):** a preset can select equal temperament (default), at
   least one well temperament, and A=440 vs A=415; the choice audibly
   changes intonation color, is stored in the preset, and applies to export.
-- **REQ-007 (performance):** the reference 12-line piece plays start to end
-  on the baseline machine without an overload pause with all features on.
+- **REQ-007 (performance):** the reference piece — the owner's 12-line
+  Brandenburg Concerto No. 1 import (BWV 1046, MusicXML content SHA-256
+  prefix `8c3c7097412b5cfc`) — plays start to end on the baseline machine
+  without an overload pause with all features on.
 
 ## Accessibility and content
 
@@ -166,7 +174,9 @@ Pinned at `cedagova/synth@8d77ddc`:
 - Expression today is uniform seeded jitter plus written notation:
   `PerformanceHumanization`, `SeededJitter`, `PerformanceOrnaments`,
   articulation velocity deltas in `PerformanceLineRealization`. The prior
-  definition's D4 limited humanization to exactly on/off + amount.
+  definition's D4 scoped the *product surface* to on/off + amount and
+  excluded deep interpretation modelling; the implemented behavior is the
+  narrower uniform jitter.
 - Master bus is gain-only (`synth_engine_master_gain`); no EQ, dynamics, or
   loudness management; export is byte-identical to live playback
   (`OfflineRenderTests`, REQ-026).
@@ -223,6 +233,16 @@ External practice (retrieved 2026-09-05):
 - Loudness comparability target (REQ-005) tolerates a range; the planner
   picks a concrete measure (e.g. integrated loudness window) during
   planning.
+
+## Requirement-to-outcome mapping
+
+| Requirement | Outcome |
+| --- | --- |
+| REQ-001, REQ-002 | OUT001 |
+| REQ-003, REQ-004 | OUT002 (REQ-004's off-state recipe also binds OUT001/OUT003/OUT004 bypass behavior) |
+| REQ-005 | OUT003 |
+| REQ-006 | OUT004 |
+| REQ-007 | Cross-cutting guardrail across OUT001–OUT004 |
 
 ## Product issue graph
 

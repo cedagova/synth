@@ -3,7 +3,7 @@
 - Product definition issue: https://github.com/cedagova/synth/issues/49
 - Product definition PR: https://github.com/cedagova/synth/pull/50
 - Requirements brief: Pending
-- Status: Discovering
+- Status: Draft ready
 - Classification: DECOMPOSE
 - Definition lead: Claude (product-definition-lead)
 - Started: 2026-09-05
@@ -71,9 +71,9 @@ Four independently meaningful product outcomes (see graph):
 - **First open of a new piece:** the auto-created preset arrives staged
   (OUT001) and plays with expression (OUT002) and mastering (OUT003) without any
   owner action. The owner hears a produced rendition on the first Play.
-- **Existing presets:** never changed silently. The owner's saved mixes are
-  their own; an explicit, discoverable action upgrades an old preset to the
-  staged defaults if wanted.
+- **Existing presets:** no migration promise. The app is pre-release and
+  the owner has declared a clean slate acceptable: new defaults may apply
+  to all presets, and no upgrade affordance is required.
 - **Override flow:** every staged value (pan, depth/room, level) remains an
   ordinary per-line mixer value — visible, editable, and saved in the
   preset. Expression and tuning are preset-level settings alongside
@@ -103,8 +103,9 @@ Four independently meaningful product outcomes (see graph):
   *Acceptance:* open a new ≥4-line piece; lines are not all centred; muting
   the room audibly dries the sound; the values show in the mixer.
 - **REQ-P2 (preset ownership):** staging values live in the preset;
-  editing and saving behaves exactly like today's volume/pan edits, and
-  existing presets are not modified without explicit owner action.
+  editing and saving behaves exactly like today's volume/pan edits. No
+  compatibility or migration behavior is required for presets saved before
+  delivery (owner decision, 2026-09-05).
 - **REQ-P3 (deterministic expression):** with expression on, dynamics vary
   over phrases and cadences beyond written dynamics; two renders of the
   same piece+preset are byte-identical; export equals live playback.
@@ -138,8 +139,7 @@ with the app's existing open-license policy for bundled assets.
   vs. the delivered outcome, chooses the new rendition for listening — and
   keeps expression/staging on for their library.
 - **Guardrails:** determinism (REQ-P3) and export-equals-playback are never
-  traded away; no silent rewriting of stored presets; performance headroom
-  per REQ-P7; bypass honesty per REQ-P4.
+  traded away; performance headroom per REQ-P7; bypass honesty per REQ-P4.
 
 ## Constraints and non-goals
 
@@ -212,9 +212,9 @@ External practice (retrieved 2026-09-05):
 
 | Date | Decision | Rationale | Affects |
 | --- | --- | --- | --- |
-| PRODUCT-TODO | D4 revision: allow deterministic score-derived expression (phrase dynamics, cadence timing, articulation defaults, line balance) beyond on/off+amount humanization? | The prior definition's D4 deliberately excluded interpretive modelling; OUT002 requires relaxing it in a bounded, deterministic form. | OUT002, REQ-P3/P4 |
-| PRODUCT-TODO | Default posture for existing presets: untouched with explicit per-preset upgrade action (recommended), vs. auto-upgrade all. | Owner's saved mixes are ground truth; silent change violates preset trust. | OUT001, REQ-P2 |
-| PRODUCT-TODO | Include OUT004 (temperament/pitch) in this definition, or defer? | Smallest outcome; distinct authenticity value; deferrable without weakening OUT001–OUT003. | OUT004, REQ-P6 |
+| 2026-09-05 | **D4 revised**: deterministic, score-derived expression (phrase dynamics, cadence timing, articulation defaults, line balance) is allowed beyond on/off+amount humanization. AI/ML or per-performer emulation stays excluded. | The prior D4 excluded interpretive modelling; the owner explicitly relaxes it in this bounded, deterministic form because expression is the identified core gap. | OUT002, REQ-P3/P4 |
+| 2026-09-05 | **Clean slate for stored presets**: the app is pre-release; new defaults may apply to existing presets and no migration or upgrade affordance is required. | Owner: "irrelevant, app is in development, clean slate is fine." | OUT001, REQ-P2 |
+| 2026-09-05 | **OUT004 included**: historical tuning (≥1 well temperament, A=440/415) ships in this definition as an optional per-preset choice defaulting to equal temperament. | Smallest outcome, distinct authenticity value for the Bach repertoire. | OUT004, REQ-P6 |
 
 ## Remaining uncertainty
 

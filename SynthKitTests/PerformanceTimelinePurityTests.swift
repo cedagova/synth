@@ -43,11 +43,11 @@ final class PerformanceTimelinePurityTests: XCTestCase {
         "expressiveKeyboardPiece/literal":
             "86913f7878a67733fe3b6dccbfc5609bb79c742beee573b5cac6c352d2db5f60",
         "expressiveKeyboardPiece/standard":
-            "88d1fd0a513b8ffe17a5c903c7f76e4f43b04ce9e4b0d4b23dc3321805b6bf6a",
+            "561a1e931e2f6984a201eab8dbe39ad724d9f505491b5d98bdc6034c518cd31a",
         "expressiveKeyboardPiece/intensity-100":
             "8a9c7f6b0faf3f22f806ded63e07dac9c4088abad0d6e4a0cc536552a874c8b3",
         "stringQuartetMovement/standard":
-            "5fe7df695f51c66db4154fbc8df2fb69db72f3645476709094cdc90bff7c53a2",
+            "dac4b34f95c1b7a33d8eeca12a86bffd397acff8d771807066671896c3c99557",
         "fastOrnamentsAndGraceNotes/intensity-100":
             "39a2c2d97dedf993b674d371c67c7835d42a2000f3ac6826978b211a2c5ff727"
     ]

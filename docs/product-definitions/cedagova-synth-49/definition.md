@@ -2,8 +2,8 @@
 
 - Product definition issue: https://github.com/cedagova/synth/issues/49
 - Product definition PR: https://github.com/cedagova/synth/pull/50
-- Requirements brief: Pending
-- Status: Under review
+- Requirements brief: https://github.com/cedagova/synth/issues/49#issuecomment-5555006339
+- Status: Ready for planning
 - Classification: DECOMPOSE
 - Definition lead: Claude (product-definition-lead)
 - Started: 2026-09-05
@@ -256,5 +256,10 @@ External practice (retrieved 2026-09-05):
 
 ## Publication verification
 
-Pending: brief publication, graph verification, and exact-head review are
-recorded here at publication time.
+- Requirements Brief published: https://github.com/cedagova/synth/issues/49#issuecomment-5555006339
+- Product issue graph: root #49 with native sub-issues #51 (OUT001), #52
+  (OUT002), #53 (OUT003), #54 (OUT004); reconciled and verified via
+  `definition reconcile-graph` / `verify-graph`.
+- Exact-head owner approval and independent review: recorded on PR #50
+  against the final head.
+- Next action: `plan https://github.com/cedagova/synth/issues/49`

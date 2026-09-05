@@ -44,23 +44,23 @@ something they would keep.
 
 Four independently meaningful product outcomes (see graph):
 
-1. **OUT1 — Staged by default.** A piece opens sounding like an ensemble
+1. **OUT001 — Staged by default.** A piece opens sounding like an ensemble
    placed in a shared space: each line has a position (left–right seating),
    depth, and a common room, instead of dry centred mono lines. The staging
    is a starting point the owner can override per line, exactly like
    today's mixer values, and it is stored in the preset like any other
    custom value.
-2. **OUT2 — Expressive interpretation.** Deterministic, score-derived
+2. **OUT002 — Expressive interpretation.** Deterministic, score-derived
    expression beyond uniform jitter: phrases have dynamic shape, cadences
    and phrase ends breathe, lines articulate (legato/detaché) according to
    what is written, and the musically leading line reads slightly above the
    accompaniment. Same piece + same settings still always renders the same
    audio.
-3. **OUT3 — Produced master.** The summed output holds together like a
+3. **OUT003 — Produced master.** The summed output holds together like a
    produced track: consistent perceived loudness across pieces, gentle
    cohesion on the mix bus, guaranteed headroom (no clipping, no
    inaudible-quiet exports), identical between live playback and export.
-4. **OUT4 — Historical tuning color.** An optional per-preset tuning
+4. **OUT004 — Historical tuning color.** An optional per-preset tuning
    choice: equal temperament (default), at least one Bach-appropriate well
    temperament (e.g. Werckmeister III), and baroque pitch A=415 as a
    reference-pitch option — the key-color dimension listeners of baroque
@@ -69,7 +69,7 @@ Four independently meaningful product outcomes (see graph):
 ## Product behavior and flows
 
 - **First open of a new piece:** the auto-created preset arrives staged
-  (OUT1) and plays with expression (OUT2) and mastering (OUT3) without any
+  (OUT001) and plays with expression (OUT002) and mastering (OUT003) without any
   owner action. The owner hears a produced rendition on the first Play.
 - **Existing presets:** never changed silently. The owner's saved mixes are
   their own; an explicit, discoverable action upgrades an old preset to the
@@ -81,8 +81,8 @@ Four independently meaningful product outcomes (see graph):
   behavior humanization has today.
 - **Export flow:** unchanged surface; the exported file equals live
   playback byte-for-byte, including all of the above.
-- **A/B flow:** the owner can turn each of expression (OUT2) and mastering
-  (OUT3) off to hear the difference — an off state is honest (bypassed, not
+- **A/B flow:** the owner can turn each of expression (OUT002) and mastering
+  (OUT003) off to hear the difference — an off state is honest (bypassed, not
   merely reduced).
 
 ## States and failure behavior
@@ -212,9 +212,9 @@ External practice (retrieved 2026-09-05):
 
 | Date | Decision | Rationale | Affects |
 | --- | --- | --- | --- |
-| PRODUCT-TODO | D4 revision: allow deterministic score-derived expression (phrase dynamics, cadence timing, articulation defaults, line balance) beyond on/off+amount humanization? | The prior definition's D4 deliberately excluded interpretive modelling; OUT2 requires relaxing it in a bounded, deterministic form. | OUT2, REQ-P3/P4 |
-| PRODUCT-TODO | Default posture for existing presets: untouched with explicit per-preset upgrade action (recommended), vs. auto-upgrade all. | Owner's saved mixes are ground truth; silent change violates preset trust. | OUT1, REQ-P2 |
-| PRODUCT-TODO | Include OUT4 (temperament/pitch) in this definition, or defer? | Smallest outcome; distinct authenticity value; deferrable without weakening OUT1–OUT3. | OUT4, REQ-P6 |
+| PRODUCT-TODO | D4 revision: allow deterministic score-derived expression (phrase dynamics, cadence timing, articulation defaults, line balance) beyond on/off+amount humanization? | The prior definition's D4 deliberately excluded interpretive modelling; OUT002 requires relaxing it in a bounded, deterministic form. | OUT002, REQ-P3/P4 |
+| PRODUCT-TODO | Default posture for existing presets: untouched with explicit per-preset upgrade action (recommended), vs. auto-upgrade all. | Owner's saved mixes are ground truth; silent change violates preset trust. | OUT001, REQ-P2 |
+| PRODUCT-TODO | Include OUT004 (temperament/pitch) in this definition, or defer? | Smallest outcome; distinct authenticity value; deferrable without weakening OUT001–OUT003. | OUT004, REQ-P6 |
 
 ## Remaining uncertainty
 
@@ -229,10 +229,10 @@ External practice (retrieved 2026-09-05):
 | Key | Kind | Parent | Title | Issue |
 | --- | --- | --- | --- | --- |
 | ROOT | ROOT | None | Pro-grade playback sound — electronic Bach | https://github.com/cedagova/synth/issues/49 |
-| OUT1 | OUTCOME | ROOT | Staged by default: seating, depth, and a shared room | Pending |
-| OUT2 | OUTCOME | ROOT | Expressive interpretation: deterministic phrasing, articulation, and line balance | Pending |
-| OUT3 | OUTCOME | ROOT | Produced master: cohesion, loudness, and headroom | Pending |
-| OUT4 | OUTCOME | ROOT | Historical tuning color: well temperament and baroque pitch | Pending |
+| OUT001 | OUTCOME | ROOT | Staged by default: seating, depth, and a shared room | Pending |
+| OUT002 | OUTCOME | ROOT | Expressive interpretation: deterministic phrasing, articulation, and line balance | Pending |
+| OUT003 | OUTCOME | ROOT | Produced master: cohesion, loudness, and headroom | Pending |
+| OUT004 | OUTCOME | ROOT | Historical tuning color: well temperament and baroque pitch | Pending |
 
 ## Publication verification
 

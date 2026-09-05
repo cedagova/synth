@@ -3,7 +3,7 @@
 - Product definition issue: https://github.com/cedagova/synth/issues/49
 - Product definition PR: https://github.com/cedagova/synth/pull/50
 - Requirements brief: Pending
-- Status: Draft ready
+- Status: Under review
 - Classification: DECOMPOSE
 - Definition lead: Claude (product-definition-lead)
 - Started: 2026-09-05
@@ -249,10 +249,10 @@ External practice (retrieved 2026-09-05):
 | Key | Kind | Parent | Title | Issue |
 | --- | --- | --- | --- | --- |
 | ROOT | ROOT | None | Pro-grade playback sound — electronic Bach | https://github.com/cedagova/synth/issues/49 |
-| OUT001 | OUTCOME | ROOT | Staged by default: seating, depth, and a shared room | Pending |
-| OUT002 | OUTCOME | ROOT | Expressive interpretation: deterministic phrasing, articulation, and line balance | Pending |
-| OUT003 | OUTCOME | ROOT | Produced master: cohesion, loudness, and headroom | Pending |
-| OUT004 | OUTCOME | ROOT | Historical tuning color: well temperament and baroque pitch | Pending |
+| OUT001 | OUTCOME | ROOT | Staged by default: seating, depth, and a shared room | https://github.com/cedagova/synth/issues/51 |
+| OUT002 | OUTCOME | ROOT | Expressive interpretation: deterministic phrasing, articulation, and line balance | https://github.com/cedagova/synth/issues/52 |
+| OUT003 | OUTCOME | ROOT | Produced master: cohesion, loudness, and headroom | https://github.com/cedagova/synth/issues/53 |
+| OUT004 | OUTCOME | ROOT | Historical tuning color: well temperament and baroque pitch | https://github.com/cedagova/synth/issues/54 |
 
 ## Publication verification
 

@@ -98,26 +98,26 @@ Four independently meaningful product outcomes (see graph):
 
 ## Requirements and acceptance
 
-- **REQ-P1 (staging default):** a freshly imported multi-line piece plays
+- **REQ-001 (staging default):** a freshly imported multi-line piece plays
   with audibly distinct line positions and a shared room on first Play.
   *Acceptance:* open a new ≥4-line piece; lines are not all centred; muting
   the room audibly dries the sound; the values show in the mixer.
-- **REQ-P2 (preset ownership):** staging values live in the preset;
+- **REQ-002 (preset ownership):** staging values live in the preset;
   editing and saving behaves exactly like today's volume/pan edits. No
   compatibility or migration behavior is required for presets saved before
   delivery (owner decision, 2026-09-05).
-- **REQ-P3 (deterministic expression):** with expression on, dynamics vary
+- **REQ-003 (deterministic expression):** with expression on, dynamics vary
   over phrases and cadences beyond written dynamics; two renders of the
   same piece+preset are byte-identical; export equals live playback.
-- **REQ-P4 (honest bypass):** expression off + staging neutral + mastering
+- **REQ-004 (honest bypass):** expression off + staging neutral + mastering
   off reproduces the pre-feature rendering character (uniform jitter only).
-- **REQ-P5 (master headroom):** no export clips (true peak ≤ −1 dBFS) and
+- **REQ-005 (master headroom):** no export clips (true peak ≤ −1 dBFS) and
   quiet pieces are not exported inaudibly low; two different pieces export
   at comparable perceived loudness.
-- **REQ-P6 (tuning):** a preset can select equal temperament (default), at
+- **REQ-006 (tuning):** a preset can select equal temperament (default), at
   least one well temperament, and A=440 vs A=415; the choice audibly
   changes intonation color, is stored in the preset, and applies to export.
-- **REQ-P7 (performance):** the reference 12-line piece plays start to end
+- **REQ-007 (performance):** the reference 12-line piece plays start to end
   on the baseline machine without an overload pause with all features on.
 
 ## Accessibility and content
@@ -138,8 +138,8 @@ with the app's existing open-license policy for bundled assets.
 - **Success:** the owner, A/B-ing a familiar piece at the pinned baseline
   vs. the delivered outcome, chooses the new rendition for listening — and
   keeps expression/staging on for their library.
-- **Guardrails:** determinism (REQ-P3) and export-equals-playback are never
-  traded away; performance headroom per REQ-P7; bypass honesty per REQ-P4.
+- **Guardrails:** determinism (REQ-003) and export-equals-playback are never
+  traded away; performance headroom per REQ-007; bypass honesty per REQ-004.
 
 ## Constraints and non-goals
 
@@ -200,7 +200,7 @@ External practice (retrieved 2026-09-05):
 
 ## Assumptions
 
-- The owner's baseline machine is the current Apple Silicon Mac; REQ-P7 is
+- The owner's baseline machine is the current Apple Silicon Mac; REQ-007 is
   judged there.
 - The curated sampled libraries remain the intended top-quality sound
   source; this definition does not require new sample content.
@@ -212,15 +212,15 @@ External practice (retrieved 2026-09-05):
 
 | Date | Decision | Rationale | Affects |
 | --- | --- | --- | --- |
-| 2026-09-05 | **D4 revised**: deterministic, score-derived expression (phrase dynamics, cadence timing, articulation defaults, line balance) is allowed beyond on/off+amount humanization. AI/ML or per-performer emulation stays excluded. | The prior D4 excluded interpretive modelling; the owner explicitly relaxes it in this bounded, deterministic form because expression is the identified core gap. | OUT002, REQ-P3/P4 |
-| 2026-09-05 | **Clean slate for stored presets**: the app is pre-release; new defaults may apply to existing presets and no migration or upgrade affordance is required. | Owner: "irrelevant, app is in development, clean slate is fine." | OUT001, REQ-P2 |
-| 2026-09-05 | **OUT004 included**: historical tuning (≥1 well temperament, A=440/415) ships in this definition as an optional per-preset choice defaulting to equal temperament. | Smallest outcome, distinct authenticity value for the Bach repertoire. | OUT004, REQ-P6 |
+| 2026-09-05 | **D4 revised**: deterministic, score-derived expression (phrase dynamics, cadence timing, articulation defaults, line balance) is allowed beyond on/off+amount humanization. AI/ML or per-performer emulation stays excluded. | The prior D4 excluded interpretive modelling; the owner explicitly relaxes it in this bounded, deterministic form because expression is the identified core gap. | OUT002, REQ-003/P4 |
+| 2026-09-05 | **Clean slate for stored presets**: the app is pre-release; new defaults may apply to existing presets and no migration or upgrade affordance is required. | Owner: "irrelevant, app is in development, clean slate is fine." | OUT001, REQ-002 |
+| 2026-09-05 | **OUT004 included**: historical tuning (≥1 well temperament, A=440/415) ships in this definition as an optional per-preset choice defaulting to equal temperament. | Smallest outcome, distinct authenticity value for the Bach repertoire. | OUT004, REQ-006 |
 
 ## Remaining uncertainty
 
 - Exact staging layout taste (how wide, how wet) is a tuning matter for
-  implementation listening tests within REQ-P1's observable bounds.
-- Loudness comparability target (REQ-P5) tolerates a range; the planner
+  implementation listening tests within REQ-001's observable bounds.
+- Loudness comparability target (REQ-005) tolerates a range; the planner
   picks a concrete measure (e.g. integrated loudness window) during
   planning.
 
@@ -236,4 +236,5 @@ External practice (retrieved 2026-09-05):
 
 ## Publication verification
 
-PRODUCT-TODO: Record brief publication, graph verification, exact-head review, and next action.
+Pending: brief publication, graph verification, and exact-head review are
+recorded here at publication time.

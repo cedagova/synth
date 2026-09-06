@@ -140,10 +140,10 @@ closed before the next starts:
 
 | Wave | Increment | Leaves (ordered) |
 | --- | --- | --- |
-| 1 | 001 #51 staging | STG1 engine depth → STG2 staging defaults + preset/mixer |
-| 2 | 002 #52 expression | EXP1 phrase dynamics/breathing + setting/bypass → EXP2 articulation + line balance |
-| 3 | 003 #53 master | MST1 master stage + calibration |
-| 4 | 004 #54 tuning | TUN1 temperament + reference pitch |
+| 1 | 001 #51 staging | STG001 engine depth → STG002 staging defaults + preset/mixer |
+| 2 | 002 #52 expression | EXP001 phrase dynamics/breathing + setting/bypass → EXP002 articulation + line balance |
+| 3 | 003 #53 master | MST001 master stage + calibration |
+| 4 | 004 #54 tuning | TUN001 temperament + reference pitch |
 
 Rationale for the order: staging first because every later listening
 judgment happens on a staged mix; expression second as the core musical
@@ -202,23 +202,23 @@ increment can be reverted independently since later increments only consume
 | INC002 | GROUP | ROOT | cedagova/synth | Expressive interpretation: deterministic phrasing, articulation, and line balance | COLLECTOR | INC001 | https://github.com/cedagova/synth/issues/52 |
 | INC003 | GROUP | ROOT | cedagova/synth | Produced master: cohesion, loudness, and headroom | DIRECT | INC002 | https://github.com/cedagova/synth/issues/53 |
 | INC004 | GROUP | ROOT | cedagova/synth | Historical tuning color: well temperament and baroque pitch | DIRECT | INC003 | https://github.com/cedagova/synth/issues/54 |
-| STG1 | LEAF | INC001 | cedagova/synth | Per-line depth in the render core: near/far placement into the shared room | None | None | Pending |
-| STG2 | LEAF | INC001 | cedagova/synth | Staging defaults at preset creation: seating, sends, and mixer exposure | None | STG1 | Pending |
-| EXP1 | LEAF | INC002 | cedagova/synth | Deterministic phrase expression: shaped dynamics, cadence breathing, setting and bypass | None | None | Pending |
-| EXP2 | LEAF | INC002 | cedagova/synth | Articulation defaults and melody/accompaniment balance | None | EXP1 | Pending |
-| MST1 | LEAF | INC003 | cedagova/synth | Master stage: bus cohesion, true-peak ceiling, deterministic loudness calibration | None | None | Pending |
-| TUN1 | LEAF | INC004 | cedagova/synth | Temperament and reference pitch through both voice engines | None | None | Pending |
+| STG001 | LEAF | INC001 | cedagova/synth | Per-line depth in the render core: near/far placement into the shared room | None | None | Pending |
+| STG002 | LEAF | INC001 | cedagova/synth | Staging defaults at preset creation: seating, sends, and mixer exposure | None | STG001 | Pending |
+| EXP001 | LEAF | INC002 | cedagova/synth | Deterministic phrase expression: shaped dynamics, cadence breathing, setting and bypass | None | None | Pending |
+| EXP002 | LEAF | INC002 | cedagova/synth | Articulation defaults and melody/accompaniment balance | None | EXP001 | Pending |
+| MST001 | LEAF | INC003 | cedagova/synth | Master stage: bus cohesion, true-peak ceiling, deterministic loudness calibration | None | None | Pending |
+| TUN001 | LEAF | INC004 | cedagova/synth | Temperament and reference pitch through both voice engines | None | None | Pending |
 
 ## Acceptance coverage
 
 | Definition requirement | Covered by |
 | --- | --- |
-| REQ-001 staging default | STG1, STG2 |
-| REQ-002 preset ownership of staging | STG2 |
-| REQ-003 deterministic expression | EXP1, EXP2 |
-| REQ-004 honest bypass | EXP1 (recipe owner); composition verified in every increment's completion rule |
-| REQ-005 master headroom/loudness | MST1 |
-| REQ-006 tuning choice | TUN1 |
+| REQ-001 staging default | STG001, STG002 |
+| REQ-002 preset ownership of staging | STG002 |
+| REQ-003 deterministic expression | EXP001, EXP002 |
+| REQ-004 honest bypass | EXP001 (recipe owner); composition verified in every increment's completion rule |
+| REQ-005 master headroom/loudness | MST001 |
+| REQ-006 tuning choice | TUN001 |
 | REQ-007 reference-piece performance | Completion rule of every increment (001–004) |
 
 No orphan or overlapping outcomes: each leaf maps to exactly one increment;

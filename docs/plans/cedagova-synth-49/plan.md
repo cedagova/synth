@@ -202,12 +202,12 @@ increment can be reverted independently since later increments only consume
 | INC002 | GROUP | ROOT | cedagova/synth | Expressive interpretation: deterministic phrasing, articulation, and line balance | COLLECTOR | INC001 | https://github.com/cedagova/synth/issues/52 |
 | INC003 | GROUP | ROOT | cedagova/synth | Produced master: cohesion, loudness, and headroom | DIRECT | INC002 | https://github.com/cedagova/synth/issues/53 |
 | INC004 | GROUP | ROOT | cedagova/synth | Historical tuning color: well temperament and baroque pitch | DIRECT | INC003 | https://github.com/cedagova/synth/issues/54 |
-| STG001 | LEAF | INC001 | cedagova/synth | Per-line depth in the render core: near/far placement into the shared room | None | None | Pending |
-| STG002 | LEAF | INC001 | cedagova/synth | Staging defaults at preset creation: seating, sends, and mixer exposure | None | STG001 | Pending |
-| EXP001 | LEAF | INC002 | cedagova/synth | Deterministic phrase expression: shaped dynamics, cadence breathing, setting and bypass | None | None | Pending |
-| EXP002 | LEAF | INC002 | cedagova/synth | Articulation defaults and melody/accompaniment balance | None | EXP001 | Pending |
-| MST001 | LEAF | INC003 | cedagova/synth | Master stage: bus cohesion, true-peak ceiling, deterministic loudness calibration | None | None | Pending |
-| TUN001 | LEAF | INC004 | cedagova/synth | Temperament and reference pitch through both voice engines | None | None | Pending |
+| STG001 | LEAF | INC001 | cedagova/synth | Per-line depth in the render core: near/far placement into the shared room | None | None | https://github.com/cedagova/synth/issues/56 |
+| STG002 | LEAF | INC001 | cedagova/synth | Staging defaults at preset creation: seating, sends, and mixer exposure | None | STG001 | https://github.com/cedagova/synth/issues/57 |
+| EXP001 | LEAF | INC002 | cedagova/synth | Deterministic phrase expression: shaped dynamics, cadence breathing, setting and bypass | None | None | https://github.com/cedagova/synth/issues/58 |
+| EXP002 | LEAF | INC002 | cedagova/synth | Articulation defaults and melody/accompaniment balance | None | EXP001 | https://github.com/cedagova/synth/issues/59 |
+| MST001 | LEAF | INC003 | cedagova/synth | Master stage: bus cohesion, true-peak ceiling, deterministic loudness calibration | None | None | https://github.com/cedagova/synth/issues/60 |
+| TUN001 | LEAF | INC004 | cedagova/synth | Temperament and reference pitch through both voice engines | None | None | https://github.com/cedagova/synth/issues/61 |
 
 ## Acceptance coverage
 
@@ -257,8 +257,11 @@ Not applicable — implementation work remains across all four increments.
 
 ## Publication verification
 
-Recorded at publication time: leaf issues published and `Pending` URLs
-replaced; native sub-issue tree and blocked-by chain reconciled and
-verified (`plan reconcile-graph` / `plan verify-graph`); deterministic
-validation on the final head; exact-head independent approval in the
-native PR review.
+- Leaves published: #56 (STG001), #57 (STG002), #58 (EXP001), #59
+  (EXP002), #60 (MST001), #61 (TUN001); all `Pending` URLs replaced.
+- Increment GROUP metadata (sequence 001–004, delivery, completion rules
+  binding REQ-004/REQ-007) on #51–#54; TRACKING metadata on #49.
+- Native sub-issue tree and blocked-by chain reconciled and verified via
+  `plan reconcile-graph` / `plan verify-graph`.
+- Deterministic validation on the final head; exact-head independent
+  approval in the native PR review.

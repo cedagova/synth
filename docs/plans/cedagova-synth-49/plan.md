@@ -216,14 +216,15 @@ increment can be reverted independently since later increments only consume
 | REQ-001 staging default | STG001, STG002 |
 | REQ-002 preset ownership of staging | STG002 |
 | REQ-003 deterministic expression | EXP001, EXP002 |
-| REQ-004 honest bypass | EXP001 (recipe owner); composition verified in every increment's completion rule |
+| REQ-004 honest bypass | EXP001 (recipe owner); the composed off-state check is an explicit acceptance line on the final leaf of every increment (STG002, EXP002, MST001, TUN001) and verbatim in each increment's completion rule |
 | REQ-005 master headroom/loudness | MST001 |
 | REQ-006 tuning choice | TUN001 |
-| REQ-007 reference-piece performance | Completion rule of every increment (001–004) |
+| REQ-007 reference-piece performance | Explicit acceptance line on the final leaf of every increment (STG002, EXP002, MST001, TUN001): full playthrough of the pinned reference piece with all features delivered so far on, `overloadPauses == 0`; also verbatim in each increment's completion rule |
 
 No orphan or overlapping outcomes: each leaf maps to exactly one increment;
-REQ-004/REQ-007 are deliberately cross-cutting guardrails owned by
-increment completion rules.
+REQ-004/REQ-007 are cross-cutting guardrails bound to executable nodes —
+the final leaf of each increment carries their automated checks, and each
+increment GROUP states them verbatim in its completion rule.
 
 ## Validation and feedback
 

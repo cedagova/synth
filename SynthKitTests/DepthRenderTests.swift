@@ -119,35 +119,85 @@ final class DepthRenderTests: XCTestCase {
         )
     }
 
+    private func chunkedRender(
+        _ timeline: PerformanceTimeline,
+        blockFrames: Int64,
+        configure: (PlaybackEngine) -> Void
+    ) throws -> PlaybackEngine.RenderedAudio {
+        let engine = PlaybackEngine()
+        try engine.setRenderMode(.offline(sampleRate: 48_000))
+        try engine.load(timeline: timeline)
+        configure(engine)
+        engine.play()
+        let total = try XCTUnwrap(engine.loadedProgram?.totalFrames)
+        var left: [Float] = []
+        var right: [Float] = []
+        var remaining = total
+        while remaining > 0 {
+            let chunk = try engine.renderOffline(frameCount: min(blockFrames, remaining))
+            left.append(contentsOf: chunk.left)
+            right.append(contentsOf: chunk.right)
+            remaining -= Int64(chunk.frameCount)
+            if chunk.frameCount == 0 { break }
+        }
+        return PlaybackEngine.RenderedAudio(sampleRate: 48_000, left: left, right: right)
+    }
+
     /// The depth path must not reintroduce buffer-size dependence: its filter
     /// state is continuous across sub-blocks.
     func testDepthRenderingIsIndependentOfTheHostBufferSize() throws {
         let timeline = try AudioRenderFixtures.timeline(AudioRenderFixtures.twoLineFixture())
-
-        func render(blockFrames: Int64) throws -> PlaybackEngine.RenderedAudio {
-            let engine = PlaybackEngine()
-            try engine.setRenderMode(.offline(sampleRate: 48_000))
-            try engine.load(timeline: timeline)
-            engine.mixer(forLineAt: 0)?.depth = 0.7
-            engine.mixer(forLineAt: 1)?.depth = 0.3
-            engine.play()
-            let total = try XCTUnwrap(engine.loadedProgram?.totalFrames)
-            var left: [Float] = []
-            var right: [Float] = []
-            var remaining = total
-            while remaining > 0 {
-                let chunk = try engine.renderOffline(frameCount: min(blockFrames, remaining))
-                left.append(contentsOf: chunk.left)
-                right.append(contentsOf: chunk.right)
-                remaining -= Int64(chunk.frameCount)
-                if chunk.frameCount == 0 { break }
-            }
-            return PlaybackEngine.RenderedAudio(sampleRate: 48_000, left: left, right: right)
+        let configure: (PlaybackEngine) -> Void = {
+            $0.mixer(forLineAt: 0)?.depth = 0.7
+            $0.mixer(forLineAt: 1)?.depth = 0.3
         }
-
-        let small = try render(blockFrames: 64)
-        let large = try render(blockFrames: 4096)
+        let small = try chunkedRender(timeline, blockFrames: 64, configure: configure)
+        let large = try chunkedRender(timeline, blockFrames: 4096, configure: configure)
         XCTAssertEqual(small.canonicalData(), large.canonicalData())
+    }
+
+    /// The review's regression: a note followed by a long rest drives the
+    /// depth filter through its denormal decay, where a chunk-boundary flush
+    /// once made the flush frame depend on the host buffer size.
+    func testBufferSizeIndependenceSurvivesSilenceAtFullDepth() throws {
+        let xml = ScoreXML.Score(
+            workTitle: "Note Into Silence",
+            composer: "Fixture",
+            parts: [
+                ScoreXML.Part(
+                    id: "P1",
+                    name: "Solo",
+                    measures: [
+                        ScoreXML.Measure(
+                            number: "1",
+                            items: [
+                                .attributes(ScoreXML.Attributes(
+                                    divisions: 4, fifths: 0, time: (4, 4), clefs: [("G", 2)]
+                                )),
+                                .direction(ScoreXML.Direction(
+                                    words: "Andante", sound: ["tempo": "120"]
+                                )),
+                                .note(ScoreXML.Note(pitch: "A5", duration: 4, type: "quarter")),
+                                .note(ScoreXML.Note(pitch: nil, duration: 12, type: "half"))
+                            ]
+                        ),
+                        ScoreXML.Measure(
+                            number: "2",
+                            items: [.note(ScoreXML.Note(pitch: nil, duration: 16, type: "whole"))]
+                        )
+                    ]
+                )
+            ]
+        ).data()
+        let timeline = try AudioRenderFixtures.timeline(xml)
+        let configure: (PlaybackEngine) -> Void = { $0.mixer(forLineAt: 0)?.depth = 1 }
+
+        let small = try chunkedRender(timeline, blockFrames: 64, configure: configure)
+        let large = try chunkedRender(timeline, blockFrames: 4096, configure: configure)
+        XCTAssertEqual(
+            small.canonicalData(), large.canonicalData(),
+            "The depth filter's silence decay must not depend on chunk boundaries."
+        )
     }
 
     /// Two renders with identical depth settings are byte-identical.

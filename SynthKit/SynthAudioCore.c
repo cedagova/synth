@@ -279,10 +279,15 @@ static void synth_render_line(SynthRenderEngine *engine,
             if (depthLowpassCoefficient < 1.0f) {
                 float state = line->depthLowpassState;
                 for (int32_t f = 0; f < chunk; f++) {
-                    state += depthLowpassCoefficient * (engine->scratchMono[f] - state);
+                    /* Flushed per sample, the room's own convention: a flush
+                       at chunk boundaries would zero the decaying state at a
+                       frame that depends on the host buffer size, and the
+                       byte-identity across block sizes is the acceptance. */
+                    state = synth_room_flush(
+                        state + depthLowpassCoefficient * (engine->scratchMono[f] - state));
                     engine->scratchMono[f] = state;
                 }
-                line->depthLowpassState = synth_room_flush(state);
+                line->depthLowpassState = state;
             }
             for (int32_t f = 0; f < chunk; f++) {
                 const float sample = engine->scratchMono[f];

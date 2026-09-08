@@ -125,10 +125,19 @@ typedef struct {
     /// How much of this line reaches the shared room, 0…1. Zero for every line
     /// until the owner asks for otherwise (D7).
     _Atomic float   roomSend;
+    /// How far back in the room this line sits, 0…1. Zero — the front, and
+    /// bit-identical to rendering before depth existed — until staging asks
+    /// otherwise. Depth darkens and attenuates the line (air absorption and
+    /// distance) and leans it into the shared room, so near and far are
+    /// audible and not merely quieter.
+    _Atomic float   depth;
 
     /* Render thread only. */
     int32_t nextEventIndex;
     int32_t nextPedalIndex;
+    /// One-pole air-absorption state for the depth cue. Continuous across
+    /// sub-blocks, so rendering is independent of the host buffer size.
+    float   depthLowpassState;
     int32_t pedalDown;
     int32_t activeCount;
     int64_t activeEndFrame[SYNTH_MAX_POLYPHONY];

@@ -456,6 +456,15 @@ public final class PlaybackEngine: @unchecked Sendable {
             nonmutating set { synth_engine_set_line_room_send(engine, index, newValue) }
         }
 
+        /// How far back in the room this line sits, 0…1. Zero — the front —
+        /// renders bit-identically to an engine without depth; raising it
+        /// attenuates and darkens the direct sound and leans the line into
+        /// the shared room, so far reads as far rather than merely quiet.
+        public var depth: Float {
+            get { synth_engine_line_depth(engine, index) }
+            nonmutating set { synth_engine_set_line_depth(engine, index, newValue) }
+        }
+
         public var decibels: Float {
             get { gain > 0 ? 20 * log10(gain) : -.infinity }
             nonmutating set { gain = newValue.isFinite ? pow(10, newValue / 20) : 0 }

@@ -123,6 +123,7 @@ static void synth_engine_relocate(SynthRenderEngine *engine, int64_t frame) {
         SynthRenderLine *line = &engine->lines[l];
 
         line->activeCount = 0;
+        line->depthLowpassState = 0.0f;
         if (line->voice.reset) { line->voice.reset(line->voice.state); }
 
         /* Linear scan rather than a binary search: this runs once per seek, on
@@ -153,6 +154,16 @@ static void synth_engine_relocate(SynthRenderEngine *engine, int64_t frame) {
     engine->cursorFrame = frame;
 }
 
+/* Depth cue tuning. At depth 1 the line loses SYNTH_DEPTH_ATTENUATION of its
+   direct level, its air-absorption lowpass falls from inaudible to
+   SYNTH_DEPTH_FAR_CUTOFF_HZ, and up to SYNTH_DEPTH_ROOM_LEAN of extra send
+   reaches the shared room. Constants in one place so staging taste is tuned
+   here and nowhere else. */
+#define SYNTH_DEPTH_ATTENUATION 0.45f
+#define SYNTH_DEPTH_NEAR_CUTOFF_HZ 18000.0f
+#define SYNTH_DEPTH_FAR_CUTOFF_HZ 3200.0f
+#define SYNTH_DEPTH_ROOM_LEAN 0.4f
+
 /*
  Render one line across `frameCount` frames starting at `blockStart`, splitting
  at every note-on, note-off and pedal edge so the voice never sees a call that
@@ -167,6 +178,7 @@ static void synth_render_line(SynthRenderEngine *engine,
                               float gainLeft,
                               float gainRight,
                               float roomGain,
+                              float depthLowpassCoefficient,
                               float *outLeft,
                               float *outRight,
                               float *roomOut) {
@@ -259,6 +271,19 @@ static void synth_render_line(SynthRenderEngine *engine,
 
         if (line->voice.render) {
             line->voice.render(line->voice.state, engine->scratchMono, chunk);
+            /* Air absorption for a line placed at depth: a one-pole lowpass
+               over the voice output, ahead of both the dry mix and the room
+               send, so distance darkens the line everywhere it is heard.
+               Skipped entirely at depth zero, which keeps the front of the
+               stage bit-identical to rendering before depth existed. */
+            if (depthLowpassCoefficient < 1.0f) {
+                float state = line->depthLowpassState;
+                for (int32_t f = 0; f < chunk; f++) {
+                    state += depthLowpassCoefficient * (engine->scratchMono[f] - state);
+                    engine->scratchMono[f] = state;
+                }
+                line->depthLowpassState = synth_room_flush(state);
+            }
             for (int32_t f = 0; f < chunk; f++) {
                 const float sample = engine->scratchMono[f];
                 outLeft[offset + f]  += sample * gainLeft;
@@ -430,7 +455,11 @@ int32_t synth_audio_core_render(SynthRenderEngine *engine,
        owner had hold of the fader. */
     int32_t anySend = 0;
     for (int32_t l = 0; l < engine->lineCount; l++) {
-        if (atomic_load_explicit(&engine->lines[l].roomSend, memory_order_relaxed) > 0.0f) {
+        /* A nonzero depth leans the line into the room even with its explicit
+           send at zero — far away in a room the listener cannot hear would be
+           a contradiction — so it engages the bus the same way a send does. */
+        if (atomic_load_explicit(&engine->lines[l].roomSend, memory_order_relaxed) > 0.0f
+            || atomic_load_explicit(&engine->lines[l].depth, memory_order_relaxed) > 0.0f) {
             anySend = 1;
             break;
         }
@@ -492,16 +521,41 @@ int32_t synth_audio_core_render(SynthRenderEngine *engine,
                    power stays constant as it moves. */
                 const float pan = atomic_load_explicit(&line->pan, memory_order_relaxed);
                 const float theta = (pan + 1.0f) * 0.25f * (float)M_PI;
-                const float gainLeft = cosf(theta) * gain;
-                const float gainRight = sinf(theta) * gain;
 
-                const float send = anyRoomSend
+                /* Depth: distance attenuates the direct sound, air absorption
+                   darkens it (the lowpass below), and the line leans further
+                   into the shared room. At zero every factor is exactly unity
+                   and the lowpass is bypassed, so the front of the stage is
+                   the pre-depth engine, bit for bit. */
+                const float depth = atomic_load_explicit(&line->depth, memory_order_relaxed);
+                const float distanceGain = 1.0f - SYNTH_DEPTH_ATTENUATION * depth;
+                float depthLowpassCoefficient = 1.0f;
+                if (depth > 0.0f) {
+                    const float cutoff = SYNTH_DEPTH_NEAR_CUTOFF_HZ
+                        - depth * (SYNTH_DEPTH_NEAR_CUTOFF_HZ - SYNTH_DEPTH_FAR_CUTOFF_HZ);
+                    depthLowpassCoefficient =
+                        1.0f - expf(-2.0f * (float)M_PI * cutoff / (float)engine->sampleRate);
+                    if (depthLowpassCoefficient > 1.0f) { depthLowpassCoefficient = 1.0f; }
+                } else {
+                    /* Depth just returned to the front: clear the filter so a
+                       later raise starts from silence, not a stale sample. */
+                    line->depthLowpassState = 0.0f;
+                }
+
+                const float gainLeft = cosf(theta) * gain * distanceGain;
+                const float gainRight = sinf(theta) * gain * distanceGain;
+
+                float send = anyRoomSend
                     ? atomic_load_explicit(&line->roomSend, memory_order_relaxed)
                     : 0.0f;
+                if (anyRoomSend && depth > 0.0f) {
+                    send += SYNTH_DEPTH_ROOM_LEAN * depth * (1.0f - send);
+                }
 
                 synth_render_line(engine, line,
                                   engine->cursorFrame, chunk,
                                   gainLeft, gainRight, send * gain,
+                                  depthLowpassCoefficient,
                                   outLeft + offset, outRight + offset,
                                   engine->scratchRoom);
             }
@@ -675,6 +729,17 @@ void synth_engine_set_line_room_send(SynthRenderEngine *engine, int32_t lineInde
 float synth_engine_line_room_send(const SynthRenderEngine *engine, int32_t lineIndex) {
     if (engine == NULL || lineIndex < 0 || lineIndex >= engine->lineCount) { return 0.0f; }
     return atomic_load_explicit(&engine->lines[lineIndex].roomSend, memory_order_relaxed);
+}
+
+void synth_engine_set_line_depth(SynthRenderEngine *engine, int32_t lineIndex, float depth) {
+    if (engine == NULL || lineIndex < 0 || lineIndex >= engine->lineCount) { return; }
+    atomic_store_explicit(&engine->lines[lineIndex].depth,
+                          synth_clampf(depth, 0.0f, 1.0f), memory_order_relaxed);
+}
+
+float synth_engine_line_depth(const SynthRenderEngine *engine, int32_t lineIndex) {
+    if (engine == NULL || lineIndex < 0 || lineIndex >= engine->lineCount) { return 0.0f; }
+    return atomic_load_explicit(&engine->lines[lineIndex].depth, memory_order_relaxed);
 }
 
 int32_t synth_engine_line_soloed(const SynthRenderEngine *engine, int32_t lineIndex) {

@@ -128,6 +128,8 @@ SynthRenderEngine *synth_engine_create(int32_t lineCount,
         atomic_store_explicit(&engine->lines[l].muted, 0, memory_order_relaxed);
         atomic_store_explicit(&engine->lines[l].soloed, 0, memory_order_relaxed);
         atomic_store_explicit(&engine->lines[l].roomSend, 0.0f, memory_order_relaxed);
+        atomic_store_explicit(&engine->lines[l].depth, 0.0f, memory_order_relaxed);
+        engine->lines[l].depthLowpassState = 0.0f;
     }
 
     atomic_store_explicit(&engine->masterGain, 1.0f, memory_order_relaxed);

@@ -539,7 +539,7 @@ final class AssignmentModel {
 
         write("give “\(line.name)” the sound “\(sound.name)”") { _ in
             activePreset = try store.presets.assign(
-                .library(kind: .synth, soundID: soundID), toLine: lineID, in: preset
+                .library(kind: sound.kind, soundID: soundID), toLine: lineID, in: preset
             )
             reloadPresetAndApply()
             statusMessage = "“\(line.name)” now plays “\(sound.name)”."

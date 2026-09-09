@@ -54,6 +54,22 @@ struct MixCommands: Commands {
 
             Divider()
 
+            // The strip's studio menu, for the keyboard. Both refuse to act
+            // without a selected line, the way everything above does.
+            Button("Edit Line's Sound in Studio…") {
+                guard let line = assignment?.selectedLineID else { return }
+                model.openSoundStudio(.editSound(ofLine: line))
+            }
+            .keyboardShortcut("d", modifiers: [.command, .control])
+
+            Button("New Sound for Line…") {
+                guard let line = assignment?.selectedLineID else { return }
+                model.openSoundStudio(.newSound(forLine: line))
+            }
+            .keyboardShortcut("n", modifiers: [.command, .control, .option])
+
+            Divider()
+
             Button("Mute Line") { assignment?.toggleMuteOnSelectedLine() }
                 .keyboardShortcut("m", modifiers: [.command, .control])
 

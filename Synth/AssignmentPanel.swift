@@ -22,6 +22,9 @@ import SynthKit
 struct AssignmentPanel: View {
     @Bindable var model: AssignmentModel
 
+    /// Sends the owner to the sound studio on a line's behalf.
+    let openStudio: (StudioRequest) -> Void
+
     @FocusState private var focusedLine: ScoreLineID?
 
     var body: some View {
@@ -55,7 +58,10 @@ struct AssignmentPanel: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 0) {
                             ForEach(model.lines) { line in
-                                LineStrip(model: model, line: line, focus: $focusedLine)
+                                LineStrip(
+                                    model: model, line: line, focus: $focusedLine,
+                                    openStudio: openStudio
+                                )
                                     .id(line.lineID)
                                 Divider()
                             }
@@ -227,6 +233,7 @@ private struct LineStrip: View {
     @Bindable var model: AssignmentModel
     let line: ResolvedLine
     @FocusState.Binding var focus: ScoreLineID?
+    let openStudio: (StudioRequest) -> Void
 
     @FocusState private var isRenaming: Bool
 
@@ -322,25 +329,68 @@ private struct LineStrip: View {
     // MARK: The sound
 
     private var soundRow: some View {
-        Picker("Sound for the line “\(line.name)”", selection: soundSelection) {
-            // The line's own sound first when it is not something the library
-            // can offer — an embedded copy, or a reference that resolved to
-            // nothing. Leaving it out would make the picker show some other
-            // sound's name beside a line playing this one.
-            if !line.source.isLiveLibraryReference {
-                Text(line.source.displayName).tag(LineStrip.unassignableTag)
-            }
-            ForEach(model.paletteByCategory, id: \.category) { group in
-                Section(group.category.displayName) {
-                    ForEach(group.sounds) { sound in
-                        Text(sound.name).tag(sound.id)
+        HStack(spacing: 6) {
+            Picker("Sound for the line “\(line.name)”", selection: soundSelection) {
+                // The line's own sound first when it is not something the library
+                // can offer — an embedded copy, or a reference that resolved to
+                // nothing. Leaving it out would make the picker show some other
+                // sound's name beside a line playing this one.
+                if !line.source.isLiveLibraryReference {
+                    Text(line.source.displayName).tag(LineStrip.unassignableTag)
+                }
+                ForEach(model.paletteByCategory, id: \.category) { group in
+                    Section(group.category.displayName) {
+                        ForEach(group.sounds) { sound in
+                            Text(sound.name).tag(sound.id)
+                        }
                     }
                 }
             }
+            .labelsHidden()
+            .accessibilityValue(line.source.displayName)
+            .accessibilityHint("Choosing a sound changes what this line plays straight away.")
+
+            studioMenu
         }
-        .labelsHidden()
-        .accessibilityValue(line.source.displayName)
-        .accessibilityHint("Choosing a sound changes what this line plays straight away.")
+    }
+
+    /// The way from a line to the studio (REQ-017, REQ-018).
+    ///
+    /// **A menu beside the picker, not items inside it.** A pop-up button's
+    /// rows are its choices, and a row that opens another screen instead of
+    /// choosing would leave the picker showing a sound the line does not
+    /// play. The wording carries REQ-017: a shipped sound is copied, and the
+    /// label says so before the owner presses it.
+    private var studioMenu: some View {
+        Menu {
+            if let editing = editSoundTitle {
+                Button(editing) { openStudio(.editSound(ofLine: line.lineID)) }
+            }
+            Button("New Sound for This Line…") { openStudio(.newSound(forLine: line.lineID)) }
+        } label: {
+            Label("Sound Studio", systemImage: "slider.horizontal.3")
+        }
+        .labelStyle(.iconOnly)
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .accessibilityLabel("Sound studio for the line “\(line.name)”")
+        .accessibilityHint(
+            "Edit the sound this line plays, or make a new one for it, while the piece "
+            + "keeps playing. Also on the Mix menu."
+        )
+    }
+
+    /// What editing this line's sound means, or nil when there is nothing in
+    /// the library to edit — an embedded copy, or a reference that resolved
+    /// to nothing.
+    private var editSoundTitle: String? {
+        guard case .library(let soundID, let name) = line.source else { return nil }
+        guard let sound = model.palette.first(where: { $0.id == soundID }) else { return nil }
+        if sound.isEditable { return "Edit “\(name)”…" }
+        return sound.kind == .instrument
+            ? "Customize a Copy of “\(name)”…"
+            : "Edit a Copy of “\(name)”…"
     }
 
     /// The tag used for a selection the library cannot offer back.

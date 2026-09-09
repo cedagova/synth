@@ -386,6 +386,32 @@ final class SoundStudioModel {
     func requestSearchFocus() { searchFocusRequests += 1 }
     func clearSearch() { searchText = "" }
 
+    // MARK: Opened from the transport
+
+    /// Select one sound by identity, from outside the studio's own list.
+    ///
+    /// Reads the library first, because the studio is built lazily and may
+    /// never have been shown; and clears the search, because a selection the
+    /// search hides is replaced by the first visible row the moment the list
+    /// settles, and the owner would be looking at the wrong sound.
+    ///
+    /// Returns the entry so the caller can decide what to do with a sound
+    /// that cannot be edited in place; nil when the library has no such sound.
+    @discardableResult
+    func reveal(soundID: String) -> SoundEntry? {
+        reload()
+        clearSearch()
+        guard let entry = sounds.first(where: { $0.id == soundID }) else { return nil }
+        selection = entry.id
+        return entry
+    }
+
+    /// Put a sentence on the status line for something that happened outside
+    /// the studio — the transport sending the owner here, and why.
+    func announce(_ message: String) {
+        statusMessage = message
+    }
+
     // MARK: Internals
 
     /// Every write, in one shape: do it, and turn any failure into an alert

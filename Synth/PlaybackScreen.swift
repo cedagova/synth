@@ -16,6 +16,11 @@ struct PlaybackScreen: View {
     @Bindable var model: PlaybackModel
     let close: () -> Void
 
+    /// Sends the owner to the sound studio, on the sound a line needs. A
+    /// closure for the reason `close` is one: this screen knows nothing about
+    /// what else the window can show.
+    let openStudio: (StudioRequest) -> Void
+
     @FocusState private var focus: Field?
     @State private var tab: Tab = .loop
 
@@ -38,7 +43,7 @@ struct PlaybackScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PlaybackHeader(model: model, close: close)
+            PlaybackHeader(model: model, close: close, openStudio: openStudio)
             Divider()
 
             HStack(alignment: .top, spacing: 0) {
@@ -64,7 +69,7 @@ struct PlaybackScreen: View {
                 VStack(spacing: 0) {
                     HumanizationBar(model: model)
                     Divider()
-                    AssignmentPanel(model: model.assignment)
+                    AssignmentPanel(model: model.assignment, openStudio: openStudio)
                 }
                 .frame(width: 420)
 
@@ -158,6 +163,7 @@ struct PlaybackScreen: View {
 private struct PlaybackHeader: View {
     @Bindable var model: PlaybackModel
     let close: () -> Void
+    let openStudio: (StudioRequest) -> Void
 
     var body: some View {
         HStack(spacing: 12) {
@@ -184,6 +190,21 @@ private struct PlaybackHeader: View {
             .accessibilityLabel("Now open: \(model.piece.accessibilityDescription)")
 
             Spacer(minLength: 8)
+
+            // The studio was reachable only from the Sounds menu, which is
+            // where an owner who did not know it existed never looked. The
+            // piece keeps playing under it, so this is not a way out of the
+            // transport; it is one of its tools.
+            Button {
+                openStudio(.studio)
+            } label: {
+                Label("Sound Studio", systemImage: "slider.horizontal.3")
+            }
+            .accessibilityLabel("Open the sound studio")
+            .accessibilityHint(
+                "Design and edit sounds while the piece keeps playing. Also on the Sounds "
+                + "menu as Command D."
+            )
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)

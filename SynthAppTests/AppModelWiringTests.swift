@@ -396,4 +396,113 @@ final class AppModelWiringTests: XCTestCase {
             "Turning it off must put the preset back"
         )
     }
+
+    // MARK: The transport sends the owner to the studio (REQ-017)
+
+    /// A line playing one of Synth's own sounds: "edit" means a copy of the
+    /// owner's own, on the line, selected in the studio — three steps the
+    /// owner used to make by hand across two screens.
+    func testEditingAShippedSoundFromTheLineCopiesItOntoTheLine() async throws {
+        let playback = try await openPreparedPiece()
+        let assignment = playback.assignment
+        let line = try XCTUnwrap(assignment.lines.first).lineID
+
+        let shipped = try XCTUnwrap(
+            try store().sounds.allSounds().first { $0.origin == .shipped && $0.kind == .synth }
+        )
+        assignment.assign(soundID: shipped.id, toLine: line)
+        XCTAssertNil(assignment.alert)
+
+        model.openSoundStudio(.editSound(ofLine: line))
+        XCTAssertTrue(model.isStudioShowing, "The request should show the studio")
+        let studio = try XCTUnwrap(model.studio)
+        let copy = try XCTUnwrap(studio.selectedSound, "The studio should have selected something")
+
+        XCTAssertNotEqual(copy.id, shipped.id, "The shipped sound must not be what is selected")
+        XCTAssertEqual(copy.shippedOriginID, shipped.id, "The selection should be a copy of it")
+        XCTAssertTrue(copy.isEditable, "…and the copy is the owner's to edit")
+        XCTAssertEqual(studio.editor.entry?.id, copy.id, "The editor should hold the copy")
+        XCTAssertTrue(
+            try XCTUnwrap(assignment.lines.first { $0.lineID == line }).source.isLibrarySound(copy.id),
+            "The line should now play the copy, so the edits about to be made are the edits heard"
+        )
+        XCTAssertNil(assignment.alert, "Putting the copy on the line should have succeeded")
+    }
+
+    /// A line already playing a sound of the owner's own: nothing is copied,
+    /// because there is nothing REQ-017 protects; the sound is simply opened.
+    func testEditingAUserSoundFromTheLineSelectsItWithoutCopying() async throws {
+        let playback = try await openPreparedPiece()
+        let assignment = playback.assignment
+        let line = try XCTUnwrap(assignment.lines.first).lineID
+
+        let sound = try store().sounds.create(patch: patch(cutoff: 900), named: "Mine", in: .keys)
+        assignment.refreshFromStore()
+        assignment.assign(soundID: sound.id, toLine: line)
+        let before = try store().sounds.allSounds().count
+
+        model.openSoundStudio(.editSound(ofLine: line))
+        let studio = try XCTUnwrap(model.studio)
+
+        XCTAssertEqual(studio.selection, sound.id, "The line's own sound should be selected")
+        XCTAssertEqual(studio.editor.entry?.id, sound.id)
+        XCTAssertEqual(try store().sounds.allSounds().count, before, "Nothing should have been copied")
+        XCTAssertTrue(
+            try XCTUnwrap(assignment.lines.first { $0.lineID == line }).source.isLibrarySound(sound.id),
+            "The line's assignment must be untouched"
+        )
+    }
+
+    /// The search must not hide what the transport asked for: a selection the
+    /// list cannot show is replaced by the first visible row.
+    func testRevealingASoundClearsASearchThatWouldHideIt() async throws {
+        let playback = try await openPreparedPiece()
+        let line = try XCTUnwrap(playback.assignment.lines.first).lineID
+        let sound = try store().sounds.create(patch: patch(cutoff: 900), named: "Mine", in: .keys)
+        playback.assignment.refreshFromStore()
+        playback.assignment.assign(soundID: sound.id, toLine: line)
+
+        model.openSoundStudio()
+        let studio = try XCTUnwrap(model.studio)
+        studio.searchText = "no such sound anywhere"
+
+        model.openSoundStudio(.editSound(ofLine: line))
+        XCTAssertEqual(studio.searchText, "", "The search should have been cleared")
+        XCTAssertEqual(studio.selection, sound.id)
+    }
+
+    /// A new sound for a line is created and on the line before the studio is
+    /// even looked at.
+    func testANewSoundForALineIsCreatedAndAssigned() async throws {
+        let playback = try await openPreparedPiece()
+        let assignment = playback.assignment
+        let line = try XCTUnwrap(assignment.lines.first).lineID
+        let before = try store().sounds.allSounds().count
+
+        model.openSoundStudio(.newSound(forLine: line))
+        let studio = try XCTUnwrap(model.studio)
+        let created = try XCTUnwrap(studio.selectedSound)
+
+        XCTAssertEqual(try store().sounds.allSounds().count, before + 1, "One sound should exist now")
+        XCTAssertTrue(created.isEditable)
+        XCTAssertEqual(studio.editor.entry?.id, created.id, "The editor should hold it")
+        XCTAssertTrue(
+            try XCTUnwrap(assignment.lines.first { $0.lineID == line }).source.isLibrarySound(created.id),
+            "The line should play the new sound"
+        )
+        XCTAssertNil(assignment.alert)
+    }
+
+    /// A request the studio cannot meet still opens the studio and says why,
+    /// rather than doing nothing: the plain request opens it on whatever it
+    /// showed, and a line that no longer exists is not a reason to hide it.
+    func testARequestForAMissingLineStillOpensTheStudio() async throws {
+        _ = try await openPreparedPiece()
+        model.openSoundStudio(.editSound(ofLine: ScoreLineID(rawValue: "no-such-line")))
+        XCTAssertTrue(model.isStudioShowing, "The owner asked for the studio; they get it")
+        XCTAssertNil(
+            try XCTUnwrap(model.studio).selection,
+            "Nothing could be found for that line, so nothing was selected on its behalf"
+        )
+    }
 }

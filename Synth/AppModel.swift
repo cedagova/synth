@@ -25,6 +25,29 @@ enum LibraryState {
     case failed(StoreFailure)
 }
 
+/// What the transport asked the sound studio to open (REQ-017, REQ-018).
+///
+/// The studio was reachable only from the Sounds menu, and it opened on
+/// whatever it last showed. Designing a sound *for a line* meant finding the
+/// sound in the studio's list by hand, duplicating it if it was shipped, and
+/// then coming back to put the copy on the line. These are the three things
+/// the transport can ask for instead, each of which ends with an editable
+/// sound selected in the studio and, where a sound was made, already on the
+/// line that asked for it.
+enum StudioRequest: Equatable, Sendable {
+    /// The studio, on whatever it was showing.
+    case studio
+
+    /// The sound this line plays, ready to edit. A sound that cannot be edited
+    /// in place — a shipped one, or an installed instrument — is copied first
+    /// and the copy is put on the line, which is REQ-017's edit-as-copy rule
+    /// done for the owner rather than left to them.
+    case editSound(ofLine: ScoreLineID)
+
+    /// A sound from scratch, created and put on the line.
+    case newSound(forLine: ScoreLineID)
+}
+
 /// Owns the launch-time store bootstrap and the state the shell renders.
 @Observable
 @MainActor
@@ -215,6 +238,73 @@ final class AppModel {
 
     func closeSoundStudio() {
         isStudioShowing = false
+    }
+
+    /// Open the studio from the transport, on the sound a line needs.
+    ///
+    /// **Everything here goes through the studio's and the panel's own
+    /// operations** — `duplicate`, `createSound`, `assign` — rather than the
+    /// store directly, so the studio's list, the editor and the line strip
+    /// all see the same sound the same way they would had the owner done each
+    /// step by hand. What this adds is only the order, and the one thing no
+    /// screen can do alone: putting the sound the studio just made onto the
+    /// line the transport asked for.
+    ///
+    /// A request that cannot be met — no piece open, a line that is gone, a
+    /// line whose sound is an embedded copy with nothing in the library to
+    /// edit — still opens the studio, because the owner asked for it and a
+    /// button that does nothing is the worst answer; the studio's status
+    /// line says why nothing was selected.
+    func openSoundStudio(_ request: StudioRequest) {
+        openSoundStudio()
+        guard let studio else { return }
+        switch request {
+        case .studio:
+            return
+
+        case .editSound(let lineID):
+            guard let assignment = playback?.assignment,
+                  let line = assignment.lines.first(where: { $0.lineID == lineID }) else { return }
+            guard case .library(let soundID, _) = line.source,
+                  let entry = studio.reveal(soundID: soundID) else {
+                studio.announce(
+                    "“\(line.name)” plays \(line.source.displayName), which is not a sound in "
+                        + "your library, so there is nothing to edit. Create a new sound for the "
+                        + "line instead."
+                )
+                return
+            }
+            if entry.isEditable {
+                studio.announce(
+                    "Editing “\(entry.name)”, the sound “\(line.name)” plays. Changes are heard "
+                        + "on that line as you make them."
+                )
+                return
+            }
+            // REQ-017: the original is untouched; the owner's copy goes on the
+            // line, so the edits they are about to make are the edits they
+            // hear. `duplicate` selects the copy and explains itself.
+            studio.duplicate(entry)
+            guard let copy = studio.selectedSound, copy.id != entry.id else { return }
+            put(copy, onLine: lineID, in: assignment)
+
+        case .newSound(let lineID):
+            guard let assignment = playback?.assignment,
+                  assignment.lines.contains(where: { $0.lineID == lineID }) else { return }
+            studio.reload()
+            studio.clearSearch()
+            studio.createSound()
+            guard let created = studio.selectedSound else { return }
+            put(created, onLine: lineID, in: assignment)
+        }
+    }
+
+    /// The panel's palette was read when the piece opened; a sound made just
+    /// now has to be picked up before it can be assigned — the same refresh
+    /// coming back from the studio does.
+    private func put(_ sound: SoundEntry, onLine lineID: ScoreLineID, in assignment: AssignmentModel) {
+        assignment.refreshFromStore()
+        assignment.assign(soundID: sound.id, toLine: lineID)
     }
 
     // MARK: - The instrument catalog

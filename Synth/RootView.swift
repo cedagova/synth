@@ -18,7 +18,11 @@ struct RootView: View {
             } else if model.isStudioShowing, let studio = model.studio {
                 SoundStudioScreen(model: studio) { model.closeSoundStudio() }
             } else if let playback = model.playback {
-                PlaybackScreen(model: playback) { model.closePlayback() }
+                PlaybackScreen(
+                    model: playback,
+                    close: { model.closePlayback() },
+                    openStudio: { request in model.openSoundStudio(request) }
+                )
                     // Keyed by piece so opening another one rebuilds the screen
                     // and re-runs its preparation task.
                     .id(playback.piece.id)

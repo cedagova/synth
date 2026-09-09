@@ -924,7 +924,7 @@ final class SoundEntryAccessibilityTests: XCTestCase {
     /// where two rows speak identically is a list VoiceOver cannot navigate.
     func testEveryShippedSoundHasADistinctSpokenForm() {
         let spoken = ShippedSoundCollection.standard.sounds.map(\.accessibilityDescription)
-        XCTAssertEqual(spoken.count, 13)
+        XCTAssertEqual(spoken.count, ShippedSoundCollection.standard.sounds.count)
         XCTAssertEqual(Set(spoken).count, spoken.count, "Two shipped sounds read the same: \(spoken)")
         for sentence in spoken {
             XCTAssertTrue(sentence.hasSuffix("one of Synth's own sounds, read-only"), sentence)

@@ -34,7 +34,7 @@ struct SoundAlert: Identifiable, Equatable {
 /// **Reads and writes run on the main actor, deliberately.** The piece library
 /// pushes its work off-actor because importing a score parses XML and can take
 /// a second; a sound is a few hundred numbers, the collection is the shipped
-/// thirteen plus however many the owner has made, and every operation here is
+/// twenty-five plus however many the owner has made, and every operation here is
 /// one small SQLite transaction. Making them `async` would add a suspension
 /// point between "the owner pressed Duplicate" and "the list changed" for no
 /// gain, and would open a window where a second press duplicates twice.

@@ -61,7 +61,11 @@ public enum PresetStaging {
             pan *= percussionPanFactor
         }
 
-        let depth = family.flatMap { familyDepth[$0] } ?? defaultDepth
+        // A solo piece stages centred with room only: depth attenuates and
+        // darkens, and there is no ensemble for a lone line to sit behind.
+        let depth = count <= 1
+            ? 0
+            : family.flatMap { familyDepth[$0] } ?? defaultDepth
 
         return LineMixerState(
             volume: 1,

@@ -21,10 +21,13 @@ final class PresetStagingTests: XCTestCase {
         )
     }
 
-    func testASoloLineSitsCentred() {
-        let mixer = PresetStaging.mixer(lineIndex: 0, lineCount: 1, family: nil)
-        XCTAssertEqual(mixer.pan, 0)
-        XCTAssertGreaterThan(mixer.roomSend, 0)
+    func testASoloLineSitsCentredAtTheFrontWithRoomOnly() {
+        for family in [nil, .strings, .percussion] as [InstrumentCoverage.Family?] {
+            let mixer = PresetStaging.mixer(lineIndex: 0, lineCount: 1, family: family)
+            XCTAssertEqual(mixer.pan, 0)
+            XCTAssertGreaterThan(mixer.roomSend, 0)
+            XCTAssertEqual(mixer.depth, 0, "A solo line stages centred with room only.")
+        }
     }
 
     /// The classical stage, coarsely: strings in front of winds, winds in

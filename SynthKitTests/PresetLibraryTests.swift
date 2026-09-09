@@ -268,6 +268,74 @@ final class PresetLibraryTests: XCTestCase {
         XCTAssertEqual(decoded.lines.count, preset.content.lines.count)
     }
 
+    /// Issue #57's edge behavior: a line added by reconcile gets the derived
+    /// staging for its seat in the grown ensemble, while every kept line —
+    /// owner-edited or originally staged — passes through byte-untouched.
+    func testReconcileStagesAddedLinesAndKeepsStoredOnes() throws {
+        func ensemble(withTimpani: Bool) -> Data {
+            func part(id: String, name: String, pitch: String) -> ScoreXML.Part {
+                ScoreXML.Part(id: id, name: name, measures: [
+                    ScoreXML.Measure(number: "1", items: [
+                        .attributes(ScoreXML.Attributes(
+                            divisions: 4, fifths: 0, time: (4, 4), clefs: [("G", 2)]
+                        )),
+                        .note(ScoreXML.Note(pitch: pitch, duration: 16, type: "whole"))
+                    ])
+                ])
+            }
+            var parts = [
+                part(id: "P1", name: "Violin I", pitch: "A5"),
+                part(id: "P2", name: "Trumpet in B♭", pitch: "D5"),
+                part(id: "P3", name: "Harpsichord", pitch: "F4"),
+                part(id: "P4", name: "Contrabass", pitch: "A2")
+            ]
+            if withTimpani { parts.append(part(id: "P5", name: "Timpani", pitch: "C3")) }
+            return ScoreXML.Score(
+                workTitle: withTimpani ? "Grown Ensemble" : "Small Ensemble",
+                composer: "Fixture",
+                parts: parts
+            ).data()
+        }
+
+        let small = try importScore(ensemble(withTimpani: false), named: "small.musicxml")
+        let smallScore = try compile(small)
+        let preset = try store.activePreset(for: smallScore)
+
+        // The owner edits one line, so "kept untouched" is a real claim.
+        let editedID = preset.lines[1].lineID
+        let editedMixer = LineMixerState(volume: 0.5, pan: 0.9, roomSend: 0.3, depth: 0.6)
+        let edited = try store.presets.setMixer(editedMixer, forLine: editedID, in: preset)
+
+        // The grown edition shares part identities, so line IDs carry over.
+        let grownScore = try compile(
+            try importScore(ensemble(withTimpani: true), named: "grown.musicxml")
+        )
+        let grownInventory = try store.lineInventory(for: grownScore)
+        XCTAssertEqual(grownInventory.entries.count, 5)
+
+        let reconciled = try store.presets.reconcile(
+            edited, with: grownInventory, palette: try store.sounds.allSounds()
+        )
+
+        XCTAssertEqual(reconciled.lines.count, 5)
+        XCTAssertEqual(
+            reconciled.line(withID: editedID)?.mixer, editedMixer,
+            "The owner's edited line must pass through byte-untouched."
+        )
+        for kept in preset.lines where kept.lineID != editedID {
+            XCTAssertEqual(
+                reconciled.line(withID: kept.lineID)?.mixer, kept.mixer,
+                "Originally staged kept lines must pass through untouched."
+            )
+        }
+        let added = try XCTUnwrap(grownInventory.entries.last)
+        XCTAssertEqual(
+            reconciled.line(withID: added.id)?.mixer,
+            PresetStaging.mixer(lineIndex: 4, lineCount: 5, family: .percussion),
+            "The added Timpani line must arrive staged for its seat, not neutral."
+        )
+    }
+
     func testReconcilingLinesKeepsTheStoredHumanization() throws {
         let piece = try importFugue()
         let score = try compile(piece)

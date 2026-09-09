@@ -313,6 +313,7 @@ final class AppModel {
     /// an agent without assistive access can still exercise the real app; it
     /// does nothing unless the variable is set, and nothing on a title miss.
     private func openLaunchPieceIfRequested(from store: LibraryStore) {
+        #if DEBUG
         guard let title = ProcessInfo.processInfo.environment["SYNTH_OPEN_PIECE_ON_LAUNCH"],
               !title.isEmpty else { return }
         guard let piece = try? store.pieces.allPieces().first(where: { $0.title == title }) else {
@@ -320,6 +321,7 @@ final class AppModel {
             return
         }
         openPlayback(for: piece)
+        #endif
     }
 
     /// Disk work runs off the main actor so launch stays responsive.

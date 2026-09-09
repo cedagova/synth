@@ -254,7 +254,12 @@ final class PresetMixerLiveTests: XCTestCase {
         let upper = try lineID(ofScore: score, at: 0)
 
         let bright = try store.sounds.create(patch: brightPatch(), named: "Bright", in: .leads)
-        let plain = try XCTUnwrap(try store.presets.activePreset(forPieceID: score.pieceID))
+        var plain = try XCTUnwrap(try store.presets.activePreset(forPieceID: score.pieceID))
+        // The subject here is switching, not staging: store the plain preset
+        // flattened so switching back returns to a centred, dry mix.
+        for line in plain.lines {
+            plain = try store.presets.setMixer(.neutral, forLine: line.lineID, in: plain)
+        }
 
         // A second preset, built but deliberately not activated yet.
         var variation = try store.presets.duplicate(plain, named: "Bright Upper", makeActive: false)
@@ -483,6 +488,15 @@ final class PresetMixerLiveTests: XCTestCase {
             timeline: PerformanceRealizer().realize(score, settings: .literal)
         )
         performance.applyMixer(to: engine)
+        // These tests measure mid-piece changes against a known centred, dry
+        // baseline; staging (STG002) seats fresh presets, so flatten the
+        // strips through the same live surface the tests exercise.
+        for index in 0..<(engine.loadedProgram?.lineCount ?? 0) {
+            guard let strip = engine.mixer(forLineAt: index) else { continue }
+            strip.pan = 0
+            strip.roomSend = 0
+            strip.depth = 0
+        }
         engine.play()
         return engine
     }

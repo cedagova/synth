@@ -224,6 +224,65 @@ final class RealtimePlaybackTests: XCTestCase {
         )
     }
 
+    /// REQ-007 (increment 001): the pinned reference piece, staged, plays
+    /// start to finish without an overload pause.
+    ///
+    /// Gated like the other full-length guardrails, plus the piece itself:
+    /// SYNTH_REFERENCE_PIECE names the owner's imported MusicXML file (the
+    /// BWV 1046 import the plan pins by content digest).
+    func testReferencePieceWithStagingPlaysWithoutOverload() throws {
+        try requireOutputDevice()
+        try XCTSkipIf(
+            !fullGuardrailEnabled,
+            "Set SYNTH_REALTIME_GUARDRAIL=1 to run the full-length real-time guardrail."
+        )
+        guard let path = ProcessInfo.processInfo.environment["SYNTH_REFERENCE_PIECE"] else {
+            throw XCTSkip("Set SYNTH_REFERENCE_PIECE to the pinned reference piece's MusicXML file.")
+        }
+
+        let musicXML = try Data(contentsOf: URL(fileURLWithPath: path))
+        let score = try ScoreCompiler().compile(pieceID: "reference", musicXML: musicXML)
+        let timeline = PerformanceRealizer().realize(score, settings: .standard)
+        let expectedSeconds = Double(timeline.totalMicroseconds) / 1_000_000
+
+        let engine = PlaybackEngine()
+        try engine.load(timeline: timeline)
+        // Stage every line exactly as a fresh preset would (REQ-001's
+        // derivation), so the guardrail measures the staged engine.
+        let count = timeline.lines.count
+        for (index, line) in timeline.lines.enumerated() {
+            let staged = PresetStaging.mixer(lineIndex: index, lineCount: count, family: nil)
+            guard let strip = engine.mixer(for: line.id) else { continue }
+            strip.pan = Float(staged.pan)
+            strip.roomSend = Float(staged.roomSend)
+            strip.depth = Float(max(staged.depth, 0.5))  // adverse: everything at least mid-stage
+        }
+        try engine.start()
+        engine.resetStatistics()
+        engine.play()
+        XCTAssertTrue(waitUntilPlaying(engine), "Playback never started.")
+
+        let started = Date()
+        while engine.transportState == .playing,
+              Date().timeIntervalSince(started) < expectedSeconds + 20 {
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        let statistics = engine.statistics
+        let reason = engine.pauseReason
+        engine.stopEngine()
+
+        print("""
+            REQ-007 guardrail — staged reference piece
+              lines:            \(count)
+              timeline length:  \(String(format: "%.1f", expectedSeconds)) s
+              overload blocks:  \(statistics.overloadBlocks)
+              overload pauses:  \(statistics.overloadPauses)
+            """)
+
+        XCTAssertEqual(reason, .reachedEnd, "Playback did not run to the end; it stopped for \(reason).")
+        XCTAssertEqual(statistics.overloadPauses, 0, "REQ-007: the staged engine paused under load.")
+    }
+
     /// The same guardrail with D7's shared room carrying every line.
     ///
     /// **This is the adverse case for the room, not the ordinary one.** The bus

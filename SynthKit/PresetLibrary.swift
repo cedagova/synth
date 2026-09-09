@@ -297,12 +297,20 @@ public final class PresetLibrary: @unchecked Sendable, PieceDependentStore, Soun
         // All or nothing, exactly as `initialContent` is: a line the palette
         // cannot cover is reported, never dropped into a preset that looks
         // complete and plays nothing on it.
-        let rebuilt = try inventory.entries.map { entry -> PresetLine in
+        let count = inventory.entries.count
+        let rebuilt = try inventory.entries.enumerated().map { index, entry -> PresetLine in
             if let kept = existing[entry.id] { return kept }
             return PresetLine(
                 lineID: entry.id,
                 assignment: try PresetAutoAssignment.assignment(for: entry, from: palette),
-                mixer: .neutral
+                // Derived defaults, the same as a first open (issue #57):
+                // the one new part must not be the one dry centred line in an
+                // otherwise staged ensemble. Kept lines pass through untouched.
+                mixer: PresetStaging.mixer(
+                    lineIndex: index,
+                    lineCount: count,
+                    family: PresetAutoAssignment.family(for: entry)
+                )
             )
         }
 

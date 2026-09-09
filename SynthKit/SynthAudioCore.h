@@ -214,6 +214,17 @@ int32_t synth_engine_line_muted(const SynthRenderEngine *engine, int32_t lineInd
 int32_t synth_engine_line_soloed(const SynthRenderEngine *engine, int32_t lineIndex);
 float   synth_engine_line_room_send(const SynthRenderEngine *engine, int32_t lineIndex);
 
+/*
+ How far back in the room the line sits, 0…1. Zero is the front and renders
+ bit-identically to an engine without depth. Raising it attenuates and darkens
+ the line's direct sound (distance and air absorption) and leans it into the
+ shared room, so a far line is heard as far, not merely quiet. Like the send it
+ is post-fader and post-mute, and a nonzero depth engages the room bus even
+ when every explicit send is zero.
+ */
+void  synth_engine_set_line_depth(SynthRenderEngine *engine, int32_t lineIndex, float depth);
+float synth_engine_line_depth(const SynthRenderEngine *engine, int32_t lineIndex);
+
 /// Applies to the summed mix, after per-line gain and pan.
 void  synth_engine_set_master_gain(SynthRenderEngine *engine, float gain);
 float synth_engine_master_gain(const SynthRenderEngine *engine);

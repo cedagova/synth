@@ -511,7 +511,12 @@ final class PresetRenderTests: XCTestCase {
 
         let builtThatWay = try PlaybackEngine.renderTimelineOffline(
             realized, voices: target.voiceAssignment()
-        ) { $0.play() }
+        ) {
+            // The preset is sounds AND mixer; staging (STG002) means the
+            // mixer half is no longer a neutral no-op.
+            target.applyMixer(to: $0)
+            $0.play()
+        }
 
         let engine = PlaybackEngine()
         try engine.setRenderMode(.offline(sampleRate: 48_000))

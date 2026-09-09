@@ -31,6 +31,7 @@ public enum AssignmentDisplay {
 
     /// What one press of More Room or Less Room moves (D7).
     public static let roomSendStep: Double = 0.1
+    public static let depthStep: Double = 0.1
 
     /// The fader position for a stored linear gain.
     public static func decibels(forVolume volume: Double) -> Double {
@@ -142,6 +143,17 @@ public enum AssignmentDisplay {
     public static func spokenRoomSend(_ send: Double) -> String {
         let percent = Int((send * 100).rounded())
         return percent <= 0 ? "dry, no room" : "\(percent) percent to the room"
+    }
+
+    /// "Front" at zero, else "Depth 40%".
+    public static func depthText(_ depth: Double) -> String {
+        let percent = Int((depth * 100).rounded())
+        return percent <= 0 ? "Front" : "Depth \(percent)%"
+    }
+
+    public static func spokenDepth(_ depth: Double) -> String {
+        let percent = Int((depth * 100).rounded())
+        return percent <= 0 ? "at the front of the stage" : "\(percent) percent toward the back"
     }
 
     // MARK: A whole strip

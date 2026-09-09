@@ -222,7 +222,7 @@ final class ExportWiringTests: XCTestCase {
         )
         let live = try PlaybackEngine.renderTimelineOffline(
             timeline, sampleRate: 44_100, voices: request.voices
-        )
+        ) { request.applyMixer(to: $0) }
         let writer = AudioFileWriter(settings: .cdQuality, frameCount: Int64(live.frameCount))
         let expected = writer.header() + writer.encode(left: live.left[...], right: live.right[...])
 
@@ -277,7 +277,7 @@ final class ExportWiringTests: XCTestCase {
         )
         let live = try PlaybackEngine.renderTimelineOffline(
             timeline, sampleRate: 44_100, voices: request.voices
-        )
+        ) { request.applyMixer(to: $0) }
         let writer = AudioFileWriter(settings: .cdQuality, frameCount: Int64(live.frameCount))
         XCTAssertEqual(
             try Data(contentsOf: literal),

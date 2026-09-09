@@ -98,6 +98,17 @@ struct MixCommands: Commands {
             }
             .keyboardShortcut("[", modifiers: [.command, .control])
 
+            // Staging depth, the same magnitude idiom one modifier further out.
+            Button("Line Further Back") {
+                assignment?.nudgeDepthOnSelectedLine(by: AssignmentDisplay.depthStep)
+            }
+            .keyboardShortcut("]", modifiers: [.command, .control, .option])
+
+            Button("Line Further Forward") {
+                assignment?.nudgeDepthOnSelectedLine(by: -AssignmentDisplay.depthStep)
+            }
+            .keyboardShortcut("[", modifiers: [.command, .control, .option])
+
             Divider()
 
             // Issue #24's explicit acknowledgment, from the keyboard. The

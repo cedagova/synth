@@ -608,6 +608,7 @@ public struct PresetPerformance: Sendable {
             strip.isMuted = state.isMuted
             strip.isSoloed = state.isSoloed
             strip.roomSend = Float(state.roomSend)
+            strip.depth = Float(state.depth)
         }
     }
 

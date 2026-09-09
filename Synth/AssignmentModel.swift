@@ -668,6 +668,20 @@ final class AssignmentModel {
         commitMixer(forLine: lineID, describedAs: "room send")
     }
 
+    func previewDepth(_ depth: Double, forLine lineID: ScoreLineID) {
+        preview(ofLine: lineID) { $0.depth = min(1, max(0, depth)) }
+    }
+
+    func setDepth(_ depth: Double, forLine lineID: ScoreLineID) {
+        previewDepth(depth, forLine: lineID)
+        commitMixer(forLine: lineID, describedAs: "depth")
+    }
+
+    func nudgeDepthOnSelectedLine(by delta: Double) {
+        guard let line = selectedLine else { return }
+        setDepth(line.mixer.depth + delta, forLine: line.lineID)
+    }
+
     func nudgeRoomSendOnSelectedLine(by delta: Double) {
         guard let line = selectedLine else { return }
         setRoomSend(line.mixer.roomSend + delta, forLine: line.lineID)
@@ -780,6 +794,7 @@ final class AssignmentModel {
         strip.isMuted = state.isMuted
         strip.isSoloed = state.isSoloed
         strip.roomSend = Float(state.roomSend)
+        strip.depth = Float(state.depth)
     }
 
     private func withMixer(_ mixer: LineMixerState, on line: ResolvedLine) -> ResolvedLine {

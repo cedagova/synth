@@ -327,7 +327,66 @@ final class SoundEditorModel {
 
     func releaseEverything() {
         soundingNotes.removeAll()
+        heldTypingNotes.removeAll()
         audition.allNotesOff()
+    }
+
+    // MARK: Musical typing
+
+    /// Where the typing keyboard's A key sits, in octaves from C3 — the on-screen
+    /// keyboard's lowest key, so with no shift the two keyboards line up and a
+    /// typed note lights the key it plays.
+    private(set) var typingOctaveShift = 0
+
+    /// How hard a typed key strikes. Adjustable because a sound's velocity
+    /// sensitivity is one of its parameters, and the only way to judge it is
+    /// to play soft and loud.
+    private(set) var typingVelocity = 96
+
+    /// Which note each held key started, so a key released after an octave
+    /// shift releases the note it played and not the note it would play now.
+    private var heldTypingNotes: [Int: Int] = [:]
+
+    static let typingBaseNote = 48
+    static let typingVelocityStep = 16
+
+    /// The note the A key plays right now.
+    var typingLowestNote: Int { Self.typingBaseNote + typingOctaveShift * 12 }
+
+    func typingKeyDown(semitone: Int) {
+        guard isOpen, heldTypingNotes[semitone] == nil else { return }
+        let note = typingLowestNote + semitone
+        guard (0...127).contains(note) else { return }
+        heldTypingNotes[semitone] = note
+        noteOn(note, velocity: typingVelocity)
+    }
+
+    func typingKeyUp(semitone: Int) {
+        guard let note = heldTypingNotes.removeValue(forKey: semitone) else { return }
+        noteOff(note)
+    }
+
+    /// C0 at the bottom, C7 at the top: below is inaudible on most sounds and
+    /// above the quote key would leave the MIDI range.
+    func shiftTypingOctave(by octaves: Int) {
+        let shifted = min(max(typingOctaveShift + octaves, -4), 4)
+        guard shifted != typingOctaveShift else { return }
+        typingOctaveShift = shifted
+        statusMessage = "Typing keyboard from \(Self.noteName(typingLowestNote)). "
+            + "Z and X move it an octave."
+    }
+
+    func nudgeTypingVelocity(by amount: Int) {
+        let nudged = min(max(typingVelocity + amount, 16), 127)
+        guard nudged != typingVelocity else { return }
+        typingVelocity = nudged
+        statusMessage = "Typing velocity \(typingVelocity). C and V change it."
+    }
+
+    /// "C3", "F♯4" — the short spelling for a caption, not the spoken one.
+    static func noteName(_ note: Int) -> String {
+        let names = ["C", "C♯", "D", "E♭", "E", "F", "F♯", "G", "A♭", "A", "B♭", "B"]
+        return "\(names[note % 12])\(note / 12 - 1)"
     }
 
     // MARK: Playing a piece through this sound

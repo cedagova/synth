@@ -42,6 +42,10 @@ final class AppModelWiringTests: XCTestCase {
         guard model.store != nil else {
             return XCTFail("The store did not open; nothing below can be meaningful.")
         }
+        // A fresh store raises the first-run instrument offer over everything,
+        // and the keyboard rightly does nothing while the catalog is showing.
+        // These tests are about the studio and the transport, so decline it.
+        model.closeInstrumentCatalog()
     }
 
     override func tearDown() async throws {
@@ -504,5 +508,161 @@ final class AppModelWiringTests: XCTestCase {
             try XCTUnwrap(model.studio).selection,
             "Nothing could be found for that line, so nothing was selected on its behalf"
         )
+    }
+
+    // MARK: The computer keyboard (KeyboardControl)
+
+    private enum Key {
+        static let a: UInt16 = 0, s: UInt16 = 1, w: UInt16 = 13
+        static let z: UInt16 = 6, x: UInt16 = 7, c: UInt16 = 8, v: UInt16 = 9
+        static let space: UInt16 = 49, `return`: UInt16 = 36
+        static let left: UInt16 = 123, comma: UInt16 = 43
+    }
+
+    /// Opens the studio on the first synth sound and returns its editor.
+    private func openStudioOnASynthSound() throws -> SoundEditorModel {
+        model.openSoundStudio()
+        let studio = try XCTUnwrap(model.studio)
+        studio.reload()
+        studio.selection = try XCTUnwrap(studio.sounds.first { $0.kind == .synth }).id
+        XCTAssertTrue(studio.editor.isOpen)
+        return studio.editor
+    }
+
+    func testTypingAKeyPlaysTheNoteAndReleasingItStopsIt() throws {
+        let editor = try openStudioOnASynthSound()
+
+        XCTAssertTrue(model.keyboard.handle(KeyStroke(keyCode: Key.a)), "A is a note key")
+        XCTAssertEqual(editor.soundingNotes, [48], "A plays C3, the on-screen keyboard's lowest key")
+
+        XCTAssertTrue(model.keyboard.handle(KeyStroke(keyCode: Key.w)))
+        XCTAssertEqual(editor.soundingNotes, [48, 49], "W is the black key above it")
+
+        XCTAssertTrue(model.keyboard.handle(KeyStroke(keyCode: Key.a, isKeyDown: false)))
+        XCTAssertEqual(editor.soundingNotes, [49], "Releasing A releases only C3")
+
+        model.keyboard.handle(KeyStroke(keyCode: Key.w, isKeyDown: false))
+        XCTAssertTrue(editor.soundingNotes.isEmpty)
+    }
+
+    func testARepeatedKeyDoesNotStrikeAgain() throws {
+        let editor = try openStudioOnASynthSound()
+        model.keyboard.handle(KeyStroke(keyCode: Key.a))
+        model.keyboard.handle(KeyStroke(keyCode: Key.a, isKeyDown: false))
+        XCTAssertTrue(editor.soundingNotes.isEmpty)
+
+        model.keyboard.handle(KeyStroke(keyCode: Key.a))
+        XCTAssertTrue(model.keyboard.handle(KeyStroke(keyCode: Key.a, isRepeat: true)),
+                      "The repeat is still ours — it must not fall through to the window")
+        XCTAssertEqual(editor.soundingNotes, [48], "…but it does not strike the note again")
+    }
+
+    func testOctaveAndVelocityKeysMoveTheTypingKeyboard() throws {
+        let editor = try openStudioOnASynthSound()
+
+        model.keyboard.handle(KeyStroke(keyCode: Key.x))
+        XCTAssertEqual(editor.typingLowestNote, 60, "X moves an octave up")
+        model.keyboard.handle(KeyStroke(keyCode: Key.a))
+        XCTAssertEqual(editor.soundingNotes, [60])
+
+        // The octave moves while the key is held: releasing it must release
+        // the note it started, not the note A would play now.
+        model.keyboard.handle(KeyStroke(keyCode: Key.z))
+        model.keyboard.handle(KeyStroke(keyCode: Key.z))
+        XCTAssertEqual(editor.typingLowestNote, 36)
+        model.keyboard.handle(KeyStroke(keyCode: Key.a, isKeyDown: false))
+        XCTAssertTrue(editor.soundingNotes.isEmpty, "The held C4 was released")
+
+        for _ in 0..<10 { model.keyboard.handle(KeyStroke(keyCode: Key.z)) }
+        XCTAssertEqual(editor.typingLowestNote, 0, "The octave stops at C-1... the MIDI floor")
+
+        model.keyboard.handle(KeyStroke(keyCode: Key.v))
+        XCTAssertEqual(editor.typingVelocity, 112, "V plays harder")
+        for _ in 0..<10 { model.keyboard.handle(KeyStroke(keyCode: Key.c)) }
+        XCTAssertEqual(editor.typingVelocity, 16, "C plays softer, down to a floor that is still audible")
+    }
+
+    func testTypingStandsAsideForTextFieldsMenusAndSheets() throws {
+        let editor = try openStudioOnASynthSound()
+
+        XCTAssertFalse(model.keyboard.handle(KeyStroke(keyCode: Key.a, isTypingText: true)),
+                       "A letter typed into the search field is a letter")
+        XCTAssertFalse(model.keyboard.handle(KeyStroke(keyCode: Key.a, hasMenuModifiers: true)),
+                       "Command-A is Select All, not a note")
+        XCTAssertFalse(model.keyboard.handle(KeyStroke(keyCode: Key.a, isInSecondaryWindow: true)),
+                       "A key in the variant-name sheet is the sheet's")
+        XCTAssertTrue(editor.soundingNotes.isEmpty)
+    }
+
+    func testNothingSoundsWhenNoSynthSoundIsOpen() throws {
+        model.openSoundStudio()
+        let studio = try XCTUnwrap(model.studio)
+        studio.reload()
+        studio.selection = nil
+        XCTAssertFalse(model.keyboard.handle(KeyStroke(keyCode: Key.a)),
+                       "With no sound under edit there is nothing to play, so the key is not ours")
+    }
+
+    func testReleasingEverythingForgetsHeldTypingKeys() throws {
+        let editor = try openStudioOnASynthSound()
+        model.keyboard.handle(KeyStroke(keyCode: Key.a))
+        editor.releaseEverything()
+        XCTAssertTrue(editor.soundingNotes.isEmpty)
+        // The key is still physically down as far as the router knows; a fresh
+        // press must play again rather than be refused as already held.
+        model.keyboard.handle(KeyStroke(keyCode: Key.a))
+        XCTAssertEqual(editor.soundingNotes, [48])
+    }
+
+    /// The transport state itself is read back from the render thread on a
+    /// later tick, so what a synchronous test can see is the model's own
+    /// account of what it asked the engine to do — which is also what the
+    /// status bar shows.
+    func testSpacePlaysAndReturnStops() async throws {
+        let playback = try await openPreparedPiece()
+
+        XCTAssertTrue(model.keyboard.handle(KeyStroke(keyCode: Key.space)))
+        XCTAssertEqual(playback.statusMessage, "Playing.", "Space plays")
+
+        XCTAssertTrue(model.keyboard.handle(KeyStroke(keyCode: Key.space, isRepeat: true)),
+                      "A held Space is still ours…")
+        XCTAssertEqual(playback.statusMessage, "Playing.", "…and does nothing more")
+
+        XCTAssertTrue(model.keyboard.handle(KeyStroke(keyCode: Key.return)))
+        XCTAssertEqual(playback.statusMessage, "Stopped.", "Return stops")
+        XCTAssertEqual(playback.positionMicroseconds, 0, "…and returns to the start")
+    }
+
+    func testTransportKeysStandAsideWhereTheyWouldSteal() async throws {
+        let playback = try await openPreparedPiece()
+
+        XCTAssertFalse(model.keyboard.handle(KeyStroke(keyCode: Key.space, isTypingText: true)),
+                       "A space in the search field is a space")
+        XCTAssertFalse(model.keyboard.handle(KeyStroke(keyCode: Key.left, hasMenuModifiers: true)),
+                       "Option-Command-Left is the menu's")
+        XCTAssertFalse(model.keyboard.handle(KeyStroke(keyCode: Key.space, isInSecondaryWindow: true)),
+                       "Space in the export sheet is the sheet's")
+        XCTAssertFalse(playback.isPlaying)
+
+        model.closePlayback()
+        XCTAssertFalse(model.keyboard.handle(KeyStroke(keyCode: Key.space)),
+                       "With no piece open there is no transport")
+    }
+
+    /// Under the studio the piece keeps playing, and Space still reaches it.
+    /// The other transport keys do not: Return finishes a rename there and
+    /// the arrows move a slider.
+    func testOnlySpaceReachesTheTransportFromTheStudio() async throws {
+        let playback = try await openPreparedPiece()
+        _ = try openStudioOnASynthSound()
+
+        XCTAssertTrue(model.keyboard.handle(KeyStroke(keyCode: Key.space)))
+        XCTAssertEqual(playback.statusMessage, "Playing.", "Space plays the piece from the studio")
+        XCTAssertFalse(model.keyboard.handle(KeyStroke(keyCode: Key.comma)),
+                       "Comma is not taken from the studio")
+        XCTAssertFalse(model.keyboard.handle(KeyStroke(keyCode: Key.return)),
+                       "Return is not taken from the studio")
+        XCTAssertEqual(playback.statusMessage, "Playing.", "Neither reached the transport")
+        playback.stop()
     }
 }

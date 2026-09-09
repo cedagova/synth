@@ -542,9 +542,36 @@ private struct TestKeyboard: View {
                 }
             }
             .accessibilityElement(children: .contain)
+
+            // Musical typing, the way every DAW lays it out (see
+            // `MusicalTypingKey`). Said here, where the keys are, and kept to
+            // one line: the owner who knows it from Logic or Live needs only
+            // the confirmation, and the one who does not needs the row names.
+            Text(typingHint)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel(typingHintSpoken)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
+    }
+
+    private var typingRange: String {
+        let low = SoundEditorModel.noteName(model.typingLowestNote)
+        let high = SoundEditorModel.noteName(model.typingLowestNote + MusicalTypingKey.noteSpan - 1)
+        return "\(low)–\(high)"
+    }
+
+    private var typingHint: String {
+        "Type to play: A S D F G H J K L ; ' are the white keys \(typingRange), "
+            + "W E T Y U O P the black keys · Z X octave · C V velocity \(model.typingVelocity)"
+    }
+
+    private var typingHintSpoken: String {
+        "Type to play. The home row from A to the quote key plays the white keys from "
+            + "\(KeyButton.name(of: model.typingLowestNote)); W, E, T, Y, U, O and P the black "
+            + "keys. Z and X move an octave; C and V change the velocity, now "
+            + "\(model.typingVelocity)."
     }
 }
 

@@ -66,6 +66,15 @@ final class AppModel {
     /// owner who never designs a sound should pay for neither.
     private(set) var studio: SoundStudioModel?
 
+    /// The computer keyboard as a transport and as an instrument. Built with
+    /// the model and installed once the window exists; see `KeyboardControl`
+    /// for why it is not a set of menu shortcuts.
+    @ObservationIgnored private(set) lazy var keyboard = KeyboardControl(model: self)
+
+    func installKeyboardControl() {
+        keyboard.install()
+    }
+
     /// The instrument catalog, once it has been opened.
     ///
     /// Kept after the screen closes, deliberately: a 2.6 GB download must not

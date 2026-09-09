@@ -16,7 +16,9 @@ import SynthKit
 /// play/pause to, but a menu key equivalent is matched before the first
 /// responder sees the key, so binding Space here would make it impossible to
 /// type a space into the search field. Command-Return does the same job and
-/// steals nothing.
+/// steals nothing. Space itself — and Return, the arrows, comma and period —
+/// are handled by `KeyboardControl`, which can see whether a text field has
+/// focus and stand aside when one does.
 struct PlaybackCommands: Commands {
     let model: AppModel
 

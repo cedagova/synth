@@ -451,13 +451,13 @@ private struct TransportHero: View {
                 transportIcon("arrow.backward.to.line", size: 16) {
                     model.stepMeasure(by: -1)
                 }
-                .help("Previous measure (back inside a measure returns to its start)")
+                .help("Previous measure (,) — back inside a measure returns to its start")
                 .accessibilityLabel("Previous measure")
 
                 transportIcon("gobackward.5", size: 20) {
                     model.skip(byMicroseconds: -PlaybackModel.skipMicroseconds)
                 }
-                .help("Back 5 seconds")
+                .help("Back 5 seconds (←)")
                 .accessibilityLabel("Skip back five seconds")
 
                 Button {
@@ -472,31 +472,41 @@ private struct TransportHero: View {
                 // Deliberately no `.defaultAction`: Return belongs to whichever
                 // seek field has focus, and Command-Return on the Playback menu
                 // is the unambiguous keyboard path.
-                .help(model.isPlaying ? "Pause" : "Play")
+                .help(model.isPlaying ? "Pause (Space)" : "Play (Space)")
                 .accessibilityLabel(model.isPlaying ? "Pause playback" : "Start playback")
-                .accessibilityHint("Also on the Playback menu as Command Return.")
+                .accessibilityHint("Also Space, or Command Return on the Playback menu.")
                 .disabled(!model.isReady)
 
                 transportIcon("goforward.5", size: 20) {
                     model.skip(byMicroseconds: PlaybackModel.skipMicroseconds)
                 }
-                .help("Forward 5 seconds")
+                .help("Forward 5 seconds (→)")
                 .accessibilityLabel("Skip forward five seconds")
 
                 transportIcon("arrow.forward.to.line", size: 16) {
                     model.stepMeasure(by: 1)
                 }
-                .help("Next measure")
+                .help("Next measure (.)")
                 .accessibilityLabel("Next measure")
 
                 transportIcon("stop.fill", size: 17) {
                     model.stop()
                 }
-                .help("Stop and return to the start")
+                .help("Stop and return to the start (Return)")
                 .accessibilityLabel("Stop playback and return to the start")
 
                 Spacer(minLength: 0)
             }
+
+            // The bare keys, said once where the buttons are. They do the
+            // same things the buttons do and are never the only way.
+            Text("Space plays and pauses · Return stops · ← → skip 5 seconds · , . step a measure")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel(
+                    "Keyboard: Space plays and pauses, Return stops, the left and right arrows "
+                    + "skip five seconds, comma and period step a measure."
+                )
         }
     }
 

@@ -7,7 +7,10 @@ struct SynthApp: App {
     var body: some Scene {
         WindowGroup {
             RootView(model: model)
-                .task { await model.bootstrap() }
+                .task {
+                    model.installKeyboardControl()
+                    await model.bootstrap()
+                }
         }
         .defaultSize(width: 1_280, height: 760)
         .windowResizability(.contentMinSize)

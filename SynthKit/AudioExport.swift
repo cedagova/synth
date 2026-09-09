@@ -254,7 +254,9 @@ public struct AudioExportRequest: Sendable {
     /// not mention — the same rule `PresetPerformance.applyMixer` follows, and
     /// for the same reason: an unwritten strip would inherit whatever the fresh
     /// program happened to start at.
-    func applyMixer(to engine: PlaybackEngine) {
+    /// Public so an app-level equality check can render the same mix the
+    /// export applies; staging (STG002) made the mixer half load-bearing.
+    public func applyMixer(to engine: PlaybackEngine) {
         guard let program = engine.loadedProgram else { return }
         for (index, lineID) in program.lineIDs.enumerated() {
             guard let strip = engine.mixer(forLineAt: index) else { continue }
@@ -264,6 +266,7 @@ public struct AudioExportRequest: Sendable {
             strip.isMuted = state.isMuted
             strip.isSoloed = state.isSoloed
             strip.roomSend = Float(state.roomSend)
+            strip.depth = Float(state.depth)
         }
         engine.masterGain = masterGain
     }

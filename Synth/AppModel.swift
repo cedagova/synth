@@ -301,9 +301,25 @@ final class AppModel {
             store = opened
             state = .ready(LibraryModel(store: opened))
             prepareInstrumentsForFirstRun()
+            openLaunchPieceIfRequested(from: opened)
         } catch {
             state = .failed(StoreFailure(error))
         }
+    }
+
+    /// Launch automation for smoke-testing: `SYNTH_OPEN_PIECE_ON_LAUNCH=<title>`
+    /// opens the named piece through the same `openPlayback(for:)` path a
+    /// double-click uses — the macOS analog of driving a browser. It exists so
+    /// an agent without assistive access can still exercise the real app; it
+    /// does nothing unless the variable is set, and nothing on a title miss.
+    private func openLaunchPieceIfRequested(from store: LibraryStore) {
+        guard let title = ProcessInfo.processInfo.environment["SYNTH_OPEN_PIECE_ON_LAUNCH"],
+              !title.isEmpty else { return }
+        guard let piece = try? store.pieces.allPieces().first(where: { $0.title == title }) else {
+            NSLog("Synth: SYNTH_OPEN_PIECE_ON_LAUNCH matched no piece titled %@", title)
+            return
+        }
+        openPlayback(for: piece)
     }
 
     /// Disk work runs off the main actor so launch stays responsive.

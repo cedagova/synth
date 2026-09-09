@@ -291,12 +291,18 @@ public enum PresetAutoAssignment {
         for inventory: LineInventory,
         palette: [SoundEntry]
     ) throws -> PresetContent {
-        PresetContent(
-            lines: try inventory.entries.map { entry in
+        let count = inventory.entries.count
+        return PresetContent(
+            lines: try inventory.entries.enumerated().map { index, entry in
                 PresetLine(
                     lineID: entry.id,
                     assignment: try assignment(for: entry, from: palette),
-                    mixer: .neutral
+                    // Staged, not neutral (REQ-001): the first open already
+                    // sounds like an ensemble on a stage, and every value is
+                    // an ordinary editable mixer value.
+                    mixer: PresetStaging.mixer(
+                        lineIndex: index, lineCount: count, family: family(for: entry)
+                    )
                 )
             }
         )

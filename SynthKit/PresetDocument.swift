@@ -53,13 +53,18 @@ public struct LineMixerState: Equatable, Sendable {
     /// as well: the mixer never had to learn what kind of sound it was moving.
     public var roomSend: Double
 
+    /// How far back in the room this line sits, 0…1 (staging, REQ-001). Zero
+    /// — the front — renders exactly as the engine did before depth existed;
+    /// it travels with the line for the same reason the send does.
+    public var depth: Double
+
     /// Highest gain the engine accepts, mirrored here so a stored preset can
     /// never ask for a level the engine would quietly clamp.
     public static let maximumVolume: Double = 8
 
     /// A line nobody has touched: unity, centred, heard, dry.
     public static let neutral = LineMixerState(
-        volume: 1, pan: 0, isMuted: false, isSoloed: false, roomSend: 0
+        volume: 1, pan: 0, isMuted: false, isSoloed: false, roomSend: 0, depth: 0
     )
 
     public init(
@@ -67,19 +72,21 @@ public struct LineMixerState: Equatable, Sendable {
         pan: Double = 0,
         isMuted: Bool = false,
         isSoloed: Bool = false,
-        roomSend: Double = 0
+        roomSend: Double = 0,
+        depth: Double = 0
     ) {
         self.volume = volume
         self.pan = pan
         self.isMuted = isMuted
         self.isSoloed = isSoloed
         self.roomSend = roomSend
+        self.depth = depth
     }
 }
 
 extension LineMixerState: Codable {
     private enum CodingKeys: String, CodingKey {
-        case volume, pan, isMuted, isSoloed, roomSend
+        case volume, pan, isMuted, isSoloed, roomSend, depth
     }
 
     /// `roomSend` defaults to dry when a document does not name it.
@@ -98,7 +105,8 @@ extension LineMixerState: Codable {
             pan: try container.decode(Double.self, forKey: .pan),
             isMuted: try container.decode(Bool.self, forKey: .isMuted),
             isSoloed: try container.decode(Bool.self, forKey: .isSoloed),
-            roomSend: try container.decodeIfPresent(Double.self, forKey: .roomSend) ?? 0
+            roomSend: try container.decodeIfPresent(Double.self, forKey: .roomSend) ?? 0,
+            depth: try container.decodeIfPresent(Double.self, forKey: .depth) ?? 0
         )
     }
 }
@@ -574,6 +582,7 @@ public enum PresetDocument {
             try check(line.mixer.volume, "volume", 0, LineMixerState.maximumVolume)
             try check(line.mixer.pan, "pan", -1, 1)
             try check(line.mixer.roomSend, "roomSend", 0, 1)
+            try check(line.mixer.depth, "depth", 0, 1)
 
             if case .embedded(let sound) = line.assignment {
                 do {

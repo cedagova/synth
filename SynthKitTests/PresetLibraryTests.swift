@@ -211,9 +211,22 @@ final class PresetLibraryTests: XCTestCase {
         XCTAssertTrue(preset.isActive)
         XCTAssertEqual(preset.lines.count, 4)
         XCTAssertEqual(preset.lines.map(\.lineID), score.lines.map(\.id))
-        // Playable means every line has a sound and a neutral strip.
+        // Playable means every line has a sound; since STG002 a fresh strip
+        // is staged, not neutral — seated, in the room, at a family depth.
         XCTAssertTrue(preset.lines.allSatisfy { !$0.assignment.isEmbedded })
-        XCTAssertTrue(preset.lines.allSatisfy { $0.mixer == .neutral })
+        XCTAssertTrue(preset.lines.allSatisfy { $0.mixer.roomSend > 0 && $0.mixer.depth > 0 })
+        let inventory = try store.lineInventory(for: score)
+        let expectedMixers = inventory.entries.enumerated().map { index, entry in
+            PresetStaging.mixer(
+                lineIndex: index,
+                lineCount: inventory.entries.count,
+                family: PresetAutoAssignment.family(for: entry)
+            )
+        }
+        XCTAssertEqual(
+            preset.lines.map(\.mixer), expectedMixers,
+            "The fresh preset must carry exactly the deterministic staging derivation."
+        )
 
         let performance = try store.openActivePreset(for: score)
         XCTAssertFalse(performance.hasMissingSound)
@@ -440,11 +453,13 @@ final class PresetLibraryTests: XCTestCase {
             restored.line(withID: alto)?.mixer,
             LineMixerState(volume: 0.4, pan: -0.75, isMuted: false, isSoloed: true)
         )
-        // And nothing else moved.
+        // And nothing else moved: every untouched line still carries exactly
+        // the staged values it was created with.
         XCTAssertEqual(restored.lines.count, 4)
-        XCTAssertTrue(
-            restored.lines.filter { $0.lineID != alto }.allSatisfy { $0.mixer == .neutral }
-        )
+        for line in restored.lines where line.lineID != alto {
+            let created = try XCTUnwrap(preset.line(withID: line.lineID))
+            XCTAssertEqual(line.mixer, created.mixer)
+        }
     }
 
     func testEveryChangeBumpsTheRevisionAndTheTimestamp() throws {

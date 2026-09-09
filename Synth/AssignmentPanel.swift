@@ -522,6 +522,32 @@ private struct LineStrip: View {
                     .accessibilityLabel("Room send of “\(line.name)”")
                     .accessibilityValue(AssignmentDisplay.spokenRoomSend(line.mixer.roomSend))
             }
+
+            HStack(spacing: 8) {
+                Text("Depth")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+
+                Slider(
+                    value: depthBinding,
+                    in: 0...1,
+                    onEditingChanged: { isEditing in
+                        guard !isEditing else { return }
+                        model.commitMixer(forLine: line.lineID, describedAs: "depth")
+                    }
+                )
+                .accessibilityLabel("Depth of the line “\(line.name)”")
+                .accessibilityValue(AssignmentDisplay.spokenDepth(line.mixer.depth))
+                .accessibilityHint("How far back in the room this line sits. Zero is the front of the stage.")
+
+                Text(AssignmentDisplay.depthText(line.mixer.depth))
+                    .font(.caption)
+                    .monospacedDigit()
+                    .frame(width: 58, alignment: .trailing)
+                    .accessibilityLabel("Depth of “\(line.name)”")
+                    .accessibilityValue(AssignmentDisplay.spokenDepth(line.mixer.depth))
+            }
         }
     }
 
@@ -547,6 +573,13 @@ private struct LineStrip: View {
         Binding(
             get: { line.mixer.roomSend },
             set: { model.previewRoomSend($0, forLine: line.lineID) }
+        )
+    }
+
+    private var depthBinding: Binding<Double> {
+        Binding(
+            get: { line.mixer.depth },
+            set: { model.previewDepth($0, forLine: line.lineID) }
         )
     }
 }

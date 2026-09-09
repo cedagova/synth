@@ -204,7 +204,8 @@ public final class PlaybackEngine: @unchecked Sendable {
                     pan: Double(strip.pan),
                     isMuted: strip.isMuted,
                     isSoloed: strip.isSoloed,
-                    roomSend: Double(strip.roomSend)
+                    roomSend: Double(strip.roomSend),
+                    depth: Double(strip.depth)
                 )
             }
         }
@@ -226,6 +227,7 @@ public final class PlaybackEngine: @unchecked Sendable {
             strip.isMuted = state.isMuted
             strip.isSoloed = state.isSoloed
             strip.roomSend = Float(state.roomSend)
+            strip.depth = Float(state.depth)
         }
         masterGain = carried.masterGain
     }

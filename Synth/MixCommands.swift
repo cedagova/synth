@@ -141,6 +141,10 @@ struct MixCommands: Commands {
             Button("New Preset") { assignment?.createPreset() }
                 .keyboardShortcut("p", modifiers: [.command, .control])
 
+            Button("New Switched-On Preset") { assignment?.createSwitchedOnPreset() }
+                .keyboardShortcut("w", modifiers: [.command, .control])
+
+
             Button("Rename Preset…") { assignment?.beginPresetRename() }
                 .keyboardShortcut("y", modifiers: [.command, .control])
 

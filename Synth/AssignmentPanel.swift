@@ -155,6 +155,23 @@ private struct PresetBar: View {
                     .accessibilityLabel("New preset from this one")
                     .accessibilityHint("Also on the Mix menu as Control Command P.")
 
+                    // A re-orchestration, not a mix: each line the score names
+                    // an instrument for goes to the Baroque Modular sound for
+                    // it, and everything else in the current preset carries
+                    // over. See `SwitchedOnAssignment` for the table.
+                    Button {
+                        model.createSwitchedOnPreset()
+                    } label: {
+                        Label("Switched-On", systemImage: "waveform.path")
+                    }
+                    .help("New preset with each named instrument on its Switched-On Bach sound")
+                    .accessibilityLabel("New Switched-On preset")
+                    .accessibilityHint(
+                        "Makes a preset that gives every line the score names an instrument for "
+                        + "the Switched-On Bach style sound for it. Lines without an instrument "
+                        + "name keep their sound. Also on the Mix menu as Control Command W."
+                    )
+
                     Button {
                         model.beginPresetRename()
                     } label: {

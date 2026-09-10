@@ -820,6 +820,37 @@ final class AssignmentModel {
         }
     }
 
+    /// A new preset that plays the piece the way *Switched-On Bach* would
+    /// have: every line whose part the score names gets the Baroque Modular
+    /// sound built for that instrument, and the mix carries over untouched.
+    ///
+    /// By part name only, never by guessing — `SwitchedOnAssignment` says
+    /// which words map where. A piece whose score names no instrument the
+    /// table knows gets no preset and a status line saying why, because a
+    /// preset identical to the one showing is not something the owner asked
+    /// for.
+    func createSwitchedOnPreset() {
+        guard let preset = activePreset, let inventory else { return }
+        let plan = SwitchedOnAssignment.plan(from: preset.content, inventory: inventory)
+        guard plan.assignedCount > 0 else {
+            statusMessage = plan.unnamedCount == inventory.entries.count
+                ? "No Switched-On preset made: the score names no instruments, so there is "
+                    + "nothing to go on."
+                : "No Switched-On preset made: none of the score's instrument names is in the "
+                    + "Switched-On table."
+            return
+        }
+        write("make a Switched-On preset") { pieceID in
+            let name = SwitchedOnAssignment.presetName(existing: presets.map(\.name))
+            let created = try store.presets.create(
+                named: name, forPieceID: pieceID, content: plan.content, makeActive: true
+            )
+            activePreset = created
+            reloadPresetAndApply()
+            statusMessage = plan.summary(named: created.name)
+        }
+    }
+
     func beginPresetRename() {
         guard let preset = activePreset else { return }
         isRenamingPreset = true

@@ -510,6 +510,31 @@ final class AppModelWiringTests: XCTestCase {
         )
     }
 
+    // MARK: The Switched-On preset
+
+    /// The fixture's one part is called "Cello": the button makes a new
+    /// active preset named Switched-On with that line on Modular Cello.
+    func testTheSwitchedOnPresetPutsANamedPartOnItsSound() async throws {
+        let playback = try await openPreparedPiece()
+        let assignment = playback.assignment
+        let before = assignment.presets.count
+        let line = try XCTUnwrap(assignment.lines.first).lineID
+
+        assignment.createSwitchedOnPreset()
+
+        XCTAssertNil(assignment.alert)
+        XCTAssertEqual(assignment.presets.count, before + 1, "One new preset")
+        XCTAssertEqual(assignment.activePreset?.name, "Switched-On", "…active, and named")
+        XCTAssertTrue(
+            try XCTUnwrap(assignment.lines.first { $0.lineID == line })
+                .source.isLibrarySound("shipped.modular-cello"),
+            "The Cello part plays Modular Cello"
+        )
+
+        assignment.createSwitchedOnPreset()
+        XCTAssertEqual(assignment.activePreset?.name, "Switched-On 2", "A second one steps the name")
+    }
+
     // MARK: The computer keyboard (KeyboardControl)
 
     private enum Key {

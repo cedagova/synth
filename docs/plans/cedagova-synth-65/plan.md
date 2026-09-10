@@ -2,7 +2,7 @@
 
 - Planning issue: https://github.com/cedagova/synth/issues/65
 - Planning PR: https://github.com/cedagova/synth/pull/66
-- Status: Review
+- Status: Ready for implementation
 - Root classification: INCREMENTAL
 - Delivery topology: INCREMENTAL
 - Planner: Claude (implementation-planning-lead)
@@ -117,8 +117,8 @@ Planner decisions (ordinary, reversible, recorded for the reviewer):
   says so; never silence.
 - **P65-6 Settings surface.** EXP001 introduces one "Performance" settings
   group in the playback screen, replacing the single inline humanization
-  row: humanization and expression first, with cohesion (MST001) and
-  tuning (TUN001) adding one row each later. Each row keeps the
+  row: humanization and expression first, with the produced-master row
+  (MST001) and the two tuning picker rows (TUN001) added later. Each row keeps the
   humanization precedent (change → re-render → save to preset) and the
   app's accessibility standard. Later leaves add rows only; none
   redesigns the surface.
@@ -155,7 +155,8 @@ Pinned at `cedagova/synth@d59e561`:
 - Staging is a pure function of seat index, part count, and the named
   instrument family: `PresetStaging.mixer(lineIndex:lineCount:family:)`
   returns pan/roomSend/depth with volume 1 everywhere; `PresetAutoAssignment
-  .initialContent` and `reconcile` take only the `LineInventory`, which
+  .initialContent` and `PresetLibrary.reconcile` take only the
+  `LineInventory` (plus the sound palette), which
   carries ids, names, part name, staff, and voice — no pitch information —
   so register-aware placement needs a score-derived register summary
   reaching the derivation. Depth exists in the render core
@@ -360,15 +361,15 @@ consume — never rewrite — earlier ones' stored values.
 | Key | Kind | Parent | Repository | Title | Delivery | Blocked by | Issue |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | ROOT | TRACKING | None | cedagova/synth | Future sound improvements: expression, master, tuning — reviewed research and development lessons | INCREMENTAL | None | https://github.com/cedagova/synth/issues/65 |
-| INC001 | GROUP | ROOT | cedagova/synth | Register-aware seating: staging placement by line register | DIRECT | None | Pending |
-| INC002 | GROUP | ROOT | cedagova/synth | Expressive interpretation: deterministic phrasing, articulation, and line balance | COLLECTOR | INC001 | Pending |
-| INC003 | GROUP | ROOT | cedagova/synth | Produced master: ceiling, loudness calibration, and cohesion | DIRECT | INC002 | Pending |
-| INC004 | GROUP | ROOT | cedagova/synth | Historical tuning color: well temperament and baroque pitch | DIRECT | INC003 | Pending |
-| STG003 | LEAF | INC001 | cedagova/synth | Register-aware placement at preset creation | None | None | Pending |
-| EXP001 | LEAF | INC002 | cedagova/synth | Deterministic phrase expression: shaped dynamics, cadence breathing, setting, bypass, and the Performance settings group | None | None | Pending |
-| EXP002 | LEAF | INC002 | cedagova/synth | Articulation defaults and melody/accompaniment balance | None | EXP001 | Pending |
-| MST001 | LEAF | INC003 | cedagova/synth | Master stage: true-peak ceiling, deterministic loudness calibration, bus cohesion | None | None | Pending |
-| TUN001 | LEAF | INC004 | cedagova/synth | Temperament and reference pitch through both voice engines | None | None | Pending |
+| INC001 | GROUP | ROOT | cedagova/synth | Register-aware seating: staging placement by line register | DIRECT | None | https://github.com/cedagova/synth/issues/67 |
+| INC002 | GROUP | ROOT | cedagova/synth | Expressive interpretation: deterministic phrasing, articulation, and line balance | COLLECTOR | INC001 | https://github.com/cedagova/synth/issues/68 |
+| INC003 | GROUP | ROOT | cedagova/synth | Produced master: ceiling, loudness calibration, and cohesion | DIRECT | INC002 | https://github.com/cedagova/synth/issues/69 |
+| INC004 | GROUP | ROOT | cedagova/synth | Historical tuning color: well temperament and baroque pitch | DIRECT | INC003 | https://github.com/cedagova/synth/issues/70 |
+| STG003 | LEAF | INC001 | cedagova/synth | Register-aware placement at preset creation | None | None | https://github.com/cedagova/synth/issues/71 |
+| EXP001 | LEAF | INC002 | cedagova/synth | Deterministic phrase expression: shaped dynamics, cadence breathing, setting, bypass, and the Performance settings group | None | None | https://github.com/cedagova/synth/issues/72 |
+| EXP002 | LEAF | INC002 | cedagova/synth | Articulation defaults and melody/accompaniment balance | None | EXP001 | https://github.com/cedagova/synth/issues/73 |
+| MST001 | LEAF | INC003 | cedagova/synth | Master stage: true-peak ceiling, deterministic loudness calibration, bus cohesion | None | None | https://github.com/cedagova/synth/issues/74 |
+| TUN001 | LEAF | INC004 | cedagova/synth | Temperament and reference pitch through both voice engines | None | None | https://github.com/cedagova/synth/issues/75 |
 
 ## Acceptance coverage
 
@@ -379,7 +380,7 @@ consume — never rewrite — earlier ones' stored values.
 | Gentle level shading (deferred from #57) | EXP002 per-passage balance and MST001 loudness, honoring both halves of the #64 decision; no separate static shading |
 | REQ-003 deterministic expression | EXP001, EXP002 |
 | REQ-004 honest bypass (preserved; ceiling excepted per D65-2) | EXP001 (recipe owner); the composed off-state check is an explicit acceptance line on the final leaf of every increment (STG003, EXP002, MST001, TUN001) and verbatim in each increment's completion rule |
-| REQ-005 master headroom/loudness | MST001 (true peak ≤ −1 dBFS on every export; ±2 dB proxy tolerance across two dissimilar pieces; quiet piece not inaudibly low) |
+| REQ-005 master headroom/loudness | MST001 (true peak ≤ −1 dBFS on every export in every state; with the produced master on — the default — ±2 dB proxy tolerance across two dissimilar pieces and a quiet piece not inaudibly low) |
 | REQ-006 tuning choice | TUN001 under P65-4 |
 | REQ-007 reference-piece performance | Explicit acceptance line on the final leaf of every increment (STG003, EXP002, MST001, TUN001): full playthrough of the pinned reference piece with all features delivered so far on, `overloadPauses == 0`; also verbatim in each increment's completion rule |
 | Calibration cost (P65-5) | MST001: program build for the reference piece adds no more than 1.0 s of time-to-first-Play on the baseline machine, measured |
@@ -434,11 +435,18 @@ Not applicable — implementation work remains across all four increments.
 
 ## Publication verification
 
-Pending publication: after content review, the four GROUP and five LEAF
-issues are created from the shared templates with `Planning root: #65` and
-`Planning plan: #66`, every `Pending` URL is replaced, TRACKING metadata is
-added to #65, and the native sub-issue tree and blocked-by chain are
-reconciled and verified via `plan reconcile-graph` / `plan verify-graph`.
-Provenance carried into bodies: INC001/STG003 ← #57 and the PR #64
-reconciliation; INC002/EXP001/EXP002 ← #52/#58/#59; INC003/MST001 ←
-#53/#60; INC004/TUN001 ← #54/#61.
+- Published 2026-09-10 under `Planning root: #65` / `Planning plan: #66`:
+  GROUP increments #67 (001, DIRECT), #68 (002, COLLECTOR), #69 (003,
+  DIRECT), #70 (004, DIRECT); LEAF issues #71 (STG003), #72 (EXP001), #73
+  (EXP002), #74 (MST001), #75 (TUN001). All `Pending` URLs replaced.
+- Provenance carried into bodies: INC001/STG003 ← #57 and the PR #64
+  reconciliation; INC002/EXP001/EXP002 ← #52/#58/#59; INC003/MST001 ←
+  #53/#60; INC004/TUN001 ← #54/#61. Published leaves inherit the closed
+  predecessors' reviewed lines verbatim (P65-3).
+- TRACKING metadata (`Planning kind: TRACKING`, `Implementation execution:
+  INCREMENTAL`, increment map, completion rule) appended to #65 without
+  altering its research record.
+- Native sub-issue tree and blocked-by chain (#68 ← #67, #69 ← #68,
+  #70 ← #69, #73 ← #72) reconciled and verified via `plan reconcile-graph`
+  / `plan verify-graph`; deterministic validation on the final head.
+  Exact-head independent approval remains in the native PR review.

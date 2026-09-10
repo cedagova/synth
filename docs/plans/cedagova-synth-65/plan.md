@@ -2,7 +2,7 @@
 
 - Planning issue: https://github.com/cedagova/synth/issues/65
 - Planning PR: https://github.com/cedagova/synth/pull/66
-- Status: In progress
+- Status: Review
 - Root classification: INCREMENTAL
 - Delivery topology: INCREMENTAL
 - Planner: Claude (implementation-planning-lead)
@@ -71,9 +71,9 @@ library and listens end to end.
 
 | Date | Decision | Rationale | Affects |
 | --- | --- | --- | --- |
-| 2026-09-10 | **D65-1 Control surface.** Mechanisms are core; the owner-facing surface is small and preset-stored: expression on/off + one amount; cohesion on/off; a temperament picker; a reference-pitch picker. Articulation defaults and register-aware placement have no control (placement lands as ordinary staged mixer values the existing mixer overrides). Taste constants stay code-only and centralized. Owner reply to the lead's recommended split: "ok". | The app is a player, not a mixing console; every knob is a taste surface the owner would have to learn. Clipping safety and level matching are correctness, not taste. | EXP001, MST001, TUN001, STG003 |
-| 2026-09-10 | **D65-2 Master surface versus REQ-004.** PENDING — see the Owner decision brief below. The lead's first draft read REQ-004's "mastering off" as "cohesion off" with the ceiling and calibration always on; the reviewer correctly identified that as a lead inference changing an approved acceptance clause. | — | MST001, REQ-004/REQ-005 acceptance, the composed bypass check on every increment's final leaf |
-| 2026-09-10 | **D65-3 Existing library.** PENDING — see the Owner decision brief below: what stored presets get from expression and master defaults, and whether existing presets are re-seated. | — | EXP001, MST001, STG003, success measure |
+| 2026-09-10 | **D65-1 Control surface.** Mechanisms are core; the owner-facing surface is small and preset-stored: expression on/off + one amount; one produced-master on/off (see D65-2); a temperament picker; a reference-pitch picker. The true-peak ceiling has no control. Articulation defaults and register-aware placement have no control (placement lands as ordinary staged mixer values the existing mixer overrides). Taste constants stay code-only and centralized. Owner reply to the lead's recommended split: "ok". | The app is a player, not a mixing console; every knob is a taste surface the owner would have to learn. Clipping safety is correctness, not taste. | EXP001, MST001, TUN001, STG003 |
+| 2026-09-10 | **D65-2 Master surface versus REQ-004: option A.** One preset "Produced master" switch covers bus cohesion and loudness calibration together, on for fresh presets. The true-peak ceiling is always on and bit-transparent below −1 dBTP. REQ-004 is preserved literally for everything but the ceiling, which acts only when the raw sum would clip; the composed bypass check asserts bit-identity to the raw line sum whenever it is under the ceiling. Owner reply: "all as recommended" to the brief offering A (this), B (calibration always on, REQ-004 re-read as cohesion off) and C (ceiling switchable too, exports may clip). | Keeps the approved acceptance clause intact with one switch; REQ-005's clip guarantee holds in every state and its loudness guarantee in the default state; fully reversible. | MST001 acceptance; the composed bypass line on STG003, EXP002, MST001, TUN001; AD-P6 |
+| 2026-09-10 | **D65-3 Existing library: option A.** Stored presets that lack the new fields decode with expression on (default amount) and produced master on. Existing staged mixer values are left untouched: register-aware seating applies to newly created presets and reconcile-added lines only; the owner re-creates a preset to get the new seating. Owner reply: "all as recommended" to the brief offering A (this), B (new pieces only) and C (also re-seat untouched strips). | Every existing piece gains expression and master on next open, meeting the success measure, while owner mixer edits are never overwritten; permitted by the clean-slate decision. | EXP001 and MST001 default lines; STG003 scope; migration section |
 
 Planner decisions (ordinary, reversible, recorded for the reviewer):
 
@@ -216,7 +216,7 @@ System-level HOW, per increment:
    summarize get no bias (the family proxy alone). Values remain ordinary
    staged `LineMixerState` values written at preset creation and on
    reconcile for added lines, editable in the existing mixer, with no new
-   control. Whether existing presets are re-seated is D65-3.
+   control. Existing presets are not re-seated (D65-3).
 2. **Expression (002).** Extend `RealizationSettings` with a preset-stored
    expression setting (enabled + amount). Inside the realizer — keeping
    realization a pure function — derive phrase segmentation from the score
@@ -228,17 +228,20 @@ System-level HOW, per increment:
    ambiguous melody detection falls back to no balancing). Off must
    satisfy REQ-004's bypass recipe exactly. EXP001 introduces the
    Performance settings group (P65-6) with the expression toggle and
-   amount beside humanization. Fresh-preset and stored-preset defaults
-   are D65-3.
+   amount beside humanization. Expression is on for fresh presets and
+   for stored presets that lack the field (D65-3).
 3. **Master (003).** Add a master stage after the line sum in the render
    core: a true-peak-safe ceiling at ≤ −1 dBFS, a deterministic per-piece
    loudness calibration gain computed once per program from the bounded
    excerpt analysis of P65-5 (AD-P5; windowed-RMS integrated proxy with a
    fixed target), and a bus-cohesion block; all applied identically live
    and in export (one graph), with no allocation or locking on the render
-   thread, and a silent piece calibrating to unity. Which of these the
-   preset's master control switches off, and what the REQ-004 recipe
-   therefore contains, is D65-2. Acceptance for REQ-005's "comparable
+   thread, and a silent piece calibrating to unity. One preset-stored
+   "Produced master" switch (on for fresh and for stored presets lacking
+   it, D65-3) covers cohesion and calibration together; the ceiling is
+   always on and bit-transparent below −1 dBTP (D65-2). Master off is
+   bit-identical to the raw line sum whenever that sum stays under the
+   ceiling. Acceptance for REQ-005's "comparable
    loudness": two dissimilar library pieces export within ±2 dB of the
    fixed target on the proxy.
 4. **Tuning (004).** Thread a per-program tuning table (12 pitch-class
@@ -270,8 +273,8 @@ System-level HOW, per increment:
   producing identical audio, and its cost is capped independent of piece
   length.
 - **AD-P6 — safety is core, color is optional.** The ceiling has no owner
-  control; cohesion, expression, and tuning do. Calibration's control is
-  D65-2. Every optional setting is preset-stored with the humanization
+  control; the produced master (cohesion + calibration), expression, and
+  tuning do (D65-1, D65-2). Every optional setting is preset-stored with the humanization
   precedent's change → re-render → save behavior and app-standard
   accessibility, in the one Performance settings group (P65-6).
 - **AD-P7 — staging derivation stays a pure function of score-derived
@@ -309,9 +312,10 @@ Single repository (`cedagova/synth`); all interfaces are internal contracts:
   tuning-table application in both voice engines under P65-4; SynthKit
   owns the calibration pre-pass (P65-5), tuning tables, settings, and
   persistence.
-- The A/B bypass contract (REQ-004, as finally read under D65-2) spans
+- The A/B bypass contract (REQ-004, preserved under D65-2) spans
   increments: each increment's off state must compose so the full recipe
-  renders notation + uniform humanization only, with the automated check
+  renders notation + uniform humanization only — bit-identical to the raw
+  line sum whenever it is under the ceiling — with the automated check
   stated in Validation.
 
 ## Risks and rabbit holes
@@ -341,11 +345,13 @@ Single repository (`cedagova/synth`); all interfaces are internal contracts:
 ## Migration, rollout, recovery, and rollback
 
 Pre-release clean slate (owner decision): no data migration; preset fields
-are additive. Defaults for stored presets are D65-3. Rollout is
-per-increment on `main`, each leaving the app working (increment completion
-rule). Recovery/rollback: every optional feature has an off state that
-restores the REQ-004 bypass character as read under D65-2; the ceiling is
-transparent for material under −1 dBTP; calibration is unity on failure;
+are additive. Stored presets lacking the new fields decode with expression
+on and produced master on; their mixer values are untouched (D65-3).
+Rollout is per-increment on `main`, each leaving the app working
+(increment completion rule). Recovery/rollback: every optional feature has
+an off state that restores the REQ-004 bypass character (D65-2); the
+ceiling is transparent for material under −1 dBTP; calibration is unity
+on failure;
 any increment can be reverted independently since later increments only
 consume — never rewrite — earlier ones' stored values.
 
@@ -372,7 +378,7 @@ consume — never rewrite — earlier ones' stored values.
 | Register-aware placement (deferred from #57) | STG003. Acceptance: for a fresh ≥4-line piece whose lowest-register part is not last in score order, that line's staged pan is right of centre and its depth exceeds the treble lines'; a piece whose lines all share one register stages byte-identically to today's derivation; lines with too few pitches get the family-only result; derivation is deterministic (same score → same preset content) in the shape `PresetStagingTests` already uses |
 | Gentle level shading (deferred from #57) | EXP002 per-passage balance and MST001 loudness, honoring both halves of the #64 decision; no separate static shading |
 | REQ-003 deterministic expression | EXP001, EXP002 |
-| REQ-004 honest bypass (as read under D65-2) | EXP001 (recipe owner); the composed off-state check is an explicit acceptance line on the final leaf of every increment (STG003, EXP002, MST001, TUN001) and verbatim in each increment's completion rule |
+| REQ-004 honest bypass (preserved; ceiling excepted per D65-2) | EXP001 (recipe owner); the composed off-state check is an explicit acceptance line on the final leaf of every increment (STG003, EXP002, MST001, TUN001) and verbatim in each increment's completion rule |
 | REQ-005 master headroom/loudness | MST001 (true peak ≤ −1 dBFS on every export; ±2 dB proxy tolerance across two dissimilar pieces; quiet piece not inaudibly low) |
 | REQ-006 tuning choice | TUN001 under P65-4 |
 | REQ-007 reference-piece performance | Explicit acceptance line on the final leaf of every increment (STG003, EXP002, MST001, TUN001): full playthrough of the pinned reference piece with all features delivered so far on, `overloadPauses == 0`; also verbatim in each increment's completion rule |
@@ -390,9 +396,9 @@ REQ-004/REQ-007 are cross-cutting guardrails bound to executable nodes.
   only from two agreeing runs.
 - Export equality: `AudioExportTests`/`OfflineRenderTests` remain the gate
   that live and export stay identical with every feature on and off.
-- Bypass: an automated render comparison of the REQ-004 recipe against
-  the raw line sum, with the exact equality relation fixed by D65-2, and
-  no room, phrase-dynamic, or cohesion energy signature.
+- Bypass: an automated render comparison proving the REQ-004 recipe is
+  bit-identical to the raw line sum whenever that sum is under −1 dBTP
+  (D65-2), with no room, phrase-dynamic, master, or tuning signature.
 - Loudness/headroom: automated offline checks of true peak ≤ −1 dBFS and
   the ±2 dB proxy tolerance across at least two dissimilar library pieces;
   a silent program calibrates to unity.
@@ -416,65 +422,11 @@ acceptance above. If listening rejects a feature's character, that is a
 constants adjustment or a new product conversation, not silent scope
 growth.
 
-### Owner decision brief (D65-2 and D65-3) — PENDING
-
-**Problem.** Two choices in this plan are product-visible and change an
-approved acceptance clause or what the owner's existing library does. The
-lead recommended them in the owner thread, but the reviewer correctly
-notes that "ok" to the control-surface split is not an answer to either.
-
-**Facts.** REQ-004 (approved) says the bypass recipe is "audibly free of
-… master processing". REQ-005 (approved) requires no export to clip and
-quiet pieces not to export inaudibly low. The definition's clean-slate
-decision (approved) says new defaults may apply to existing presets. The
-success measure is that the owner keeps expression/staging on for their
-library. Existing presets may carry owner mixer edits that must not be
-overwritten. **Assumptions.** A ceiling that only acts above −1 dBTP is
-bit-transparent below it; the owner rarely wants master off except to A/B.
-
-**D65-2 Master surface. Options:**
-
-- **A (recommended).** One preset "Produced master" switch covers cohesion
-  and calibration together; on for fresh presets. The ceiling is always on
-  and bit-transparent below −1 dBTP. REQ-004 is preserved literally for
-  everything but the ceiling, which acts only when the raw sum would clip;
-  the bypass check asserts bit-identity to the raw sum whenever it is
-  under the ceiling. REQ-005's clip guarantee holds in every state; its
-  loudness guarantee holds with master on, the default. One switch, no
-  reinterpretation, fully reversible.
-- **B.** As first drafted: ceiling and calibration always on, only
-  cohesion switchable. "Mastering off" is re-read as "cohesion off" and
-  the bypass check asserts raw sum × one static gain. Smallest surface,
-  but changes an approved acceptance clause and makes loudness matching
-  unremovable even for A/B.
-- **C.** Everything, ceiling included, behind the master switch, as the
-  definition reads literally. Exports with master off can clip. Preserves
-  REQ-004 verbatim at the cost of REQ-005 in the off state.
-
-Recommendation: **A**. Blocked until answered: MST001's acceptance and
-the composed bypass line on STG003, EXP002, MST001, TUN001.
-
-**D65-3 Existing library. Options:**
-
-- **A (recommended).** Stored presets that lack the new fields decode with
-  expression on (default amount) and master on; existing staged mixer
-  values are left untouched (register-aware seating applies to newly
-  created presets and reconcile-added lines only). Every existing piece
-  gains expression and master on next open; mixer edits are never
-  overwritten; the owner re-creates a preset to get the new seating.
-- **B.** New pieces only: stored presets decode with expression off and
-  master off; only freshly imported scores improve. Simplest, but the
-  owner's library does not change, which misses the success measure.
-- **C.** As A, plus re-seat any existing strip that is still byte-equal to
-  its creation-time staging (untouched by the owner). Library improves the
-  most; adds a comparison against the old derivation in the load path and
-  one more surface to keep deterministic.
-
-Recommendation: **A**. Blocked until answered: EXP001 and MST001 default
-lines; STG003's out-of-scope line.
-
-**Reply needed to resume:** `D65-2: A|B|C; D65-3: A|B|C` (or a specific
-modification).
+None requiring owner decision. The Owner decision brief for D65-2
+(master surface versus REQ-004) and D65-3 (existing library) was presented
+in the owner thread on 2026-09-10 with options A/B/C each; the owner chose
+both recommended options ("all as recommended"), recorded in the decision
+table above.
 
 ## Satisfaction proof
 

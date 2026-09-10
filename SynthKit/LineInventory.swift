@@ -25,6 +25,15 @@ public struct LineEntry: Equatable, Sendable, Identifiable {
     public let staff: Int
     public let voice: String
 
+    /// How high or low this line actually sounds, or nil when the score gives
+    /// it too few notes to say (STG003).
+    ///
+    /// Derived from the compiled score on every open, exactly like
+    /// `defaultName` and for the same reason: it is a fact about the bytes, so
+    /// improving the summary reaches every existing piece and nothing stored
+    /// can disagree with the score.
+    public let register: LineRegister?
+
     /// True when the owner renamed this line.
     ///
     /// A rename is stored, a default is derived, and the difference matters:
@@ -38,7 +47,8 @@ public struct LineEntry: Equatable, Sendable, Identifiable {
         name: String? = nil,
         partName: String? = nil,
         staff: Int = 1,
-        voice: String = "1"
+        voice: String = "1",
+        register: LineRegister? = nil
     ) {
         self.id = id
         self.defaultName = defaultName
@@ -46,6 +56,7 @@ public struct LineEntry: Equatable, Sendable, Identifiable {
         self.partName = partName
         self.staff = staff
         self.voice = voice
+        self.register = register
     }
 
     /// What VoiceOver says a line row is.
@@ -85,7 +96,8 @@ public struct LineInventory: Equatable, Sendable {
                     name: renames[line.id],
                     partName: line.partName,
                     staff: line.staff,
-                    voice: line.voice
+                    voice: line.voice,
+                    register: line.register
                 )
             }
         )

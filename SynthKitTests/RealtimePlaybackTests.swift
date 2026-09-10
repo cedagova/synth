@@ -248,10 +248,14 @@ final class RealtimePlaybackTests: XCTestCase {
         let engine = PlaybackEngine()
         try engine.load(timeline: timeline)
         // Stage every line exactly as a fresh preset would (REQ-001's
-        // derivation), so the guardrail measures the staged engine.
+        // derivation, register-aware since STG003), so the guardrail measures
+        // the staged engine the owner actually gets.
         let count = timeline.lines.count
+        let registers = PresetStaging.StageRegisters(score.lines.map(\.register))
         for (index, line) in timeline.lines.enumerated() {
-            let staged = PresetStaging.mixer(lineIndex: index, lineCount: count, family: nil)
+            let staged = PresetStaging.mixer(
+                lineIndex: index, lineCount: count, family: nil, registers: registers
+            )
             guard let strip = engine.mixer(for: line.id) else { continue }
             strip.pan = Float(staged.pan)
             strip.roomSend = Float(staged.roomSend)

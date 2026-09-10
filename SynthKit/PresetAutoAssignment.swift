@@ -292,6 +292,10 @@ public enum PresetAutoAssignment {
         palette: [SoundEntry]
     ) throws -> PresetContent {
         let count = inventory.entries.count
+        // One ensemble-wide register reading for the whole piece, because a
+        // seat is relative: which line is *the* bass line is only answerable by
+        // looking at all of them at once (STG003).
+        let registers = PresetStaging.StageRegisters(inventory: inventory)
         return PresetContent(
             lines: try inventory.entries.enumerated().map { index, entry in
                 PresetLine(
@@ -301,7 +305,10 @@ public enum PresetAutoAssignment {
                     // sounds like an ensemble on a stage, and every value is
                     // an ordinary editable mixer value.
                     mixer: PresetStaging.mixer(
-                        lineIndex: index, lineCount: count, family: family(for: entry)
+                        lineIndex: index,
+                        lineCount: count,
+                        family: family(for: entry),
+                        registers: registers
                     )
                 )
             }

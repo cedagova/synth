@@ -82,7 +82,23 @@ final class PlaybackModel {
 
     private(set) var loadState: PlaybackLoadState = .preparing(.compiling)
 
+    /// The score as it is being played: `sourceScore` with the owner's tempo
+    /// applied. Everything that turns time into measures, or measures into
+    /// time, reads this one, so the readout and the seeks agree with the
+    /// music at any tempo.
     private(set) var compiledScore: CompiledScore?
+
+    /// The score exactly as compiled from the file, at the file's own tempo.
+    /// Kept so a tempo change scales from the source rather than compounding.
+    private var sourceScore: CompiledScore?
+
+    /// The owner's tempo, as a percentage of the file's (REQ-009). Read from
+    /// the active preset in `prepare()`, like humanization.
+    private(set) var tempoPercent = TempoMap.defaultTempoPercent
+
+    /// Live slider value, committed when the drag ends — a re-realization
+    /// per intermediate value would stutter a long score.
+    var tempoDraft: Double = Double(TempoMap.defaultTempoPercent)
     private(set) var timeline: PerformanceTimeline?
     private(set) var navigator: PlaybackNavigator?
 
@@ -195,9 +211,19 @@ final class PlaybackModel {
         self.intensityDraft = Double(HumanizationSettings.standard.intensity)
 
         wireExport()
+        // **Compared now, not when the task runs.** A preset load fires these
+        // on every open and refresh, usually with the value already in force.
+        // Queuing a task regardless left a stale "adopt 100%" waiting behind
+        // the owner's own "set 50%", and it ran during that change's
+        // realization and undid it. A value that already matches queues
+        // nothing.
         assignment.onHumanizationLoaded = { [weak self] settings in
-            guard let self else { return }
+            guard let self, settings != self.humanization else { return }
             Task { await self.adoptPresetHumanization(settings) }
+        }
+        assignment.onTempoLoaded = { [weak self] percent in
+            guard let self, percent != self.tempoPercent else { return }
+            Task { await self.adoptPresetTempo(percent) }
         }
     }
 
@@ -312,22 +338,26 @@ final class PlaybackModel {
         let piece = self.piece
         let contentStore = store.pieceContent
         do {
-            let compiled = try await Task.detached(priority: .userInitiated) {
+            let source = try await Task.detached(priority: .userInitiated) {
                 try ScoreCompiler().compile(piece: piece, contentStore: contentStore)
             }.value
-            compiledScore = compiled
-            navigator = PlaybackNavigator(score: compiled)
+            sourceScore = source
 
             loadState = .preparing(.realizing)
-            // The active preset's humanization is read before the first
-            // realization so the piece opens under its stored setting rather
-            // than being realized twice. A piece with no preset yet realizes
-            // under the standard setting, which is also what its first preset
-            // will store.
-            if let preset = try? store.presets.activePreset(forPieceID: compiled.pieceID) {
+            // The active preset's humanization and tempo are read before the
+            // first realization so the piece opens under its stored settings
+            // rather than being realized twice. A piece with no preset yet
+            // realizes under the standard settings, which is also what its
+            // first preset will store.
+            if let preset = try? store.presets.activePreset(forPieceID: source.pieceID) {
                 humanization = preset.content.humanization
                 intensityDraft = Double(preset.content.humanization.intensity)
+                tempoPercent = preset.content.tempoPercent
+                tempoDraft = Double(preset.content.tempoPercent)
             }
+            let compiled = source.scalingTempo(toPercent: tempoPercent)
+            compiledScore = compiled
+            navigator = PlaybackNavigator(score: compiled)
             let realized = await Self.realize(compiled, humanization: humanization)
             try loadIntoEngine(realized)
 
@@ -851,6 +881,98 @@ final class PlaybackModel {
 
     /// Writes the choice off the main actor, returning the reason it could not
     /// be written, or nil.
+
+    // MARK: Tempo (REQ-009)
+
+    /// Commits the slider. Called when the drag ends, not on every value.
+    func commitTempo() async {
+        await setTempoPercent(Int(tempoDraft.rounded()))
+    }
+
+    func nudgeTempo(by delta: Int) async {
+        await setTempoPercent(tempoPercent + delta)
+    }
+
+    func resetTempo() async {
+        await setTempoPercent(TempoMap.defaultTempoPercent)
+    }
+
+    func setTempoPercent(_ percent: Int) async {
+        await applyTempo(PresetContent.clampedTempo(percent))
+    }
+
+    /// A loaded or switched preset brought its own tempo: play under it, but
+    /// do not write it back — it is already what the preset stores.
+    func adoptPresetTempo(_ percent: Int) async {
+        await applyTempo(PresetContent.clampedTempo(percent), savingToPreset: false)
+    }
+
+    /// The tempo control's whole mechanism: rescale the clock, realize the
+    /// same notes against it, reload, and put the playhead back on the same
+    /// *beat* — not the same second, which would now be somewhere else.
+    ///
+    /// **Nothing about the sound changes.** The synthesizer renders the same
+    /// events with the same envelopes and effects at different moments; no
+    /// audio is stretched, so there is no artefact to speak of. The one cost
+    /// is the same one humanization pays: loading a program stops the graph
+    /// for an instant, which is why this runs on commit and not on every
+    /// slider value.
+    private func applyTempo(_ percent: Int, savingToPreset: Bool = true) async {
+        guard percent != tempoPercent else { return }
+        tempoPercent = percent
+        tempoDraft = Double(percent)
+
+        if savingToPreset {
+            assignment.saveTempoPercent(percent)
+        }
+
+        guard let sourceScore, let oldScore = compiledScore else {
+            statusMessage = Self.tempoMessage(percent, score: nil)
+            return
+        }
+
+        let wasPlaying = transportState == .playing
+        // The same place in the music, found by score ticks, which the tempo
+        // does not move.
+        let ticks = oldScore.tempoMap.playbackTicks(atMicroseconds: positionMicroseconds)
+
+        let rescaled = sourceScore.scalingTempo(toPercent: percent)
+        compiledScore = rescaled
+        navigator = PlaybackNavigator(score: rescaled)
+        if let loop, let navigator {
+            // The loop is a pair of measures; its seconds have to be re-read.
+            self.loop = navigator.loopRange(
+                fromMeasureNumber: loop.startMeasureNumber, toMeasureNumber: loop.endMeasureNumber
+            )
+        }
+        let realized = await Self.realize(rescaled, humanization: humanization)
+
+        do {
+            try loadIntoEngine(realized)
+            assignment.programWasReloaded()
+            seekEngine(to: rescaled.tempoMap.microseconds(atPlaybackTicks: ticks))
+            if wasPlaying {
+                try engine.start()
+                engine.play()
+            }
+            statusMessage = Self.tempoMessage(percent, score: sourceScore)
+            refreshTransport()
+        } catch {
+            statusMessage = "Could not apply the tempo change: \(error)"
+        }
+    }
+
+    /// "Tempo 90% — ♩=120 becomes ♩=108." The marked tempo is the one in
+    /// force at the start of the piece, which is what a listener would name.
+    static func tempoMessage(_ percent: Int, score: CompiledScore?) -> String {
+        guard percent != TempoMap.defaultTempoPercent else {
+            return "Tempo back to the score's own."
+        }
+        guard let score else { return "Tempo \(percent)%." }
+        let marked = 60_000_000.0 / Double(score.tempoMap.microsecondsPerQuarter(atPlaybackTicks: 0))
+        let played = marked * Double(percent) / 100
+        return "Tempo \(percent)% — ♩=\(Int(marked.rounded())) becomes ♩=\(Int(played.rounded()))."
+    }
 
     private static func humanizationMessage(_ settings: HumanizationSettings) -> String {
         settings.isLiteral

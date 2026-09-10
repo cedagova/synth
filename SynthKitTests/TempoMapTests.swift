@@ -243,4 +243,49 @@ final class TempoMapTests: XCTestCase {
             XCTAssertEqual(position.tickInMeasure, 0)
         }
     }
+
+    // MARK: The owner's tempo control
+
+    private func twoTempoMap() -> TempoMap {
+        // ♩=120 for four quarters, then ♩=60 for four quarters, at 480 ticks
+        // per quarter: 2 s + 4 s.
+        TempoMap(
+            ticksPerQuarter: 480,
+            segments: [
+                .init(startTicks: 0, microsecondsPerQuarter: 500_000, startMicroseconds: 0),
+                .init(startTicks: 1_920, microsecondsPerQuarter: 1_000_000,
+                      startMicroseconds: 2_000_000)
+            ],
+            totalTicks: 3_840,
+            totalMicroseconds: 6_000_000
+        )
+    }
+
+    func testScalingTheTempoScalesEveryTempoAndKeepsTheirProportion() {
+        let half = twoTempoMap().scaled(toTempoPercent: 50)
+        XCTAssertEqual(half.segments.map(\.microsecondsPerQuarter), [1_000_000, 2_000_000])
+        XCTAssertEqual(half.segments.map(\.startMicroseconds), [0, 4_000_000])
+        XCTAssertEqual(half.totalMicroseconds, 12_000_000, "Twice as long at half speed")
+        XCTAssertEqual(half.totalTicks, 3_840, "Ticks — the score — do not move")
+
+        let faster = twoTempoMap().scaled(toTempoPercent: 150)
+        XCTAssertEqual(faster.totalMicroseconds, 4_000_000, "Two thirds as long at 150%")
+        // 500 000 × 100 ÷ 150 rounds to 333 333 µs per quarter; four of them.
+        XCTAssertEqual(faster.microseconds(atPlaybackTicks: 1_920), 1_333_332)
+    }
+
+    func testOneHundredPercentIsTheSameMapAndTheRangeIsClamped() {
+        let map = twoTempoMap()
+        XCTAssertEqual(map.scaled(toTempoPercent: 100), map)
+        XCTAssertEqual(map.scaled(toTempoPercent: 10), map.scaled(toTempoPercent: 50))
+        XCTAssertEqual(map.scaled(toTempoPercent: 400), map.scaled(toTempoPercent: 150))
+    }
+
+    func testAScaledMapStillRoundTripsTicksAndMicroseconds() {
+        let map = twoTempoMap().scaled(toTempoPercent: 75)
+        for ticks in stride(from: 0, through: 3_840, by: 240) {
+            let microseconds = map.microseconds(atPlaybackTicks: ticks)
+            XCTAssertEqual(map.playbackTicks(atMicroseconds: microseconds), ticks, "at \(ticks)")
+        }
+    }
 }

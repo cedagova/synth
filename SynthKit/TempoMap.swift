@@ -80,6 +80,61 @@ public struct TempoMap: Equatable, Sendable, Codable {
         return Int(value)
     }
 
+    /// The owner's tempo control: 100 plays the score as marked, 50 at half
+    /// speed, 150 half again as fast (REQ-009's transport, extended).
+    public static let tempoPercentRange = 50...150
+    public static let defaultTempoPercent = 100
+
+    /// The same map with every tempo scaled, so a piece marked ♩=120 played
+    /// at 50% runs at ♩=60 throughout — every change of tempo and every
+    /// fermata keeps its proportion.
+    ///
+    /// **Only the clock moves.** Ticks are untouched, so measures, beats and
+    /// every note's place in the score are exactly where they were; what
+    /// changes is how many microseconds a quarter note lasts. This is what
+    /// makes a tempo change free of any cost to the sound: the synthesizer
+    /// renders the same notes with the same envelopes, filters and effects,
+    /// at different moments. Nothing is stretched.
+    ///
+    /// Segment start times are rebuilt cumulatively rather than each being
+    /// scaled, so rounding cannot drift between segments.
+    public func scaled(toTempoPercent percent: Int) -> TempoMap {
+        let clamped = max(Self.tempoPercentRange.lowerBound,
+                          min(Self.tempoPercentRange.upperBound, percent))
+        guard clamped != Self.defaultTempoPercent else { return self }
+
+        var rebuilt: [Segment] = []
+        var clock: Int64 = 0
+        for (index, segment) in segments.enumerated() {
+            if index > 0 {
+                let previous = rebuilt[index - 1]
+                clock += Self.elapsed(
+                    ticks: segment.startTicks - previous.startTicks,
+                    microsecondsPerQuarter: previous.microsecondsPerQuarter,
+                    ticksPerQuarter: ticksPerQuarter
+                )
+            }
+            let scaledQuarter = max(1, Int(
+                (Double(segment.microsecondsPerQuarter) * 100.0 / Double(clamped)).rounded()
+            ))
+            rebuilt.append(Segment(
+                startTicks: segment.startTicks,
+                microsecondsPerQuarter: scaledQuarter,
+                startMicroseconds: clock
+            ))
+        }
+        let last = rebuilt[rebuilt.count - 1]
+        let total = last.startMicroseconds + Self.elapsed(
+            ticks: totalTicks - last.startTicks,
+            microsecondsPerQuarter: last.microsecondsPerQuarter,
+            ticksPerQuarter: ticksPerQuarter
+        )
+        return TempoMap(
+            ticksPerQuarter: ticksPerQuarter, segments: rebuilt,
+            totalTicks: totalTicks, totalMicroseconds: total
+        )
+    }
+
     /// Absolute time at `ticks`.
     public func microseconds(atPlaybackTicks ticks: Int) -> Int64 {
         let clamped = max(0, min(ticks, totalTicks))

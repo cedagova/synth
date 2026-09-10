@@ -412,6 +412,19 @@ public struct CompiledScore: Equatable, Sendable, Codable {
         self.report = report
     }
 
+    /// This score with its clock scaled (see `TempoMap.scaled`). Everything
+    /// else — lines, measures, expression — is shared, because none of it is
+    /// in time units.
+    public func scalingTempo(toPercent percent: Int) -> CompiledScore {
+        CompiledScore(
+            pieceID: pieceID, contentSHA256: contentSHA256, ticksPerQuarter: ticksPerQuarter,
+            workTitle: workTitle, lines: lines, sourceMeasures: sourceMeasures,
+            playbackMeasures: playbackMeasures,
+            tempoMap: tempoMap.scaled(toTempoPercent: percent),
+            expressionEvents: expressionEvents, report: report
+        )
+    }
+
     /// Total playback length in ticks.
     public var totalTicks: Int { playbackMeasures.last?.endTicks ?? 0 }
 

@@ -510,6 +510,58 @@ final class AppModelWiringTests: XCTestCase {
         )
     }
 
+    // MARK: The tempo control
+
+    /// Half speed doubles the piece's length, keeps the playhead on the same
+    /// beat, stores itself on the preset, and leaves the notes alone.
+    func testTheTempoControlRescalesTheClockAndIsSavedWithThePreset() async throws {
+        let playback = try await openPreparedPiece()
+        let fileLength = playback.totalMicroseconds
+        let notes = playback.timeline?.eventCount
+        XCTAssertGreaterThan(fileLength, 0)
+
+        playback.seek(toMicroseconds: fileLength / 2)
+        await playback.setTempoPercent(50)
+
+        XCTAssertEqual(playback.tempoPercent, 50)
+        XCTAssertEqual(playback.totalMicroseconds, fileLength * 2, "Twice as long at half speed")
+        XCTAssertEqual(playback.positionMicroseconds, fileLength, "Same beat, now twice as far in")
+        XCTAssertEqual(playback.timeline?.eventCount, notes, "The same notes, re-timed")
+        XCTAssertEqual(playback.assignment.activePreset?.content.tempoPercent, 50, "Saved")
+        XCTAssertEqual(playback.statusMessage, "Tempo 50% — ♩=120 becomes ♩=60.")
+
+        await playback.resetTempo()
+        XCTAssertEqual(playback.totalMicroseconds, fileLength)
+        XCTAssertEqual(playback.assignment.activePreset?.content.tempoPercent, 100)
+    }
+
+    /// Switching to a preset that stores a tempo plays under it without
+    /// writing it back.
+    func testSwitchingPresetsAdoptsTheStoredTempo() async throws {
+        let playback = try await openPreparedPiece()
+        let assignment = playback.assignment
+        let fileLength = playback.totalMicroseconds
+        let original = try XCTUnwrap(assignment.activePreset)
+
+        assignment.createPreset()
+        assignment.cancelPresetRename()
+        await playback.setTempoPercent(150)
+        let fast = try XCTUnwrap(assignment.activePreset)
+        XCTAssertEqual(fast.content.tempoPercent, 150)
+
+        assignment.activate(presetID: original.id)
+        // The adoption is dispatched as a task from the load hook.
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(playback.tempoPercent, 100, "The original preset is at the file's tempo")
+        XCTAssertEqual(playback.totalMicroseconds, fileLength)
+
+        assignment.activate(presetID: fast.id)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(playback.tempoPercent, 150)
+        XCTAssertEqual(try XCTUnwrap(assignment.presets.first { $0.id == original.id })
+                        .content.tempoPercent, 100, "Nothing was written back to the original")
+    }
+
     // MARK: The Switched-On preset
 
     /// The fixture's one part is called "Cello": the button makes a new

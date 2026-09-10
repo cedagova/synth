@@ -107,6 +107,9 @@ final class AssignmentModel {
     /// which owns re-realization. Installed by `PlaybackModel`.
     var onHumanizationLoaded: ((HumanizationSettings) -> Void)?
 
+    /// The same for the preset's whole-piece tempo.
+    var onTempoLoaded: ((Int) -> Void)?
+
     init(store: LibraryStore, engine: PlaybackEngine) {
         self.store = store
         self.engine = engine
@@ -209,6 +212,7 @@ final class AssignmentModel {
             lines = performance.lines
             keepSelectionValid()
             onHumanizationLoaded?(preset.content.humanization)
+            onTempoLoaded?(preset.content.tempoPercent)
 
             if applyingToEngine { applyToEngine(performance) }
             if let verb {
@@ -775,6 +779,17 @@ final class AssignmentModel {
         }
     }
 
+    /// Stores the whole-piece tempo on the active preset. Auto-saved.
+    func saveTempoPercent(_ percent: Int) {
+        guard let preset = activePreset, preset.content.tempoPercent != percent else { return }
+        do {
+            activePreset = try store.presets.setTempoPercent(percent, in: preset)
+            presets = try store.presets.presets(forPieceID: preset.pieceID)
+        } catch {
+            alert = AssignmentAlert(title: "Could not save the tempo change", error)
+        }
+    }
+
     /// Stores the whole-piece humanization on the active preset, like any
     /// other custom value the preset holds (REQ-024). Auto-saved.
     func saveHumanization(_ settings: HumanizationSettings) {
@@ -972,6 +987,7 @@ final class AssignmentModel {
             lines = performance.lines
             keepSelectionValid()
             onHumanizationLoaded?(preset.content.humanization)
+            onTempoLoaded?(preset.content.tempoPercent)
             applyToEngine(performance)
         } catch {
             alert = AssignmentAlert(title: "Could not re-read this piece's presets", error)

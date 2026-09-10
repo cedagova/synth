@@ -658,6 +658,9 @@ private struct LoopControls: View {
 private struct HumanizationBar: View {
     @Bindable var model: PlaybackModel
 
+    private static let tempoSliderRange =
+        Double(TempoMap.tempoPercentRange.lowerBound)...Double(TempoMap.tempoPercentRange.upperBound)
+
     var body: some View {
         HStack(spacing: 10) {
             Toggle("Humanize", isOn: Binding(
@@ -689,6 +692,53 @@ private struct HumanizationBar: View {
             Text("\(Int(model.intensityDraft))%")
                 .monospacedDigit()
                 .accessibilityHidden(true)
+
+            Divider().frame(height: 14)
+
+            // The tempo control (REQ-009): the file's tempo at 100, half at
+            // 50, half again as fast at 150. Committed when the drag ends,
+            // like the humanization slider and for the same reason. The
+            // sound is untouched at any setting — see `PlaybackModel.applyTempo`.
+            Text("Tempo")
+                .accessibilityHidden(true)
+
+            Slider(
+                value: $model.tempoDraft,
+                in: Self.tempoSliderRange,
+                step: 5,
+                onEditingChanged: { isEditing in
+                    guard !isEditing else { return }
+                    Task { await model.commitTempo() }
+                }
+            )
+            .controlSize(.small)
+            .frame(width: 110)
+            .disabled(!model.isReady)
+            .accessibilityLabel("Tempo")
+            .accessibilityValue("\(Int(model.tempoDraft)) percent of the score's tempo")
+            .accessibilityHint(
+                "50 to 150 percent of the tempo the score marks. Saved with the preset. "
+                + "Also on the Playback menu as Command Minus, Command Equals and Command Zero."
+            )
+
+            Text("\(Int(model.tempoDraft))%")
+                .monospacedDigit()
+                .frame(width: 36, alignment: .trailing)
+                .accessibilityHidden(true)
+
+            // Back to the file's tempo, shown only while there is somewhere
+            // to go back from.
+            Button {
+                Task { await model.resetTempo() }
+            } label: {
+                Image(systemName: "arrow.uturn.backward")
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .opacity(model.tempoPercent == TempoMap.defaultTempoPercent ? 0 : 1)
+            .disabled(model.tempoPercent == TempoMap.defaultTempoPercent)
+            .help("Back to the score's own tempo (⌘0)")
+            .accessibilityLabel("Reset the tempo to the score's own")
 
             Spacer(minLength: 0)
         }

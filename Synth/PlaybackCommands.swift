@@ -94,6 +94,30 @@ struct PlaybackCommands: Commands {
 
             Divider()
 
+            // Command with minus, equals and zero: the keys every Mac app
+            // uses for smaller, bigger and actual size, and unused here.
+            // Equals rather than plus, because plus is Shift-equals and a
+            // Shift variant is matched ambiguously (see Go to Time).
+            Button("Tempo Slower") {
+                guard let playback = model.playback else { return }
+                Task { await playback.nudgeTempo(by: -5) }
+            }
+            .keyboardShortcut("-", modifiers: .command)
+
+            Button("Tempo Faster") {
+                guard let playback = model.playback else { return }
+                Task { await playback.nudgeTempo(by: 5) }
+            }
+            .keyboardShortcut("=", modifiers: .command)
+
+            Button("Reset Tempo") {
+                guard let playback = model.playback else { return }
+                Task { await playback.resetTempo() }
+            }
+            .keyboardShortcut("0", modifiers: .command)
+
+            Divider()
+
             Button("Toggle Humanization") {
                 guard let playback = model.playback else { return }
                 Task { await playback.setHumanizationEnabled(!playback.humanization.isEnabled) }

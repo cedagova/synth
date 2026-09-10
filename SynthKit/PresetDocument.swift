@@ -392,9 +392,29 @@ public struct PresetContent: Equatable, Sendable {
     /// humanization shapes the one realized timeline every line shares.
     public var humanization: HumanizationSettings
 
-    public init(lines: [PresetLine], humanization: HumanizationSettings = .standard) {
+    /// Whole-piece tempo, as a percentage of what the score marks: 100 is the
+    /// file's own tempo, 50 half speed, 150 half again as fast. Stored with
+    /// the preset for the reason humanization is — it shapes the one
+    /// timeline every line shares, and an export must play what playback
+    /// played (REQ-026). Always inside `TempoMap.tempoPercentRange`.
+    public var tempoPercent: Int {
+        didSet { tempoPercent = Self.clampedTempo(tempoPercent) }
+    }
+
+    public init(
+        lines: [PresetLine],
+        humanization: HumanizationSettings = .standard,
+        tempoPercent: Int = TempoMap.defaultTempoPercent
+    ) {
         self.lines = lines
         self.humanization = humanization
+        self.tempoPercent = Self.clampedTempo(tempoPercent)
+    }
+
+    /// `percent` held inside `TempoMap.tempoPercentRange`.
+    public static func clampedTempo(_ percent: Int) -> Int {
+        max(TempoMap.tempoPercentRange.lowerBound,
+            min(TempoMap.tempoPercentRange.upperBound, percent))
     }
 
     /// Format version of the stored document. Bumping this requires adding a
@@ -421,19 +441,22 @@ public struct PresetContent: Equatable, Sendable {
 
 extension PresetContent: Codable {
     private enum CodingKeys: String, CodingKey {
-        case lines, humanization
+        case lines, humanization, tempoPercent
     }
 
-    /// `humanization` is additive at the same document version, the
-    /// `LineMixerState.roomSend` precedent: a document from before the field
-    /// existed reads as the standard setting rather than failing.
+    /// `humanization` and `tempoPercent` are additive at the same document
+    /// version, the `LineMixerState.roomSend` precedent: a document from
+    /// before either field existed reads as the standard setting — and the
+    /// file's own tempo — rather than failing.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
             lines: try container.decode([PresetLine].self, forKey: .lines),
             humanization: try container.decodeIfPresent(
                 HumanizationSettings.self, forKey: .humanization
-            ) ?? .standard
+            ) ?? .standard,
+            tempoPercent: try container.decodeIfPresent(Int.self, forKey: .tempoPercent)
+                ?? TempoMap.defaultTempoPercent
         )
     }
 }

@@ -141,7 +141,14 @@ private struct PresetBar: View {
                         }
                     }
                     .labelsHidden()
-                    .frame(minWidth: 140)
+                    // The picker is the one thing on this row allowed to
+                    // give way. With the Switched-On button beside New, a
+                    // 140-point minimum pushed a button label past the
+                    // panel's edge and it read "Swi…". A preset name
+                    // truncates gracefully; a button label must not, so the
+                    // buttons are fixed-size and this sits last in layout.
+                    .frame(minWidth: 80)
+                    .layoutPriority(-1)
                     .accessibilityValue(model.spokenPreset)
                     .accessibilityHint(
                         "Switching applies at once — every preset is already saved."
@@ -152,6 +159,7 @@ private struct PresetBar: View {
                     } label: {
                         Label("New", systemImage: "plus")
                     }
+                    .fixedSize()
                     .accessibilityLabel("New preset from this one")
                     .accessibilityHint("Also on the Mix menu as Control Command P.")
 
@@ -164,6 +172,8 @@ private struct PresetBar: View {
                     } label: {
                         Label("Switched-On", systemImage: "waveform.path")
                     }
+                    // Never truncated: the picker beside it yields instead.
+                    .fixedSize()
                     .help("New preset with each named instrument on its Switched-On Bach sound")
                     .accessibilityLabel("New Switched-On preset")
                     .accessibilityHint(

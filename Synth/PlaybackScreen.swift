@@ -661,86 +661,96 @@ private struct HumanizationBar: View {
     private static let tempoSliderRange =
         Double(TempoMap.tempoPercentRange.lowerBound)...Double(TempoMap.tempoPercentRange.upperBound)
 
+    /// Two rows, deliberately. On one row the two sliders fitted the panel's
+    /// 420 points only by squeezing the Humanize label and its readout out
+    /// of existence, which the running app showed. A control without its
+    /// label is not compact, it is unlabelled.
     var body: some View {
-        HStack(spacing: 10) {
-            Toggle("Humanize", isOn: Binding(
-                get: { model.humanization.isEnabled },
-                set: { isEnabled in Task { await model.setHumanizationEnabled(isEnabled) } }
-            ))
-            .toggleStyle(.switch)
-            .controlSize(.mini)
-            .accessibilityLabel("Humanization")
-            .accessibilityHint("Off plays the score exactly as written. Saved with the preset.")
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 10) {
+                Toggle("Humanize", isOn: Binding(
+                    get: { model.humanization.isEnabled },
+                    set: { isEnabled in Task { await model.setHumanizationEnabled(isEnabled) } }
+                ))
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .accessibilityLabel("Humanization")
+                .accessibilityHint("Off plays the score exactly as written. Saved with the preset.")
 
-            Slider(
-                value: $model.intensityDraft,
-                in: 0...100,
-                step: 5,
-                onEditingChanged: { isEditing in
-                    // Committed when the drag ends: re-realizing the piece on
-                    // every intermediate value would stutter a long score.
-                    guard !isEditing else { return }
-                    Task { await model.commitIntensity() }
-                }
-            )
-            .controlSize(.small)
-            .frame(width: 150)
-            .disabled(!model.humanization.isEnabled)
-            .accessibilityLabel("Humanization amount")
-            .accessibilityValue("\(Int(model.intensityDraft)) percent")
+                Slider(
+                    value: $model.intensityDraft,
+                    in: 0...100,
+                    step: 5,
+                    onEditingChanged: { isEditing in
+                        // Committed when the drag ends: re-realizing the piece on
+                        // every intermediate value would stutter a long score.
+                        guard !isEditing else { return }
+                        Task { await model.commitIntensity() }
+                    }
+                )
+                .controlSize(.small)
+                .frame(width: 150)
+                .disabled(!model.humanization.isEnabled)
+                .accessibilityLabel("Humanization amount")
+                .accessibilityValue("\(Int(model.intensityDraft)) percent")
 
-            Text("\(Int(model.intensityDraft))%")
-                .monospacedDigit()
-                .accessibilityHidden(true)
+                Text("\(Int(model.intensityDraft))%")
+                    .monospacedDigit()
+                    .frame(width: 36, alignment: .trailing)
+                    .accessibilityHidden(true)
 
-            Divider().frame(height: 14)
+                Spacer(minLength: 0)
+            }
 
             // The tempo control (REQ-009): the file's tempo at 100, half at
             // 50, half again as fast at 150. Committed when the drag ends,
             // like the humanization slider and for the same reason. The
             // sound is untouched at any setting — see `PlaybackModel.applyTempo`.
-            Text("Tempo")
-                .accessibilityHidden(true)
+            HStack(spacing: 10) {
+                Text("Tempo")
+                    .frame(width: 66, alignment: .leading)
+                    .accessibilityHidden(true)
 
-            Slider(
-                value: $model.tempoDraft,
-                in: Self.tempoSliderRange,
-                step: 5,
-                onEditingChanged: { isEditing in
-                    guard !isEditing else { return }
-                    Task { await model.commitTempo() }
+                Slider(
+                    value: $model.tempoDraft,
+                    in: Self.tempoSliderRange,
+                    step: 5,
+                    onEditingChanged: { isEditing in
+                        guard !isEditing else { return }
+                        Task { await model.commitTempo() }
+                    }
+                )
+                .controlSize(.small)
+                .frame(width: 150)
+                .disabled(!model.isReady)
+                .accessibilityLabel("Tempo")
+                .accessibilityValue("\(Int(model.tempoDraft)) percent of the score's tempo")
+                .accessibilityHint(
+                    "50 to 150 percent of the tempo the score marks. Saved with the preset. "
+                    + "Also on the Playback menu as Command Minus, Command Equals and Command Zero."
+                )
+
+                Text("\(Int(model.tempoDraft))%")
+                    .monospacedDigit()
+                    .frame(width: 36, alignment: .trailing)
+                    .accessibilityHidden(true)
+
+                // Back to the file's tempo, shown only while there is somewhere
+                // to go back from.
+                Button {
+                    Task { await model.resetTempo() }
+                } label: {
+                    Image(systemName: "arrow.uturn.backward")
                 }
-            )
-            .controlSize(.small)
-            .frame(width: 110)
-            .disabled(!model.isReady)
-            .accessibilityLabel("Tempo")
-            .accessibilityValue("\(Int(model.tempoDraft)) percent of the score's tempo")
-            .accessibilityHint(
-                "50 to 150 percent of the tempo the score marks. Saved with the preset. "
-                + "Also on the Playback menu as Command Minus, Command Equals and Command Zero."
-            )
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .opacity(model.tempoPercent == TempoMap.defaultTempoPercent ? 0 : 1)
+                .disabled(model.tempoPercent == TempoMap.defaultTempoPercent)
+                .help("Back to the score's own tempo (⌘0)")
+                .accessibilityLabel("Reset the tempo to the score's own")
 
-            Text("\(Int(model.tempoDraft))%")
-                .monospacedDigit()
-                .frame(width: 36, alignment: .trailing)
-                .accessibilityHidden(true)
-
-            // Back to the file's tempo, shown only while there is somewhere
-            // to go back from.
-            Button {
-                Task { await model.resetTempo() }
-            } label: {
-                Image(systemName: "arrow.uturn.backward")
+                Spacer(minLength: 0)
             }
-            .buttonStyle(.borderless)
-            .controlSize(.small)
-            .opacity(model.tempoPercent == TempoMap.defaultTempoPercent ? 0 : 1)
-            .disabled(model.tempoPercent == TempoMap.defaultTempoPercent)
-            .help("Back to the score's own tempo (⌘0)")
-            .accessibilityLabel("Reset the tempo to the score's own")
-
-            Spacer(minLength: 0)
         }
         .font(.callout)
         .foregroundStyle(.secondary)

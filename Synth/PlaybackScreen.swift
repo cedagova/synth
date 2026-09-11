@@ -822,7 +822,11 @@ private struct PerformanceSettingSwitch: View {
                     .accessibilityLabel(label)
                     .accessibilityHint(hint)
             } else {
-                Color.clear
+                // Zero height, deliberately. A bare `Color` is greedy in both
+                // directions, and the running app showed what that costs: the
+                // empty slot grew to fill the panel and pushed the row it was
+                // in to the bottom of it.
+                Color.clear.frame(height: 0)
             }
         }
         .frame(width: Self.slotWidth, alignment: .leading)

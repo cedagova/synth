@@ -149,6 +149,11 @@ final class PlaybackModel {
     /// Live slider value, for the reason `intensityDraft` is one.
     var expressionAmountDraft: Double
 
+    /// The produced master the owner has chosen (REQ-005, D65-2 option A): bus
+    /// cohesion and loudness calibration, as one switch. The true-peak ceiling
+    /// is not here because it has no control (AD-P6).
+    private(set) var producedMaster: ProducedMasterSettings
+
     /// Bumped so the view can move keyboard focus to a field a menu command
     /// asked for — the same mechanism the library uses for Find.
     private(set) var measureFocusRequests = 0
@@ -218,6 +223,7 @@ final class PlaybackModel {
         self.intensityDraft = Double(HumanizationSettings.standard.intensity)
         self.expression = .standard
         self.expressionAmountDraft = Double(ExpressionSettings.standard.amount)
+        self.producedMaster = .standard
 
         wireExport()
         // **Compared now, not when the task runs.** A preset load fires these
@@ -233,6 +239,10 @@ final class PlaybackModel {
         assignment.onExpressionLoaded = { [weak self] settings in
             guard let self, settings != self.expression else { return }
             Task { await self.adoptPresetExpression(settings) }
+        }
+        assignment.onProducedMasterLoaded = { [weak self] settings in
+            guard let self, settings != self.producedMaster else { return }
+            Task { await self.adoptPresetProducedMaster(settings) }
         }
         assignment.onTempoLoaded = { [weak self] percent in
             guard let self, percent != self.tempoPercent else { return }
@@ -369,6 +379,7 @@ final class PlaybackModel {
                 intensityDraft = Double(preset.content.humanization.intensity)
                 expression = preset.content.expression
                 expressionAmountDraft = Double(preset.content.expression.amount)
+                producedMaster = preset.content.producedMaster
                 tempoPercent = preset.content.tempoPercent
                 tempoDraft = Double(preset.content.tempoPercent)
             }
@@ -449,6 +460,9 @@ final class PlaybackModel {
     /// thread that touches it.
     private func loadIntoEngine(_ realized: PerformanceTimeline) throws {
         timeline = realized
+        // Before `load`, so the program is measured once as it is built rather
+        // than built, measured and then measured again (MST001).
+        engine.producedMaster = producedMaster
         try engine.load(timeline: realized)
         refreshTransport()
     }
@@ -460,7 +474,13 @@ final class PlaybackModel {
         let expansion = measures == notated
             ? "\(measures) measures"
             : "\(notated) notated measures played as \(measures)"
-        return "Ready — \(expansion), \(events) notes."
+        let ready = "Ready — \(expansion), \(events) notes."
+        // The produced master's one failure mode the owner has to be told about:
+        // the analysis could not run, so the piece plays at its own level rather
+        // than the calibrated one. Silence is never the answer, and neither is
+        // saying nothing (MST001).
+        guard let sentence = engine.masterCalibration?.statusSentence else { return ready }
+        return ready + " " + sentence
     }
 
     // MARK: Transport
@@ -911,6 +931,48 @@ final class PlaybackModel {
         await reRealize(announcing: Self.expressionMessage(settings), changing: "expression")
     }
 
+    // MARK: The produced master (REQ-005)
+
+    /// Turns bus cohesion and loudness calibration on or off together (D65-2
+    /// option A), and saves the choice to the preset.
+    ///
+    /// **The one row in this group that does not re-realize the piece, and that
+    /// is the point rather than an omission.** Humanization, expression and
+    /// tempo all change the realized timeline, so they have to rebuild the
+    /// program and carry the playhead across. This changes two numbers on the
+    /// summed bus and nothing about the notes — so it lands on the next buffer
+    /// with the playhead untouched and the music uninterrupted, the way a mixer
+    /// move does. Everything else the group's rows share is unchanged: the
+    /// change applies immediately, is written to the active preset immediately,
+    /// and is announced through the status bar's live region.
+    ///
+    /// Turning it on measures the program if this program has not been measured
+    /// yet, which is bounded by `MasterStage.maximumAnalyzedSeconds`.
+    func setProducedMasterEnabled(_ isEnabled: Bool) async {
+        await apply(ProducedMasterSettings(isEnabled: isEnabled))
+    }
+
+    /// A loaded or switched preset brought its own produced master: play under
+    /// it, but do not write it back — it is already what the preset stores.
+    func adoptPresetProducedMaster(_ settings: ProducedMasterSettings) async {
+        await apply(settings, savingToPreset: false)
+    }
+
+    private func apply(
+        _ settings: ProducedMasterSettings, savingToPreset: Bool = true
+    ) async {
+        guard settings != producedMaster else { return }
+        producedMaster = settings
+
+        if savingToPreset {
+            assignment.saveProducedMaster(settings)
+        }
+        engine.producedMaster = settings
+        statusMessage = Self.producedMasterMessage(
+            settings, calibration: engine.masterCalibration
+        )
+    }
+
     /// Realizes the piece again under whatever the performance settings now
     /// say, keeping the playhead and whether it was playing.
     ///
@@ -1051,6 +1113,30 @@ final class PlaybackModel {
 
     /// Read aloud by the status bar's live region, which is how a change to
     /// this setting is announced.
+    /// What the status bar says about the produced master, including the one
+    /// thing the owner has to be told rather than left to notice: that the
+    /// analysis could not run and the piece is therefore at its own level.
+    static func producedMasterMessage(
+        _ settings: ProducedMasterSettings,
+        calibration: MasterCalibration?
+    ) -> String {
+        guard settings.isEnabled else {
+            return "Produced master off — the mix is the lines as you set them, "
+                + "under the clipping ceiling."
+        }
+        if let sentence = calibration?.statusSentence { return "Produced master on. " + sentence }
+        if let calibration, case .silentProgram = calibration.outcome {
+            return "Produced master on — this piece has nothing to measure, so its level "
+                + "is unchanged."
+        }
+        guard let calibration else {
+            return "Produced master on — levelled and held together."
+        }
+        return "Produced master on — levelled "
+            + String(format: "%+.1f", calibration.appliedDecibels)
+            + " dB and held together."
+    }
+
     static func expressionMessage(_ settings: ExpressionSettings) -> String {
         settings.isNeutral
             ? "Expression off — phrases are played without shaping or breathing."

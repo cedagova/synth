@@ -425,7 +425,7 @@ final class AppModel {
     }
 
     /// The second half of that automation:
-    /// `SYNTH_PERFORMANCE_SCRIPT_ON_LAUNCH=seek:20,expression:off,expression:on,expression:100`
+    /// `SYNTH_PERFORMANCE_SCRIPT_ON_LAUNCH=seek:20,master:off,master:on`
     /// applies each step to the piece just opened, through the very
     /// `PlaybackModel` methods the Performance group's controls call, dwelling
     /// between them so a screen capture can catch each state, and logging what
@@ -442,8 +442,9 @@ final class AppModel {
     ///
     /// Steps are `name:value`, comma-separated:
     /// `expression:on|off|<0…100>`, `humanize:on|off|<0…100>`,
-    /// `tempo:<50…150>`, `seek:<seconds>`. `SYNTH_PERFORMANCE_SCRIPT_DWELL`
-    /// sets the pause between them in seconds (default 4).
+    /// `master:on|off`, `tempo:<50…150>`, `seek:<seconds>`.
+    /// `SYNTH_PERFORMANCE_SCRIPT_DWELL` sets the pause between them in seconds
+    /// (default 4).
     private func runLaunchPerformanceScriptIfRequested() {
         #if DEBUG
         let environment = ProcessInfo.processInfo.environment
@@ -476,6 +477,8 @@ final class AppModel {
                 case ("expression", let value):
                     playback.expressionAmountDraft = Double(value) ?? 0
                     await playback.commitExpressionAmount()
+                case ("master", "on"), ("master", "off"):
+                    await playback.setProducedMasterEnabled(parts[1] == "on")
                 case ("humanize", "on"), ("humanize", "off"):
                     await playback.setHumanizationEnabled(parts[1] == "on")
                 case ("humanize", let value):
@@ -490,7 +493,7 @@ final class AppModel {
 
                 NSLog(
                     "Synth script: %@ | position %lld -> %lld | expression %@ %d | "
-                        + "humanize %@ %d | preset %@ revision %d | status: %@",
+                        + "humanize %@ %d | master %@ | preset %@ revision %d | status: %@",
                     step.description,
                     before,
                     playback.positionMicroseconds,
@@ -498,6 +501,7 @@ final class AppModel {
                     playback.expression.amount,
                     playback.humanization.isEnabled ? "on" : "off",
                     playback.humanization.intensity,
+                    playback.producedMaster.isEnabled ? "on" : "off",
                     playback.assignment.activePreset?.name ?? "none",
                     playback.assignment.activePreset?.revision ?? 0,
                     playback.statusMessage ?? ""

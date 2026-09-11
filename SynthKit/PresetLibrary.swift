@@ -475,6 +475,19 @@ public final class PresetLibrary: @unchecked Sendable, PieceDependentStore, Soun
         }
     }
 
+    /// Replaces the preset's whole-piece produced master (REQ-005, D65-2).
+    /// Auto-saved, like humanization.
+    @discardableResult
+    public func setProducedMaster(
+        _ producedMaster: ProducedMasterSettings, in preset: Preset
+    ) throws -> Preset {
+        try write(preset) { current in
+            var content = current.content
+            content.producedMaster = producedMaster
+            return (name: current.name, isActive: current.isActive, content: content)
+        }
+    }
+
     /// Replaces the whole-piece tempo. Auto-saved, like humanization.
     @discardableResult
     public func setTempoPercent(_ percent: Int, in preset: Preset) throws -> Preset {

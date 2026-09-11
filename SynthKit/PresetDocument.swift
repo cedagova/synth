@@ -397,6 +397,12 @@ public struct PresetContent: Equatable, Sendable {
     /// shares, and an export must play what playback played (REQ-026).
     public var expression: ExpressionSettings
 
+    /// Whole-piece produced master (REQ-005, D65-2 option A): bus cohesion and
+    /// loudness calibration together. Stored beside expression and for the same
+    /// reason — it is a property of the whole performance, and an export must
+    /// play what playback played (REQ-026).
+    public var producedMaster: ProducedMasterSettings
+
     /// Whole-piece tempo, as a percentage of what the score marks: 100 is the
     /// file's own tempo, 50 half speed, 150 half again as fast. Stored with
     /// the preset for the reason humanization is — it shapes the one
@@ -410,11 +416,13 @@ public struct PresetContent: Equatable, Sendable {
         lines: [PresetLine],
         humanization: HumanizationSettings = .standard,
         expression: ExpressionSettings = .standard,
+        producedMaster: ProducedMasterSettings = .standard,
         tempoPercent: Int = TempoMap.defaultTempoPercent
     ) {
         self.lines = lines
         self.humanization = humanization
         self.expression = expression
+        self.producedMaster = producedMaster
         self.tempoPercent = Self.clampedTempo(tempoPercent)
     }
 
@@ -448,18 +456,19 @@ public struct PresetContent: Equatable, Sendable {
 
 extension PresetContent: Codable {
     private enum CodingKeys: String, CodingKey {
-        case lines, humanization, expression, tempoPercent
+        case lines, humanization, expression, producedMaster, tempoPercent
     }
 
-    /// `humanization`, `expression` and `tempoPercent` are additive at the same
-    /// document version, the `LineMixerState.roomSend` precedent: a document
-    /// from before a field existed reads as the standard setting — and the
-    /// file's own tempo — rather than failing.
+    /// `humanization`, `expression`, `producedMaster` and `tempoPercent` are
+    /// additive at the same document version, the `LineMixerState.roomSend`
+    /// precedent: a document from before a field existed reads as the standard
+    /// setting — and the file's own tempo — rather than failing.
     ///
-    /// For `expression` that default is the whole of owner decision D65-3: a
-    /// preset written before this leaf existed opens with expression **on** at
-    /// the default amount, so every piece already in the library gains the
-    /// feature on its next open without a migration pass.
+    /// For `expression` and `producedMaster` that default is the whole of owner
+    /// decision D65-3: a preset written before either field existed opens with
+    /// expression **on** at the default amount and the produced master **on**,
+    /// so every piece already in the library gains both features on its next
+    /// open without a migration pass.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
@@ -469,6 +478,9 @@ extension PresetContent: Codable {
             ) ?? .standard,
             expression: try container.decodeIfPresent(
                 ExpressionSettings.self, forKey: .expression
+            ) ?? .standard,
+            producedMaster: try container.decodeIfPresent(
+                ProducedMasterSettings.self, forKey: .producedMaster
             ) ?? .standard,
             tempoPercent: try container.decodeIfPresent(Int.self, forKey: .tempoPercent)
                 ?? TempoMap.defaultTempoPercent

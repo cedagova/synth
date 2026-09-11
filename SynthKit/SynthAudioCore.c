@@ -184,7 +184,7 @@ static inline void synth_master_interval_peak(SynthRenderEngine *engine, int32_t
         const float other = fabsf(right);
         if (other > peak) { peak = other; }
         if (peak > SYNTH_MASTER_CEILING) {
-            const float target = SYNTH_MASTER_CEILING / peak;
+            const float target = (SYNTH_MASTER_CEILING * SYNTH_MASTER_SAFETY) / peak;
             synth_master_hold(engine, (base + 1) & mask, target);
             synth_master_hold(engine, (base + 2) & mask, target);
         }
@@ -223,7 +223,8 @@ static inline void synth_master_step(SynthRenderEngine *engine,
     const float other = fabsf(inRight);
     if (other > peak) { peak = other; }
     if (peak > SYNTH_MASTER_CEILING) {
-        synth_master_hold(engine, write, SYNTH_MASTER_CEILING / peak);
+        synth_master_hold(engine, write,
+                          (SYNTH_MASTER_CEILING * SYNTH_MASTER_SAFETY) / peak);
     }
     synth_master_interval_peak(engine, write);
 

@@ -127,6 +127,17 @@ typedef struct {
 /// Ceiling in linear amplitude: −1.0 dBFS, the REQ-005 figure.
 #define SYNTH_MASTER_CEILING 0.891250938f
 
+/// How far below the ceiling a reduction actually aims, as a linear factor:
+/// −0.09 dB.
+///
+/// The detector's four-tap interpolation is an estimate, and a measurement made
+/// with a longer filter reads a few thousandths of a decibel higher — enough to
+/// make "true peak ≤ −1 dBFS" false by a rounding error rather than by a defect.
+/// This is the allowance for that difference, and it is deliberately applied to
+/// the *target* of a reduction and not to the threshold that triggers one, so
+/// material under the ceiling is still passed through untouched and bit-exact.
+#define SYNTH_MASTER_SAFETY 0.99f
+
 /// Lookahead, in frames, fixed rather than derived from the rate so that a
 /// render is bit-identical at 44.1 and 48 kHz for the same reason the event
 /// scheduler is: nothing about the stage may depend on how time was chopped up.

@@ -31,13 +31,14 @@ final class SampledVoiceHarness {
         _ available: AvailableInstrument,
         sampleRate: Double = 44_100,
         renderSeed: UInt64? = nil,
-        customization: InstrumentCustomization = .asRecorded
+        customization: InstrumentCustomization = .asRecorded,
+        tuning: TuningSettings = .standard
     ) throws {
         self.sampleRate = sampleRate
         self.provider = try SampledInstrumentVoiceProvider(
             available: available, renderSeed: renderSeed, customization: customization
         )
-        self.instance = provider.makeVoice(sampleRate: sampleRate)
+        self.instance = provider.makeVoice(sampleRate: sampleRate, tuning: tuning)
         self.vtable = instance.vtable
         vtable.prepare(vtable.state, sampleRate)
         vtable.reset(vtable.state)

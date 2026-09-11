@@ -224,9 +224,15 @@ final class RealtimePlaybackTests: XCTestCase {
         )
     }
 
-    /// REQ-007 (increment 003): the pinned reference piece, with every feature
-    /// delivered so far on — register-aware staging, expression, and the produced
-    /// master — plays start to finish without an overload pause.
+    /// REQ-007 (increment 004, the last): the pinned reference piece with **all four**
+    /// features on — register-aware staging, expression, the produced master, and a
+    /// non-default tuning — plays start to finish without an overload pause.
+    ///
+    /// The tuning is Werckmeister III at A=415, which is as far from the default as
+    /// the product can go. It costs the render thread one multiply per note-on and is
+    /// not expected to move the counters at all; the point of including it is that
+    /// "every feature delivered so far" now means every feature the plan has, so this
+    /// guardrail is the whole-increment claim rather than three quarters of it.
     ///
     /// Gated like the other full-length guardrails, plus the piece itself:
     /// SYNTH_REFERENCE_PIECE names the owner's imported MusicXML file (the
@@ -252,9 +258,18 @@ final class RealtimePlaybackTests: XCTestCase {
         // stage — cohesion, the calibration gain and the ceiling — for the full
         // length of the piece (MST001).
         engine.producedMaster = .standard
+        // And the tuning, before the program is built for a stronger reason: a voice
+        // reads the table when it is built, so this is the only order in which the
+        // guardrail measures a program that is actually retuned (TUN001).
+        let tuning = TuningSettings(temperament: .werckmeisterIII, referencePitch: .a415)
+        try engine.setTuning(tuning)
         let buildStarted = Date()
         try engine.load(timeline: timeline)
         let buildElapsed = Date().timeIntervalSince(buildStarted)
+        XCTAssertEqual(
+            engine.loadedProgram?.tuning, tuning,
+            "REQ-007: the guardrail did not actually run with a non-default tuning"
+        )
         // Stage every line exactly as a fresh preset would (REQ-001's
         // derivation, register-aware since STG003), so the guardrail measures
         // the staged engine the owner actually gets.
@@ -285,9 +300,11 @@ final class RealtimePlaybackTests: XCTestCase {
 
         let calibration = engine.masterCalibration
         print("""
-            REQ-007 guardrail — reference piece, staged + expression + produced master
+            REQ-007 guardrail — reference piece, staged + expression + master + tuning
               lines:             \(count)
               timeline length:   \(String(format: "%.1f", expectedSeconds)) s
+              tuning:            \(tuning.temperament.rawValue) at \
+            \(tuning.referencePitch.displayName)
               overload blocks:   \(statistics.overloadBlocks)
               overload pauses:   \(statistics.overloadPauses)
               peak level:        \(String(format: "%.3f", statistics.peakLevel))

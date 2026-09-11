@@ -40,12 +40,14 @@ final class AudioExportTests: XCTestCase {
     private func request(
         _ timeline: PerformanceTimeline,
         producedMaster: ProducedMasterSettings = .off,
+        tuning: TuningSettings = .standard,
         settings: AudioExportSettings = .cdQuality
     ) -> AudioExportRequest {
         AudioExportRequest(
             timeline: timeline,
             voices: .uniform(SynthPatchVoiceProvider()),
             producedMaster: producedMaster,
+            tuning: tuning,
             settings: settings
         )
     }
@@ -327,6 +329,84 @@ final class AudioExportTests: XCTestCase {
                 exported.suffix(from: writer.header().count), expected,
                 "The \(label) export does not match live playback of the \(label) state."
             )
+        }
+    }
+
+    // MARK: Tuning (REQ-006 carried into the export)
+
+    /// A retuned preset exports retuned, and the file matches live playback of that
+    /// tuning byte for byte.
+    ///
+    /// **REQ-006's "applies to export", and REQ-026's live == export, in one
+    /// measurement.** Tuning is the one setting on this request that cannot be
+    /// applied after the program is loaded — a voice reads the table when it is
+    /// built — so an exporter that set it in the wrong order would render the
+    /// default while playback rendered the temperament, and nothing but byte
+    /// equality against the live path would notice.
+    func testARetunedPresetExportsRetunedAndMatchesItsOwnLivePath() throws {
+        let timeline = try AudioRenderFixtures.timeline(
+            MusicXMLScoreFixtures.melodyOverAccompaniment()
+        )
+        let settings = AudioExportSettings.cdQuality
+        let retuned = TuningSettings(temperament: .werckmeisterIII, referencePitch: .a415)
+        let defaultURL = destination("tuning-default.wav")
+        let retunedURL = destination("tuning-werckmeister-415.wav")
+
+        try AudioExporter(
+            request: request(timeline, tuning: .standard, settings: settings)
+        ).run(to: defaultURL)
+        try AudioExporter(
+            request: request(timeline, tuning: retuned, settings: settings)
+        ).run(to: retunedURL)
+
+        XCTAssertNotEqual(
+            try Data(contentsOf: defaultURL), try Data(contentsOf: retunedURL),
+            "The default tuning and Werckmeister III at A=415 exported to identical files."
+        )
+
+        for (url, tuning, label) in [
+            (defaultURL, TuningSettings.standard, "default tuning"),
+            (retunedURL, retuned, "Werckmeister III at A=415")
+        ] {
+            let live = try PlaybackEngine.renderTimelineOffline(
+                timeline, sampleRate: settings.sampleRate.hertz, tuning: tuning
+            )
+            let writer = AudioFileWriter(settings: settings, frameCount: Int64(live.frameCount))
+            let expected = writer.encode(left: live.left[...], right: live.right[...])
+            let exported = try Data(contentsOf: url)
+            XCTAssertEqual(
+                exported.suffix(from: writer.header().count), expected,
+                "The \(label) export does not match live playback of it."
+            )
+        }
+    }
+
+    /// And a resolved preset carries the owner's tuning into the request, so an
+    /// export is not quietly at concert pitch while playback is at 415.
+    func testAnExportRequestBuiltFromAPresetCarriesItsTuning() throws {
+        let timeline = try AudioRenderFixtures.timeline(
+            MusicXMLScoreFixtures.melodyOverAccompaniment()
+        )
+        for stored in [
+            TuningSettings.standard,
+            TuningSettings(temperament: .werckmeisterIII),
+            TuningSettings(referencePitch: .a415),
+            TuningSettings(temperament: .werckmeisterIII, referencePitch: .a415)
+        ] {
+            let preset = Preset(
+                id: "p1",
+                pieceID: "piece",
+                name: "Default",
+                isActive: true,
+                documentVersion: PresetContent.currentVersion,
+                revision: 1,
+                createdAt: "2026-01-01T00:00:00Z",
+                updatedAt: "2026-01-01T00:00:00Z",
+                content: PresetContent(lines: [], tuning: stored)
+            )
+            let performance = PresetPerformance(preset: preset, lines: [])
+            let built = performance.exportRequest(timeline: timeline, settings: .cdQuality)
+            XCTAssertEqual(built.tuning, stored, "the export request dropped the preset's tuning")
         }
     }
 

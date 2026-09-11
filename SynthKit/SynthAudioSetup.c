@@ -220,7 +220,7 @@ void synth_tuning_table_sanitize(SynthTuningTable *table) {
 
            The bounds are a whole tone either side of unity — 2^(±2/12), 0.8909
            and 1.1225. Everything the product can ask for is well inside them:
-           the widest reference shift is 415/440 = 0.9432 (101.4 cents, already
+           the widest reference shift is 415/440 = 0.9432 (101.3 cents, already
            more than a semitone, which is why one semitone would be too tight)
            and the widest temperament offset on top of it is 11.73 cents, a
            factor of 1.0068. Nothing inside these bounds can move a note into a

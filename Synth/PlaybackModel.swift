@@ -1024,6 +1024,14 @@ final class PlaybackModel {
         )
     }
 
+    /// The tuning the engine's current program was actually built with, or nil
+    /// before there is a program.
+    ///
+    /// Read by the wiring tests for the reason `masterCalibration` is: a setting
+    /// that reached this model and not the program would leave every assertion
+    /// about the model passing while the piece played at concert pitch.
+    var loadedProgramTuning: TuningSettings? { engine.loadedProgram?.tuning }
+
     /// A loaded or switched preset brought its own tuning: play under it, but do
     /// not write it back — it is already what the preset stores.
     func adoptPresetTuning(_ settings: TuningSettings) async {

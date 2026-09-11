@@ -227,7 +227,12 @@ public struct PerformanceTimeline: Equatable, Sendable, Codable {
     public let settings: RealizationSettings
 
     /// SHA-256 of the exact configuration the humanization noise is keyed by.
-    /// Two timelines with the same digest were interpreted the same way.
+    /// Two timelines with the same digest drew the same unevenness.
+    ///
+    /// Not a digest of the whole interpretation: the expression setting shapes
+    /// the timeline without seeding anything (see `SeededJitter.seed`), so two
+    /// timelines can share a seed and still differ. `settings` above is the
+    /// full record of how this was realized.
     public let seed: String
 
     /// Length of the piece in microseconds, from the compiled tempo map. Note

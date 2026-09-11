@@ -64,13 +64,18 @@ final class HumanizationTests: XCTestCase {
     /// The *music* is compared, not the whole value: the timeline also records
     /// which settings produced it, and those genuinely differ — the dial is
     /// still on.
+    ///
+    /// Expression is held off on both sides, because this is a claim about the
+    /// humanization dial alone; `PerformanceExpressionTests` makes the matching
+    /// claim about the expression dial.
     func testIntensityZeroPlaysTheSameMusicAsHumanizationOff() throws {
         let score = try score()
         let off = realizer.realize(score, settings: .literal)
         let zero = realizer.realize(
             score,
             settings: RealizationSettings(
-                humanization: HumanizationSettings(isEnabled: true, intensity: 0)
+                humanization: HumanizationSettings(isEnabled: true, intensity: 0),
+                expression: .off
             )
         )
         XCTAssertEqual(off.lines, zero.lines)
@@ -200,13 +205,20 @@ final class HumanizationTests: XCTestCase {
 
     /// The variation stays inside a musical bound. Humanization that could
     /// move a note by a beat would not be humanization.
+    ///
+    /// `maximumTimingOffsetMicroseconds` is humanization's own bound, so
+    /// expression is held off here: a phrase breath is a second, separately
+    /// bounded reason a note may be late, and
+    /// `PerformanceExpressionTests.testABreathNeverMovesANotePastItsNeighbour`
+    /// is where that one is proved.
     func testEvenFullIntensityStaysWithinItsStatedBound() throws {
         let score = try score()
         let literal = realizer.realize(score, settings: .literal)
         let humanized = realizer.realize(
             score,
             settings: RealizationSettings(
-                humanization: HumanizationSettings(isEnabled: true, intensity: 100)
+                humanization: HumanizationSettings(isEnabled: true, intensity: 100),
+                expression: .off
             )
         )
 

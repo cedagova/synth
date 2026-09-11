@@ -462,6 +462,19 @@ public final class PresetLibrary: @unchecked Sendable, PieceDependentStore, Soun
         }
     }
 
+    /// Replaces the preset's whole-piece phrase expression (REQ-003).
+    /// Auto-saved, like humanization.
+    @discardableResult
+    public func setExpression(
+        _ expression: ExpressionSettings, in preset: Preset
+    ) throws -> Preset {
+        try write(preset) { current in
+            var content = current.content
+            content.expression = expression
+            return (name: current.name, isActive: current.isActive, content: content)
+        }
+    }
+
     /// Replaces the whole-piece tempo. Auto-saved, like humanization.
     @discardableResult
     public func setTempoPercent(_ percent: Int, in preset: Preset) throws -> Preset {

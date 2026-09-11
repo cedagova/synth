@@ -37,19 +37,36 @@ final class PerformanceTimelinePurityTests: XCTestCase {
     ///
     /// Tell them apart by running the suite twice in two processes: a
     /// deliberate change gives the same wrong digest twice.
+    ///
+    /// Every digest here moved once, on this leaf, for one deliberate reason:
+    /// `RealizationSettings` gained its `expression` field and the timeline
+    /// encodes the settings it was realized under, so the canonical bytes
+    /// changed even where not one note did. The values below were refrozen from
+    /// two agreeing runs in separate processes. The claim that the *music* is
+    /// unchanged wherever expression is off is a separate and stronger one, and
+    /// `PerformanceExpressionTests` holds it: it freezes the event digests
+    /// recorded before this leaf existed, with the settings record left out.
     private static let frozenTimelineDigests: [String: String] = [
         "ornamentStudy/literal":
-            "18fe0fbe1c4d1b95fb2fd4ab8dae21c65b4826e36bf574431667516f27e48173",
+            "85f8ca7d4f5683f0e9b3c30c8bef27471b5662c411d30f0b37ff419cbcb31d29",
         "expressiveKeyboardPiece/literal":
-            "86913f7878a67733fe3b6dccbfc5609bb79c742beee573b5cac6c352d2db5f60",
+            "7a5e6b2d15a75cfee6d8143b7b8565f81a7fbeae51cddfda955029e0ea590b8a",
         "expressiveKeyboardPiece/standard":
-            "561a1e931e2f6984a201eab8dbe39ad724d9f505491b5d98bdc6034c518cd31a",
+            "54820c418db8ac40223a61353641bc5efc835fc662c2bd95bccb8a44f70650a8",
         "expressiveKeyboardPiece/intensity-100":
-            "8a9c7f6b0faf3f22f806ded63e07dac9c4088abad0d6e4a0cc536552a874c8b3",
+            "22896a7c787660fc6d5089034ce9fd27e9b202332a5c8958de1282897ed2d50b",
         "stringQuartetMovement/standard":
-            "dac4b34f95c1b7a33d8eeca12a86bffd397acff8d771807066671896c3c99557",
+            "23609e3d67d04886f9037ff4726ff0b615d592ce393ee4a491b8d15168bc0117",
         "fastOrnamentsAndGraceNotes/intensity-100":
-            "39a2c2d97dedf993b674d371c67c7835d42a2000f3ac6826978b211a2c5ff727"
+            "bcfa84f69f4c6d1e3820e42fe2702709a3d9701ba77397a73a7b10df671caee9",
+        "expressiveKeyboardPiece/expression-off":
+            "3b28b8e2fe6a33a4ce14566f5f7f7f8024a92e4c9d44f941e4df3add3a12b3d8",
+        "expressiveKeyboardPiece/expression-100":
+            "125a96ddaefd65d9ed9b3c67b3a00cca6318b1e21a4a0ef521222c2588baef9f",
+        "stringQuartetMovement/expression-only":
+            "2892a63e0960e3d61012d8d420a09991eaf5beb6265469a01ae3fd067f240a1c",
+        "keyboardFugueExposition/expression-100":
+            "b9d0cd67068f87b6aa2cdca3cbb2eefa54f3999b78fe900e4e323ea971d4f2ce"
     ]
 
     private static let frozenCases: [(name: String, data: Data, settings: RealizationSettings)] = [
@@ -80,6 +97,37 @@ final class PerformanceTimelinePurityTests: XCTestCase {
             MusicXMLScoreFixtures.fastOrnamentsAndGraceNotes(),
             RealizationSettings(
                 humanization: HumanizationSettings(isEnabled: true, intensity: 100)
+            )
+        ),
+        // Phrase expression (REQ-003) is a second realization stage with its
+        // own bypass, so the frozen set covers both of its states and not only
+        // the default. Without the `expression-off` row, a change that quietly
+        // made the bypass stop bypassing would move no digest here at all.
+        (
+            "expressiveKeyboardPiece/expression-off",
+            MusicXMLScoreFixtures.expressiveKeyboardPiece(),
+            .humanizedWithoutExpression
+        ),
+        (
+            "expressiveKeyboardPiece/expression-100",
+            MusicXMLScoreFixtures.expressiveKeyboardPiece(),
+            RealizationSettings(expression: ExpressionSettings(isEnabled: true, amount: 100))
+        ),
+        // Expression alone, with the noise switched off: the only thing
+        // separating these bytes from the literal reading of the score is the
+        // phrasing, so this digest moves when — and only when — the phrasing
+        // itself changes.
+        (
+            "stringQuartetMovement/expression-only",
+            MusicXMLScoreFixtures.stringQuartetMovement(),
+            RealizationSettings(humanization: .off, expression: .standard)
+        ),
+        (
+            "keyboardFugueExposition/expression-100",
+            MusicXMLScoreFixtures.keyboardFugueExposition(),
+            RealizationSettings(
+                humanization: HumanizationSettings(isEnabled: true, intensity: 100),
+                expression: ExpressionSettings(isEnabled: true, amount: 100)
             )
         )
     ]
@@ -112,7 +160,8 @@ final class PerformanceTimelinePurityTests: XCTestCase {
         "PerformanceRealizer.swift",
         "PerformanceLineRealization.swift",
         "PerformanceOrnaments.swift",
-        "PerformanceHumanization.swift"
+        "PerformanceHumanization.swift",
+        "PerformancePhrasing.swift"
     ]
 
     /// APIs whose result depends on when, where, or on which run the code is

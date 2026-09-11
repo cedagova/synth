@@ -67,7 +67,7 @@ struct PlaybackScreen: View {
                 // as where the playhead is.
                 Divider()
                 VStack(spacing: 0) {
-                    HumanizationBar(model: model)
+                    PerformanceSettingsGroup(model: model)
                     Divider()
                     AssignmentPanel(model: model.assignment, openStudio: openStudio)
                 }
@@ -649,92 +649,103 @@ private struct LoopControls: View {
     }
 }
 
-// MARK: - Humanization (REQ-012)
+// MARK: - Performance settings (P65-6, REQ-012, REQ-003, REQ-009)
 
-/// Exactly two controls, and deliberately no more: an enable and an amount
-/// (anything deeper is the interpretive modelling D4 rules out). One quiet
-/// row above the preset panel, because the setting is part of the preset —
-/// stored with it like any other custom value — and rarely touched.
-private struct HumanizationBar: View {
+/// The one place the owner's performance settings live: how the piece is
+/// played, as opposed to which sounds play it.
+///
+/// **One group rather than a row per setting.** Until this leaf there was a
+/// single inline humanization row, and it had already been pushed into two
+/// rows to fit a second control — there was visibly no room for a third. The
+/// approved plan's P65-6 replaces that with this group, and later leaves add a
+/// produced-master row and two tuning picker rows to it. So the group is built
+/// out of two primitives that own the alignment and nothing else
+/// (`PerformanceSettingRow`, `PerformanceAmountSlider`): a new row is one call,
+/// and it cannot drift out of line with the rows above it or re-derive the
+/// layout. **Later leaves add rows here. None redesigns this surface.**
+///
+/// Every row behaves the same way, which is the humanization precedent each
+/// setting inherits (AD-P6): change it, the piece is re-realized from that
+/// instant's playhead, and the value is written to the active preset straight
+/// away. Every control is focusable, labelled and hinted, and the change is
+/// announced through the status bar's live region — so the group is usable
+/// without seeing it.
+private struct PerformanceSettingsGroup: View {
     @Bindable var model: PlaybackModel
 
     private static let tempoSliderRange =
         Double(TempoMap.tempoPercentRange.lowerBound)...Double(TempoMap.tempoPercentRange.upperBound)
 
-    /// Two rows, deliberately. On one row the two sliders fitted the panel's
-    /// 420 points only by squeezing the Humanize label and its readout out
-    /// of existence, which the running app showed. A control without its
-    /// label is not compact, it is unlabelled.
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 10) {
-                Toggle("Humanize", isOn: Binding(
-                    get: { model.humanization.isEnabled },
-                    set: { isEnabled in Task { await model.setHumanizationEnabled(isEnabled) } }
-                ))
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-                .accessibilityLabel("Humanization")
-                .accessibilityHint("Off plays the score exactly as written. Saved with the preset.")
+        VStack(alignment: .leading, spacing: 5) {
+            Text("Performance")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.tertiary)
+                .accessibilityAddTraits(.isHeader)
+                .padding(.bottom, 1)
 
-                Slider(
-                    value: $model.intensityDraft,
-                    in: 0...100,
-                    step: 5,
-                    onEditingChanged: { isEditing in
-                        // Committed when the drag ends: re-realizing the piece on
-                        // every intermediate value would stutter a long score.
-                        guard !isEditing else { return }
-                        Task { await model.commitIntensity() }
-                    }
+            // Humanization (REQ-012): an enable and an amount, and deliberately
+            // no more — anything deeper is the interpretive modelling D4 rules
+            // out.
+            PerformanceSettingRow(name: "Humanize") {
+                PerformanceSettingSwitch(
+                    isOn: Binding(
+                        get: { model.humanization.isEnabled },
+                        set: { isOn in Task { await model.setHumanizationEnabled(isOn) } }
+                    ),
+                    label: "Humanization",
+                    hint: "Off plays the score exactly as written. Saved with the preset."
                 )
-                .controlSize(.small)
-                .frame(width: 150)
-                .disabled(!model.humanization.isEnabled)
-                .accessibilityLabel("Humanization amount")
-                .accessibilityValue("\(Int(model.intensityDraft)) percent")
-
-                Text("\(Int(model.intensityDraft))%")
-                    .monospacedDigit()
-                    .frame(width: 36, alignment: .trailing)
-                    .accessibilityHidden(true)
-
-                Spacer(minLength: 0)
+                PerformanceAmountSlider(
+                    value: $model.intensityDraft,
+                    label: "Humanization amount",
+                    hint: "How uneven the timing and loudness of individual notes are.",
+                    isEnabled: model.humanization.isEnabled,
+                    commit: { await model.commitIntensity() }
+                )
             }
 
-            // The tempo control (REQ-009): the file's tempo at 100, half at
-            // 50, half again as fast at 150. Committed when the drag ends,
-            // like the humanization slider and for the same reason. The
-            // sound is untouched at any setting — see `PlaybackModel.applyTempo`.
-            HStack(spacing: 10) {
-                Text("Tempo")
-                    .frame(width: 66, alignment: .leading)
-                    .accessibilityHidden(true)
+            // Phrase expression (REQ-003): the same two controls, for the same
+            // reason (D65-1). Off is REQ-004's bypass state — the score's own
+            // notation and nothing this added.
+            PerformanceSettingRow(name: "Expression") {
+                PerformanceSettingSwitch(
+                    isOn: Binding(
+                        get: { model.expression.isEnabled },
+                        set: { isOn in Task { await model.setExpressionEnabled(isOn) } }
+                    ),
+                    label: "Expression",
+                    hint: "Shapes each phrase and lets cadences breathe, from what the score "
+                        + "already writes. Off plays the written dynamics only. Saved with the "
+                        + "preset."
+                )
+                PerformanceAmountSlider(
+                    value: $model.expressionAmountDraft,
+                    label: "Expression amount",
+                    hint: "How far phrases swell and how long cadences breathe.",
+                    isEnabled: model.expression.isEnabled,
+                    commit: { await model.commitExpressionAmount() }
+                )
+            }
 
-                Slider(
+            // Tempo (REQ-009): the file's tempo at 100, half at 50, half again
+            // as fast at 150. Here because it is the same kind of setting —
+            // preset-stored, whole-piece, re-realized on change — and the one
+            // thing it does *not* change is the sound, which is why it has no
+            // switch: see `PlaybackModel.applyTempo`.
+            PerformanceSettingRow(name: "Tempo") {
+                PerformanceSettingSwitch.placeholder
+                PerformanceAmountSlider(
                     value: $model.tempoDraft,
-                    in: Self.tempoSliderRange,
-                    step: 5,
-                    onEditingChanged: { isEditing in
-                        guard !isEditing else { return }
-                        Task { await model.commitTempo() }
-                    }
+                    range: Self.tempoSliderRange,
+                    label: "Tempo",
+                    spokenValue: "\(Int(model.tempoDraft)) percent of the score's tempo",
+                    hint: "50 to 150 percent of the tempo the score marks. Saved with the "
+                        + "preset. Also on the Playback menu as Command Minus, Command Equals "
+                        + "and Command Zero.",
+                    isEnabled: model.isReady,
+                    commit: { await model.commitTempo() }
                 )
-                .controlSize(.small)
-                .frame(width: 150)
-                .disabled(!model.isReady)
-                .accessibilityLabel("Tempo")
-                .accessibilityValue("\(Int(model.tempoDraft)) percent of the score's tempo")
-                .accessibilityHint(
-                    "50 to 150 percent of the tempo the score marks. Saved with the preset. "
-                    + "Also on the Playback menu as Command Minus, Command Equals and Command Zero."
-                )
-
-                Text("\(Int(model.tempoDraft))%")
-                    .monospacedDigit()
-                    .frame(width: 36, alignment: .trailing)
-                    .accessibilityHidden(true)
-
                 // Back to the file's tempo, shown only while there is somewhere
                 // to go back from.
                 Button {
@@ -748,14 +759,122 @@ private struct HumanizationBar: View {
                 .disabled(model.tempoPercent == TempoMap.defaultTempoPercent)
                 .help("Back to the score's own tempo (⌘0)")
                 .accessibilityLabel("Reset the tempo to the score's own")
-
-                Spacer(minLength: 0)
             }
         }
         .font(.callout)
         .foregroundStyle(.secondary)
         .padding(.horizontal, 14)
-        .padding(.vertical, 7)
+        .padding(.vertical, 8)
+    }
+}
+
+/// One row of the Performance group: a name column, then the setting's own
+/// controls.
+///
+/// The row owns the alignment and nothing else. Keeping the name column's width
+/// in one place is what makes the switches and sliders of every row line up,
+/// including the rows later leaves add — and what makes adding one a single
+/// call rather than a layout to get right again.
+private struct PerformanceSettingRow<Content: View>: View {
+    /// The visible name of the setting. Hidden from VoiceOver, because each
+    /// control inside carries its own label and the name would be read twice.
+    let name: String
+
+    @ViewBuilder var content: () -> Content
+
+    /// Wide enough for the longest name the group will hold.
+    static var nameColumnWidth: CGFloat { 76 }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(name)
+                .frame(width: Self.nameColumnWidth, alignment: .leading)
+                .accessibilityHidden(true)
+            content()
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+/// The switch slot of a row: a labelled switch, or the space one would occupy.
+///
+/// The empty variant exists so a row without a switch still lines its slider up
+/// with the rows that have one. An invisible spacer rather than a hidden
+/// `Toggle`, so nothing unfocusable-but-real lands in the keyboard order.
+private struct PerformanceSettingSwitch: View {
+    let isOn: Binding<Bool>?
+    let label: String
+    let hint: String
+
+    static let slotWidth: CGFloat = 30
+
+    static var placeholder: PerformanceSettingSwitch {
+        PerformanceSettingSwitch(isOn: nil, label: "", hint: "")
+    }
+
+    var body: some View {
+        Group {
+            if let isOn {
+                Toggle(label, isOn: isOn)
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .labelsHidden()
+                    .accessibilityLabel(label)
+                    .accessibilityHint(hint)
+            } else {
+                // Zero height, deliberately. A bare `Color` is greedy in both
+                // directions, and the running app showed what that costs: the
+                // empty slot grew to fill the panel and pushed the row it was
+                // in to the bottom of it.
+                Color.clear.frame(height: 0)
+            }
+        }
+        .frame(width: Self.slotWidth, alignment: .leading)
+    }
+}
+
+/// The amount control of a row: one slider and its percent readout.
+///
+/// **Committed when the drag ends, never on every value.** Each of these
+/// settings re-realizes the whole piece, which stops the graph for an instant;
+/// doing that per intermediate slider value would stutter a long score.
+private struct PerformanceAmountSlider: View {
+    @Binding var value: Double
+    var range: ClosedRange<Double> = 0...100
+    let label: String
+
+    /// What VoiceOver reads as the value, when a bare percentage would not say
+    /// enough — the tempo is a percentage *of something*.
+    var spokenValue: String?
+
+    let hint: String
+    let isEnabled: Bool
+    let commit: () async -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Slider(
+                value: $value,
+                in: range,
+                step: 5,
+                onEditingChanged: { isEditing in
+                    guard !isEditing else { return }
+                    Task { await commit() }
+                }
+            )
+            .controlSize(.small)
+            .frame(width: 150)
+            .disabled(!isEnabled)
+            .accessibilityLabel(label)
+            .accessibilityValue(spokenValue ?? "\(Int(value)) percent")
+            .accessibilityHint(hint)
+
+            Text("\(Int(value))%")
+                .monospacedDigit()
+                .frame(width: 36, alignment: .trailing)
+                // The slider already speaks this number as its value.
+                .accessibilityHidden(true)
+        }
     }
 }
 

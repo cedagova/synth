@@ -142,6 +142,13 @@ final class PlaybackModel {
     /// happens when the drag ends.
     var intensityDraft: Double
 
+    /// The phrase expression the owner has chosen (REQ-003). Two controls, per
+    /// D65-1 — an enable and an amount — for the reason humanization has two.
+    private(set) var expression: ExpressionSettings
+
+    /// Live slider value, for the reason `intensityDraft` is one.
+    var expressionAmountDraft: Double
+
     /// Bumped so the view can move keyboard focus to a field a menu command
     /// asked for — the same mechanism the library uses for Find.
     private(set) var measureFocusRequests = 0
@@ -209,6 +216,8 @@ final class PlaybackModel {
         // for the instant before that.
         self.humanization = .standard
         self.intensityDraft = Double(HumanizationSettings.standard.intensity)
+        self.expression = .standard
+        self.expressionAmountDraft = Double(ExpressionSettings.standard.amount)
 
         wireExport()
         // **Compared now, not when the task runs.** A preset load fires these
@@ -220,6 +229,10 @@ final class PlaybackModel {
         assignment.onHumanizationLoaded = { [weak self] settings in
             guard let self, settings != self.humanization else { return }
             Task { await self.adoptPresetHumanization(settings) }
+        }
+        assignment.onExpressionLoaded = { [weak self] settings in
+            guard let self, settings != self.expression else { return }
+            Task { await self.adoptPresetExpression(settings) }
         }
         assignment.onTempoLoaded = { [weak self] percent in
             guard let self, percent != self.tempoPercent else { return }
@@ -344,21 +357,27 @@ final class PlaybackModel {
             sourceScore = source
 
             loadState = .preparing(.realizing)
-            // The active preset's humanization and tempo are read before the
+            // The active preset's performance settings are read before the
             // first realization so the piece opens under its stored settings
             // rather than being realized twice. A piece with no preset yet
             // realizes under the standard settings, which is also what its
-            // first preset will store.
+            // first preset will store — and a preset stored before the
+            // expression field existed reads as on, which is where D65-3
+            // actually reaches the owner's ear.
             if let preset = try? store.presets.activePreset(forPieceID: source.pieceID) {
                 humanization = preset.content.humanization
                 intensityDraft = Double(preset.content.humanization.intensity)
+                expression = preset.content.expression
+                expressionAmountDraft = Double(preset.content.expression.amount)
                 tempoPercent = preset.content.tempoPercent
                 tempoDraft = Double(preset.content.tempoPercent)
             }
             let compiled = source.scalingTempo(toPercent: tempoPercent)
             compiledScore = compiled
             navigator = PlaybackNavigator(score: compiled)
-            let realized = await Self.realize(compiled, humanization: humanization)
+            let realized = await Self.realize(
+                compiled, humanization: humanization, expression: expression
+            )
             try loadIntoEngine(realized)
 
             // After the program exists, never before: the preset's mixer half
@@ -413,12 +432,15 @@ final class PlaybackModel {
 
     private static func realize(
         _ score: CompiledScore,
-        humanization: HumanizationSettings
+        humanization: HumanizationSettings,
+        expression: ExpressionSettings
     ) async -> PerformanceTimeline {
         await Task.detached(priority: .userInitiated) {
             PerformanceRealizer().realize(
                 score,
-                settings: RealizationSettings(humanization: humanization)
+                settings: RealizationSettings(
+                    humanization: humanization, expression: expression
+                )
             )
         }.value
     }
@@ -818,7 +840,7 @@ final class PlaybackModel {
         return "Looping \(loop.displayText) · \(passes)"
     }
 
-    // MARK: Humanization (REQ-012)
+    // MARK: Performance settings (REQ-012 humanization, REQ-003 expression)
 
     /// Turns humanization on or off and re-realizes the piece under the new
     /// setting, keeping the playhead and whether it was playing.
@@ -850,15 +872,63 @@ final class PlaybackModel {
         if savingToPreset {
             assignment.saveHumanization(settings)
         }
+        await reRealize(
+            announcing: Self.humanizationMessage(settings), changing: "humanization"
+        )
+    }
 
+    // MARK: Expression (REQ-003)
+
+    /// Turns phrase expression on or off and re-realizes the piece under the
+    /// new setting — the humanization control's behaviour exactly, because it
+    /// is the same kind of setting: preset-stored, whole-piece, and carried by
+    /// the one timeline live playback and the export both read (AD-P6).
+    func setExpressionEnabled(_ isEnabled: Bool) async {
+        await apply(ExpressionSettings(isEnabled: isEnabled, amount: expression.amount))
+    }
+
+    /// Commits the slider. Called when the drag ends, not on every value.
+    func commitExpressionAmount() async {
+        let amount = Int(expressionAmountDraft.rounded())
+        guard amount != expression.amount else { return }
+        await apply(ExpressionSettings(isEnabled: expression.isEnabled, amount: amount))
+    }
+
+    /// A loaded or switched preset brought its own expression: play under it,
+    /// but do not write it back — it is already what the preset stores.
+    func adoptPresetExpression(_ settings: ExpressionSettings) async {
+        await apply(settings, savingToPreset: false)
+    }
+
+    private func apply(_ settings: ExpressionSettings, savingToPreset: Bool = true) async {
+        guard settings != expression else { return }
+        expression = settings
+        expressionAmountDraft = Double(settings.amount)
+
+        if savingToPreset {
+            assignment.saveExpression(settings)
+        }
+        await reRealize(announcing: Self.expressionMessage(settings), changing: "expression")
+    }
+
+    /// Realizes the piece again under whatever the performance settings now
+    /// say, keeping the playhead and whether it was playing.
+    ///
+    /// Shared by the humanization and expression controls because the mechanism
+    /// is identical and P65-6 adds more rows to this group later: every one of
+    /// them changes a setting, re-renders, and saves. A second copy of this
+    /// would be the place the next row forgot to restore the mix.
+    private func reRealize(announcing message: String, changing what: String) async {
         guard let compiledScore else {
-            statusMessage = Self.humanizationMessage(settings)
+            statusMessage = message
             return
         }
 
         let wasPlaying = transportState == .playing
         let resumeAt = positionMicroseconds
-        let realized = await Self.realize(compiledScore, humanization: settings)
+        let realized = await Self.realize(
+            compiledScore, humanization: humanization, expression: expression
+        )
 
         do {
             // `load` stops the graph; the position is carried across by hand
@@ -872,15 +942,12 @@ final class PlaybackModel {
                 try engine.start()
                 engine.play()
             }
-            statusMessage = Self.humanizationMessage(settings)
+            statusMessage = message
             refreshTransport()
         } catch {
-            statusMessage = "Could not apply the humanization change: \(error)"
+            statusMessage = "Could not apply the \(what) change: \(error)"
         }
     }
-
-    /// Writes the choice off the main actor, returning the reason it could not
-    /// be written, or nil.
 
     // MARK: Tempo (REQ-009)
 
@@ -945,7 +1012,9 @@ final class PlaybackModel {
                 fromMeasureNumber: loop.startMeasureNumber, toMeasureNumber: loop.endMeasureNumber
             )
         }
-        let realized = await Self.realize(rescaled, humanization: humanization)
+        let realized = await Self.realize(
+            rescaled, humanization: humanization, expression: expression
+        )
 
         do {
             try loadIntoEngine(realized)
@@ -978,6 +1047,14 @@ final class PlaybackModel {
         settings.isLiteral
             ? "Humanization off — playing exactly as written."
             : "Humanization on at \(settings.intensity)%."
+    }
+
+    /// Read aloud by the status bar's live region, which is how a change to
+    /// this setting is announced.
+    static func expressionMessage(_ settings: ExpressionSettings) -> String {
+        settings.isNeutral
+            ? "Expression off — phrases are played without shaping or breathing."
+            : "Expression on at \(settings.amount)% — phrases shaped, cadences breathing."
     }
 
     // MARK: The ticker

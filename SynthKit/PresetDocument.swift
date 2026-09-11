@@ -392,6 +392,11 @@ public struct PresetContent: Equatable, Sendable {
     /// humanization shapes the one realized timeline every line shares.
     public var humanization: HumanizationSettings
 
+    /// Whole-piece phrase expression (REQ-003), stored beside humanization and
+    /// for the same reason: it shapes the one realized timeline every line
+    /// shares, and an export must play what playback played (REQ-026).
+    public var expression: ExpressionSettings
+
     /// Whole-piece tempo, as a percentage of what the score marks: 100 is the
     /// file's own tempo, 50 half speed, 150 half again as fast. Stored with
     /// the preset for the reason humanization is — it shapes the one
@@ -404,10 +409,12 @@ public struct PresetContent: Equatable, Sendable {
     public init(
         lines: [PresetLine],
         humanization: HumanizationSettings = .standard,
+        expression: ExpressionSettings = .standard,
         tempoPercent: Int = TempoMap.defaultTempoPercent
     ) {
         self.lines = lines
         self.humanization = humanization
+        self.expression = expression
         self.tempoPercent = Self.clampedTempo(tempoPercent)
     }
 
@@ -441,19 +448,27 @@ public struct PresetContent: Equatable, Sendable {
 
 extension PresetContent: Codable {
     private enum CodingKeys: String, CodingKey {
-        case lines, humanization, tempoPercent
+        case lines, humanization, expression, tempoPercent
     }
 
-    /// `humanization` and `tempoPercent` are additive at the same document
-    /// version, the `LineMixerState.roomSend` precedent: a document from
-    /// before either field existed reads as the standard setting — and the
+    /// `humanization`, `expression` and `tempoPercent` are additive at the same
+    /// document version, the `LineMixerState.roomSend` precedent: a document
+    /// from before a field existed reads as the standard setting — and the
     /// file's own tempo — rather than failing.
+    ///
+    /// For `expression` that default is the whole of owner decision D65-3: a
+    /// preset written before this leaf existed opens with expression **on** at
+    /// the default amount, so every piece already in the library gains the
+    /// feature on its next open without a migration pass.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
             lines: try container.decode([PresetLine].self, forKey: .lines),
             humanization: try container.decodeIfPresent(
                 HumanizationSettings.self, forKey: .humanization
+            ) ?? .standard,
+            expression: try container.decodeIfPresent(
+                ExpressionSettings.self, forKey: .expression
             ) ?? .standard,
             tempoPercent: try container.decodeIfPresent(Int.self, forKey: .tempoPercent)
                 ?? TempoMap.defaultTempoPercent

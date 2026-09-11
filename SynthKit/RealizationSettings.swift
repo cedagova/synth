@@ -44,6 +44,61 @@ public struct HumanizationSettings: Equatable, Hashable, Sendable, Codable {
     public var isLiteral: Bool { !isEnabled || intensity == 0 }
 }
 
+/// The two expression controls the product exposes (REQ-003, D65-1).
+///
+/// Two, and only two, for the reason `HumanizationSettings` is two: the owner
+/// gets an on/off and an amount, and everything the setting *does* — where a
+/// phrase begins and ends, how far it swells, how long a cadence breathes — is
+/// derived from the score by the realizer. A phrase-by-phrase editor is the
+/// interpretive modelling D4 rules out.
+///
+/// Deliberately a separate type from `HumanizationSettings` rather than two
+/// more fields on it. They are different *kinds* of deviation and REQ-004
+/// turns on telling them apart: humanization is seeded unevenness applied
+/// uniformly across the piece, expression is a deterministic reading of the
+/// notation's phrase structure. The bypass recipe switches off the second and
+/// keeps the first, which is only expressible if they are two values.
+public struct ExpressionSettings: Equatable, Hashable, Sendable, Codable {
+    /// On by default, per D65-3 — for a fresh preset and for a stored preset
+    /// written before the field existed.
+    public let isEnabled: Bool
+
+    /// How much shaping, 0…100. 0 is indistinguishable from off; the
+    /// difference is that the owner can turn the dial back up.
+    public let amount: Int
+
+    public init(isEnabled: Bool, amount: Int) {
+        self.isEnabled = isEnabled
+        self.amount = min(100, max(0, amount))
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case isEnabled, amount
+    }
+
+    /// Through the designated initializer, so a stored document cannot smuggle
+    /// an out-of-range amount past the clamp — the `HumanizationSettings`
+    /// precedent.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            isEnabled: try container.decode(Bool.self, forKey: .isEnabled),
+            amount: try container.decode(Int.self, forKey: .amount)
+        )
+    }
+
+    /// What playback uses when the owner has not chosen: on, moderate (D65-3).
+    public static let standard = ExpressionSettings(isEnabled: true, amount: 50)
+
+    /// No phrase shaping at all — REQ-004's bypass state for this term.
+    public static let off = ExpressionSettings(isEnabled: false, amount: 0)
+
+    /// True when the stage can be skipped entirely because it would change
+    /// nothing. **Load-bearing for REQ-004**: the bypass is a skipped code
+    /// path, not a threshold a comparison has to tolerate.
+    public var isNeutral: Bool { !isEnabled || amount == 0 }
+}
+
 /// Everything outside the score that decides how a piece is realized.
 ///
 /// AD5 in one type: the timeline is a pure function of `(piece, preset,
@@ -61,14 +116,29 @@ public struct RealizationSettings: Equatable, Hashable, Sendable, Codable {
 
     public let humanization: HumanizationSettings
 
-    public init(presetIdentifier: String = "", humanization: HumanizationSettings = .standard) {
+    /// Score-derived phrase expression (REQ-003): phrase-shaped dynamics and
+    /// cadence breathing, on top of what the notation writes.
+    public let expression: ExpressionSettings
+
+    public init(
+        presetIdentifier: String = "",
+        humanization: HumanizationSettings = .standard,
+        expression: ExpressionSettings = .standard
+    ) {
         self.presetIdentifier = presetIdentifier
         self.humanization = humanization
+        self.expression = expression
     }
 
-    /// Humanization on at its default amount.
+    /// Humanization and expression on at their default amounts.
     public static let standard = RealizationSettings()
 
-    /// Strictly literal realization.
-    public static let literal = RealizationSettings(humanization: .off)
+    /// Strictly literal realization: no humanization, no expression. This is
+    /// REQ-004's bypass state for both realization terms.
+    public static let literal = RealizationSettings(humanization: .off, expression: .off)
+
+    /// Uniform humanization only — REQ-004's recipe for the expression term:
+    /// what the notation writes plus the seeded unevenness, and nothing this
+    /// leaf adds.
+    public static let humanizedWithoutExpression = RealizationSettings(expression: .off)
 }

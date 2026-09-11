@@ -79,6 +79,18 @@ struct RealizedNote {
     /// performance leans. Humanization moves when it *sounds*, not where it
     /// *is*.
     var timingOffsetMicroseconds: Int64 = 0
+
+    /// How much earlier than its shaped length the note is released, so the
+    /// line can breathe at a phrase end (`Realization.breathe`).
+    ///
+    /// In microseconds rather than ticks, like `timingOffsetMicroseconds` and
+    /// for two reasons. A release is a property of the performance, not of the
+    /// notation, so `durationTicks` — which a piano roll reads as the shaped
+    /// notated length — must not absorb it; and a lift expressed in ticks
+    /// truncates to nothing on a score written at four divisions to the
+    /// quarter, which would make the gesture silently depend on the engraver's
+    /// division setting.
+    var breathShorteningMicroseconds: Int64 = 0
 }
 
 extension Realization {
@@ -107,7 +119,20 @@ extension Realization {
         let stream = buildStream(line)
         let slurs = slurSpans(stream, line: line)
         var notes = soundNotes(stream, line: line, curve: curve)
+
+        // **Order matters, and only in one place.** The phrase shaping and the
+        // humanization both add to velocity, so those two are order-free. The
+        // breath is not: it clamps its lateness together with whatever
+        // humanization put in `timingOffsetMicroseconds` into one shared local
+        // bound, which it can only do once that value is there.
+        //
+        // With expression off or at zero there are no phrases, so both calls
+        // return having read nothing and written nothing — REQ-004's bypass is
+        // this pair of guards, not a tolerance.
+        let phrases = expressionPhrases(stream, slurs: slurs)
+        shapePhraseDynamics(&notes, phrases: phrases)
         humanize(&notes, line: line, slurs: slurs)
+        breathe(&notes, phrases: phrases)
 
         var events = notes.map { note -> PerformanceEvent in
             let onset = score.tempoMap.microseconds(atPlaybackTicks: note.onsetTicks)
@@ -116,7 +141,7 @@ extension Realization {
             )
             return PerformanceEvent(
                 onsetMicroseconds: max(0, onset + note.timingOffsetMicroseconds),
-                durationMicroseconds: max(1, end - onset),
+                durationMicroseconds: max(1, end - onset - note.breathShorteningMicroseconds),
                 midiNoteNumber: note.midiNoteNumber,
                 velocity: min(127, max(1, note.velocity)),
                 origin: note.origin,

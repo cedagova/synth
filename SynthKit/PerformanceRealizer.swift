@@ -18,10 +18,16 @@ import Foundation
 /// - the offline export (REQ-026) renders the very value live playback used,
 ///   so export-equals-live is structural instead of a QA hope.
 ///
-/// What this stage does *not* do is interpret. Rubato, period-performance
-/// conventions and phrase-by-phrase editing are explicit non-goals (D4). The
-/// shaping here is the literal meaning of the notation plus a small, bounded
-/// amount of human unevenness.
+/// What this stage does *not* do is interpret freely. Rubato, period-
+/// performance conventions and phrase-by-phrase editing are explicit non-goals
+/// (D4). The shaping here is the literal meaning of the notation, plus a small
+/// bounded amount of human unevenness (`PerformanceHumanization`), plus — when
+/// the owner leaves the expression setting on — a deterministic reading of the
+/// phrase structure the notation already states: an arch across each phrase and
+/// a breath between phrases (`PerformancePhrasing`, REQ-003). Every one of
+/// those is derived from the compiled score and the settings, so all three stay
+/// inside the purity contract above, and the last two each have an off state
+/// that skips their code path entirely (REQ-004).
 public struct PerformanceRealizer: Sendable {
     /// Velocity used before the score says anything about loudness. `mf` is
     /// what a player defaults to and what every notation program assumes.

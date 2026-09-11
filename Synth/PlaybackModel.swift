@@ -1072,16 +1072,46 @@ final class PlaybackModel {
             return
         }
 
+        // Read before the change, for the reason `restorePlayback` gives: the
+        // engine's own carry cannot survive the second rebuild that putting the
+        // preset back costs.
+        let wasPlaying = transportState == .playing
+        let resumeAt = positionMicroseconds
+
         do {
             // No re-realization: the notes do not move, only what each one is
-            // tuned to. The engine rebuilds the program and carries the playhead
-            // and the mix across.
+            // tuned to. The engine rebuilds the program around the same timeline.
             try engine.setTuning(settings)
-            assignment.programWasReloaded()
+            try restorePlayback(at: resumeAt, playing: wasPlaying)
             statusMessage = Self.tuningMessage(settings)
             refreshTransport()
         } catch {
             statusMessage = "Could not apply the tuning change: \(error)"
+        }
+    }
+
+    /// Put the piece back together after something rebuilt the render program: the
+    /// preset's sounds and mix, the playhead, and whether it was playing.
+    ///
+    /// **Why the position is held here rather than left to `PlaybackEngine`'s own
+    /// carry, which exists and works.** Restoring the preset means re-seating the
+    /// voices, and re-seating the voices is *a second rebuild*. The engine carries
+    /// the playhead by re-issuing a seek, and a seek lands when the render thread
+    /// applies it — so the second rebuild reads a playhead that is still at zero,
+    /// carries zero, and starts the piece again from the top. This model is the only
+    /// layer that knows the two rebuilds are one act, so this is where the position
+    /// lives.
+    ///
+    /// Found by the smoke test rather than by a unit test, which is worth recording:
+    /// every assertion about the engine in isolation was true.
+    private func restorePlayback(at resumeAt: Int64, playing wasPlaying: Bool) throws {
+        // A fresh program's strips start at unity, centred and unmuted, which would
+        // silently throw the owner's mix away.
+        assignment.programWasReloaded()
+        seekEngine(to: resumeAt)
+        if wasPlaying {
+            try engine.start()
+            engine.play()
         }
     }
 
@@ -1105,17 +1135,10 @@ final class PlaybackModel {
         )
 
         do {
-            // `load` stops the graph; the position is carried across by hand
-            // because a new program starts at zero. So are the preset's sounds
-            // and mix — a fresh program's strips start at unity, centred and
-            // unmuted, which would silently throw the owner's mix away.
+            // `load` stops the graph; the position, the preset's sounds and the
+            // mix are all carried across by hand — see `restorePlayback`.
             try loadIntoEngine(realized)
-            assignment.programWasReloaded()
-            seekEngine(to: resumeAt)
-            if wasPlaying {
-                try engine.start()
-                engine.play()
-            }
+            try restorePlayback(at: resumeAt, playing: wasPlaying)
             statusMessage = message
             refreshTransport()
         } catch {
@@ -1192,12 +1215,12 @@ final class PlaybackModel {
 
         do {
             try loadIntoEngine(realized)
-            assignment.programWasReloaded()
-            seekEngine(to: rescaled.tempoMap.microseconds(atPlaybackTicks: ticks))
-            if wasPlaying {
-                try engine.start()
-                engine.play()
-            }
+            // The same place in the *music* rather than the same second, which the
+            // rescaled clock has moved.
+            try restorePlayback(
+                at: rescaled.tempoMap.microseconds(atPlaybackTicks: ticks),
+                playing: wasPlaying
+            )
             statusMessage = Self.tempoMessage(percent, score: sourceScore)
             refreshTransport()
         } catch {

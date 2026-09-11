@@ -938,6 +938,13 @@ private struct PerformanceSettingPicker<Choice: Hashable>: View {
     /// Wide enough for "Werckmeister III" plus the menu's own chevron, and fixed
     /// so the two tuning rows line up with each other rather than each sizing
     /// itself to its longest option.
+    ///
+    /// **Leading, not centred**, which is the whole reason the width is here at all.
+    /// A pop-up menu sizes itself to its widest title and a bare `frame(width:)`
+    /// centres it inside that width — so the built app showed "Werckmeister III" and
+    /// "A=415" starting at two different x positions, each drifting by half the
+    /// difference in their own titles' widths. The rest of the group lines its
+    /// controls up on the left and these have to as well.
     private static var width: CGFloat { 194 }
 
     var body: some View {
@@ -948,7 +955,7 @@ private struct PerformanceSettingPicker<Choice: Hashable>: View {
         }
         .labelsHidden()
         .controlSize(.small)
-        .frame(width: Self.width)
+        .frame(width: Self.width, alignment: .leading)
         .disabled(!isEnabled)
         .accessibilityLabel(label)
         .accessibilityValue(spokenValue)

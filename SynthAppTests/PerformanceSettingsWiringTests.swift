@@ -481,6 +481,42 @@ final class PerformanceSettingsWiringTests: XCTestCase {
         )
     }
 
+    /// **A tuning change keeps the playhead.**
+    ///
+    /// This one caught a real defect and is here to stop it coming back. Every
+    /// engine-level assertion was already true — `PlaybackEngine.setTuning` does
+    /// carry the playhead across its rebuild — and the piece still restarted from
+    /// the top, because putting the preset back re-seats the voices and that is a
+    /// *second* rebuild: the engine's carry re-issues a seek, a seek lands when the
+    /// render thread applies it, and the second rebuild therefore read zero. The
+    /// position is held in the model now (`restorePlayback`), which is the only layer
+    /// that knows the two rebuilds are one act.
+    func testATuningChangeKeepsThePlayhead() async throws {
+        let playback = try await openPreparedPiece()
+        playback.seek(toMicroseconds: 4_000_000)
+        let position = playback.positionMicroseconds
+        XCTAssertGreaterThan(position, 0, "the seek has to have moved somewhere")
+
+        await playback.setTemperament(.werckmeisterIII)
+        XCTAssertEqual(
+            playback.positionMicroseconds, position,
+            "the temperament change restarted the piece"
+        )
+
+        await playback.setReferencePitch(.a415)
+        XCTAssertEqual(
+            playback.positionMicroseconds, position,
+            "the reference-pitch change restarted the piece"
+        )
+
+        // And the mix survived both, which is the other thing the second rebuild
+        // would have thrown away.
+        XCTAssertEqual(
+            playback.assignment.activePreset?.content.tuning,
+            TuningSettings(temperament: .werckmeisterIII, referencePitch: .a415)
+        )
+    }
+
     /// A preset that stores a tuning opens under it, and the program the transport
     /// loaded is built with it.
     func testAStoredTuningIsWhatThePieceOpensUnder() async throws {

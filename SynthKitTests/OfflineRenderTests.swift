@@ -116,7 +116,18 @@ final class OfflineRenderTests: XCTestCase {
         ).data()
 
         let timeline = try AudioRenderFixtures.timeline(musicXML)
-        let audio = try PlaybackEngine.renderTimelineOffline(timeline)
+
+        // Through a voice whose release is shorter than the détaché gap between
+        // two quarters — fifty milliseconds at 120 BPM, now that the reading no
+        // longer depends on the division setting (#80) — so each note has
+        // stopped sounding before the next begins and the detector sees one
+        // rise per note. The default patch rings on for 220 ms; its tail under
+        // the next attack read as a second onset about 65 ms later.
+        var voice = SynthPatch.defaultVoice
+        voice.amplitudeEnvelope.releaseSeconds = 0.03
+        let audio = try PlaybackEngine.renderTimelineOffline(
+            timeline, voiceProvider: SynthPatchVoiceProvider(patch: voice)
+        )
 
         let expected = timeline.lines[0].events.map(\.onsetMicroseconds).sorted()
         let detected = AudioRenderFixtures.detectedOnsetsMicroseconds(audio)

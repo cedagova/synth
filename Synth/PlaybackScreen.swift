@@ -738,9 +738,8 @@ private struct PerformanceSettingsGroup: View {
             // is labelled "Produced master" for VoiceOver, where the room is not
             // a constraint.
             //
-            // No amount slider, so the row keeps the group's alignment by way of
-            // the placeholder, exactly as Tempo keeps it by way of the switch
-            // placeholder.
+            // No amount slider: the switch itself fills the switch column, so
+            // the row keeps the group's alignment without a placeholder.
             PerformanceSettingRow(name: "Master") {
                 PerformanceSettingSwitch(
                     isOn: Binding(

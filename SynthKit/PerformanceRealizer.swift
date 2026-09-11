@@ -50,6 +50,12 @@ public struct PerformanceRealizer: Sendable {
     /// Fraction of a notated value a plain, unmarked note actually sounds, so
     /// two repeated notes re-attack instead of fusing. A player's default
     /// détaché, not an articulation.
+    ///
+    /// Read on the tick grid and then corrected through the tempo map
+    /// (`Realization.gridResidualMicroseconds`), for the reason
+    /// `legatoOverlapMicroseconds` gives below: on the grid alone the ten
+    /// percent floored to nothing at coarse division settings and the note
+    /// kept its full value (#80).
     public static let detachedPercent = 90
 
     /// How far a slurred note is carried past the onset it runs into, in

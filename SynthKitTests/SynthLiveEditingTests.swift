@@ -546,11 +546,25 @@ final class SynthLiveEditingTests: XCTestCase {
         )
     }
 
-    /// Energy above 2 kHz, sampled at eight probes — the band a 250 Hz
-    /// four-pole low-pass is there to remove.
+    /// Energy above 2 kHz, sampled at eight probes on the fixture's own
+    /// harmonics — the third to the tenth partial of its A5 (880 Hz) saw, which
+    /// are also partials of its A2 — the band a 250 Hz four-pole low-pass is
+    /// there to remove.
+    ///
+    /// On the harmonics rather than at round kilohertz values, so what is
+    /// measured is the sound the filter acts on. Off-harmonic probes read
+    /// only the leakage of the notes' on/off gating, and that leakage moved
+    /// when the détaché reading stopped depending on the engraver's division
+    /// setting (#80): the fixture's quarters, written at four divisions, sound
+    /// ninety percent of their value now instead of the seventy-five the grid
+    /// had floored them to, and the bright/dark ratio at the old probes fell
+    /// from above 12 dB to about 8 for a reason that had nothing to do with
+    /// the cutoff.
     private func energyAboveTwoKilohertz(_ samples: [Float]) -> Double {
-        stride(from: 2_000.0, through: 9_000.0, by: 1_000.0).reduce(0.0) { total, hertz in
-            total + AudioRenderFixtures.energy(samples, atHertz: hertz, sampleRate: 48_000)
+        (3...10).reduce(0.0) { total, partial in
+            total + AudioRenderFixtures.energy(
+                samples, atHertz: 880.0 * Double(partial), sampleRate: 48_000
+            )
         }
     }
 

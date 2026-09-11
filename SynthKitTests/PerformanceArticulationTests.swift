@@ -181,6 +181,38 @@ final class PerformanceArticulationTests: XCTestCase {
         )
     }
 
+    /// The shortening half of the same defect (#80). An articulation's reading
+    /// used to be `notated * percent / 100` on the tick grid, which floors to
+    /// nothing on a score written at one division to the quarter — so a staccato
+    /// quarter sounded its full value there, indistinguishable from a tenuto,
+    /// and read a different length at every division setting in between.
+    func testArticulationShorteningDoesNotDependOnTheEngraversDivisionSetting() throws {
+        var readings: [Int: [Int64]] = [:]
+        for divisions in [1, 4, 24, 480] {
+            let score = try compile(
+                Self.articulatedQuarters(divisions: divisions), id: "shortening-\(divisions)"
+            )
+            XCTAssertEqual(
+                score.ticksPerQuarter, divisions,
+                "the fixture must actually reach the compiler at this division setting"
+            )
+            let notes = events(realizer.realize(score, settings: .literal), measure: 0)
+            XCTAssertEqual(notes.count, 4)
+            readings[divisions] = notes.map(\.durationMicroseconds)
+        }
+
+        let distinct = Set(readings.values)
+        XCTAssertEqual(
+            distinct.count, 1,
+            "a note's sounding length still depends on the engraver's division "
+                + "setting: \(readings)"
+        )
+        // A quarter at 120 BPM is half a second: the staccato sounds half of
+        // it, the tenuto all of it, and the two plain notes their détaché nine
+        // tenths — three readings, distinguishable at every division setting.
+        XCTAssertEqual(distinct.first, [250_000, 500_000, 450_000, 450_000])
+    }
+
     /// The bound by the note's own length is the other half: a slurred
     /// thirty-second in a fast figure overlaps proportionally less rather than
     /// being swallowed.
@@ -275,6 +307,43 @@ final class PerformanceArticulationTests: XCTestCase {
         }
         return ScoreXML.Score(
             workTitle: "Slurred Quarters",
+            parts: [
+                ScoreXML.Part(
+                    id: "P1", name: "Flute",
+                    measures: [ScoreXML.Measure(number: "1", items: items)]
+                )
+            ]
+        ).data()
+    }
+
+    /// One measure of unslurred quarters at 120 BPM — staccato, tenuto, then
+    /// two plain — written at the given division setting, so the same music
+    /// reaches the realizer on four different tick grids.
+    private static func articulatedQuarters(divisions: Int) -> Data {
+        let notes: [(pitch: String, articulations: [String])] = [
+            ("C5", ["staccato"]), ("D5", ["tenuto"]), ("E5", []), ("F5", [])
+        ]
+        var items: [ScoreXML.Item] = [
+            .attributes(
+                ScoreXML.Attributes(divisions: divisions, fifths: 0, time: (4, 4), clefs: [("G", 2)])
+            ),
+            .direction(ScoreXML.Direction(metronome: ("quarter", 120), sound: ["tempo": "120"]))
+        ]
+        for note in notes {
+            items.append(
+                .note(
+                    ScoreXML.Note(
+                        pitch: note.pitch,
+                        duration: divisions,
+                        type: "quarter",
+                        notations: note.articulations.isEmpty
+                            ? [] : [ScoreXML.Notation.articulations(note.articulations)]
+                    )
+                )
+            )
+        }
+        return ScoreXML.Score(
+            workTitle: "Articulated Quarters",
             parts: [
                 ScoreXML.Part(
                     id: "P1", name: "Flute",

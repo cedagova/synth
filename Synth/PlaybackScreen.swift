@@ -728,6 +728,32 @@ private struct PerformanceSettingsGroup: View {
                 )
             }
 
+            // The produced master (REQ-005, D65-2 option A): one switch over bus
+            // cohesion and loudness calibration, and no amount — the mechanisms
+            // are taste constants in the code, and the one thing the owner has an
+            // opinion about is whether the mix is produced or raw. Named "Master"
+            // rather than "Produced master" so it reads as one word beside
+            // "Humanize", "Expression" and "Tempo", and so the name column that
+            // lines all four up does not have to grow for it; the switch itself
+            // is labelled "Produced master" for VoiceOver, where the room is not
+            // a constraint.
+            //
+            // No amount slider, so the row keeps the group's alignment by way of
+            // the placeholder, exactly as Tempo keeps it by way of the switch
+            // placeholder.
+            PerformanceSettingRow(name: "Master") {
+                PerformanceSettingSwitch(
+                    isOn: Binding(
+                        get: { model.producedMaster.isEnabled },
+                        set: { isOn in Task { await model.setProducedMasterEnabled(isOn) } }
+                    ),
+                    label: "Produced master",
+                    hint: "Brings every piece to a comparable loudness and holds the mix "
+                        + "together. Off plays the raw sum of the lines. Exports never clip "
+                        + "either way. Saved with the preset."
+                )
+            }
+
             // Tempo (REQ-009): the file's tempo at 100, half at 50, half again
             // as fast at 150. Here because it is the same kind of setting —
             // preset-stored, whole-piece, re-realized on change — and the one

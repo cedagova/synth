@@ -13,12 +13,21 @@ import XCTest
 /// - **staging neutral** — STG003's term, register-aware seating flattened;
 /// - **tuning at default** — TUN001 has not landed, so equal temperament at
 ///   A=440 is what both voice engines do and there is nothing to switch off; and
-/// - **produced master off** — MST001 has not landed either, so the master is
-///   gain-only at unity and the line sum *is* the output.
+/// - **produced master off** — MST001's switch, off: no bus cohesion and a
+///   calibration gain of exactly one.
 ///
-/// The last two are trivially true today. They are asserted as such rather than
-/// assumed, so the day one of them stops being trivial this test fails instead of
-/// quietly narrowing.
+/// The tuning term is still trivially true. It is asserted as such rather than
+/// assumed, so the day it stops being trivial this test fails instead of quietly
+/// narrowing.
+///
+/// **What the produced master off does *not* switch off is the true-peak
+/// ceiling**, which is always in the graph (owner decision D65-2, AD-P6). That
+/// is why the recipe's claim is stated against a raw sum that stays under the
+/// ceiling: the ceiling only acts where the raw sum would have clipped, and
+/// below itself its gain is literally `1.0f`, so it multiplies rather than
+/// approximates. `testTheRawSumOfTheRecipeStaysUnderTheCeiling` pins the
+/// premise so the claim cannot quietly become a statement about a limiter
+/// acting.
 ///
 /// **Where "bit-identical" has to become "to within one unit in the last
 /// place", and why that is arithmetic rather than a concession.** D65-2 states
@@ -88,14 +97,28 @@ final class BypassRecipeRenderTests: XCTestCase {
         let mix = try render(timeline, lineCount: lineCount)
         XCTAssertGreaterThan(mix.rms(), 0.001, "the render is silent, so this proves nothing")
 
-        // The two terms the plan has not delivered yet, asserted rather than
-        // assumed: the bus is gain-only and at unity.
+        // The bus, as the recipe requires it: the owner's master gain at unity,
+        // the produced master off, and the calibration gain that off implies.
         let probe = PlaybackEngine()
         try probe.setRenderMode(.offline(sampleRate: Self.sampleRate))
         try probe.load(timeline: timeline)
+        XCTAssertEqual(probe.masterGain, 1, "the recipe needs the bus at unity")
         XCTAssertEqual(
-            probe.masterGain, 1,
-            "the produced master is not in the graph yet, so the bus must be at unity"
+            probe.producedMaster, .off,
+            "the recipe renders with the produced master off"
+        )
+        let engine = try XCTUnwrap(probe.loadedProgram).engine
+        XCTAssertEqual(
+            synth_engine_produced_master(engine), 0,
+            "the render thread was not told the produced master is off"
+        )
+        XCTAssertEqual(
+            synth_engine_master_calibration_gain(engine), 1,
+            "the produced master is off but a calibration gain reached the bus"
+        )
+        XCTAssertEqual(
+            synth_engine_master_cohesion_threshold(engine), 0,
+            "the produced master is off but cohesion is armed"
         )
 
         let deviation = try largestDeviationFromTheLineSum(timeline, lineCount: lineCount)
@@ -104,6 +127,40 @@ final class BypassRecipeRenderTests: XCTestCase {
             "the composed bypass mix departs from the raw line sum by \(deviation.largest), "
                 + "which is more than the \(4 * deviation.peak.ulp) that rounding a peak of "
                 + "\(deviation.peak) can account for; something is processing the sum"
+        )
+    }
+
+    /// The premise D65-2 states the recipe against: the raw sum of the bypass
+    /// recipe stays under the always-on ceiling, so the ceiling is not what the
+    /// test above is measuring.
+    func testTheRawSumOfTheRecipeStaysUnderTheCeiling() throws {
+        let score = try compile(MusicXMLScoreFixtures.expressiveKeyboardPiece())
+        let timeline = PerformanceRealizer().realize(
+            score, settings: .humanizedWithoutExpression
+        )
+        let mix = try render(timeline, lineCount: timeline.lines.count)
+        let ceiling = 20 * log10(Double(synth_master_ceiling()))
+        XCTAssertLessThan(
+            20 * log10(Double(mix.peak())), ceiling,
+            "the recipe's raw sum already reaches the ceiling, so bit-identity to it would "
+                + "be a claim about the ceiling acting rather than about the bypass"
+        )
+    }
+
+    /// And the produced master is a real term in the recipe rather than a name
+    /// for nothing: on, the same notes render differently.
+    func testTheProducedMasterIsAudibleWhenItIsOn() throws {
+        let score = try compile(MusicXMLScoreFixtures.expressiveKeyboardPiece())
+        let timeline = PerformanceRealizer().realize(
+            score, settings: .humanizedWithoutExpression
+        )
+        let lineCount = timeline.lines.count
+        let off = try render(timeline, lineCount: lineCount)
+        let on = try render(timeline, lineCount: lineCount, producedMaster: .standard)
+        XCTAssertNotEqual(
+            off.canonicalData(), on.canonicalData(),
+            "the produced master leaves no trace in the render, so switching it off "
+                + "proves nothing"
         )
     }
 
@@ -247,9 +304,12 @@ final class BypassRecipeRenderTests: XCTestCase {
         lineCount: Int,
         onlyLineAt audible: Int? = nil,
         masterGain: Float = 1,
+        producedMaster: ProducedMasterSettings = .off,
         staged score: CompiledScore? = nil
     ) throws -> PlaybackEngine.RenderedAudio {
-        try PlaybackEngine.renderTimelineOffline(timeline, sampleRate: Self.sampleRate) { engine in
+        try PlaybackEngine.renderTimelineOffline(
+            timeline, sampleRate: Self.sampleRate, producedMaster: producedMaster
+        ) { engine in
             self.flattenStaging(engine, lineCount: lineCount)
             engine.masterGain = masterGain
             if let score {

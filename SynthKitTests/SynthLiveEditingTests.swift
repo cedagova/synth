@@ -512,8 +512,22 @@ final class SynthLiveEditingTests: XCTestCase {
 
         // 3. It is audible: the second before the edit is much brighter than
         //    the second after it.
+        //
+        //    **Measured from past the master stage's lookahead**, which is what
+        //    "after the edit" now means. The true-peak ceiling (MST001) delays
+        //    the bus by `synth_master_lookahead_frames()` and gives the delay
+        //    back by priming, so a frame already inside the lookahead when the
+        //    edit landed is still emitted after it: 64 frames, 1.3 ms, far
+        //    inside the "may land one buffer late" the engine's header has
+        //    always promised for a control crossing, and a sixth of one
+        //    512-frame buffer. It is inaudible and it is not measurable either,
+        //    *unless* the band being measured is otherwise empty — which is
+        //    exactly the case here, since a 250 Hz four-pole leaves almost
+        //    nothing above 2 kHz for 1.3 ms of the old sound to hide in. So the
+        //    window starts where the edit is actually in force.
+        let inFlight = Int(synth_master_lookahead_frames())
         let brightEnergy = self.energyAboveTwoKilohertz(bright.left)
-        let darkEnergy = self.energyAboveTwoKilohertz(dark.left)
+        let darkEnergy = self.energyAboveTwoKilohertz(Array(dark.left.dropFirst(inFlight)))
         XCTAssertGreaterThan(
             AudioRenderFixtures.decibels(brightEnergy / max(darkEnergy, 1e-12)), 12,
             "Closing the cutoff to 250 Hz removed \(brightEnergy) → \(darkEnergy) above 2 kHz."

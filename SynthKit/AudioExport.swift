@@ -234,6 +234,13 @@ public struct AudioExportRequest: Sendable {
 
     public let masterGain: Float
 
+    /// The preset's produced master (REQ-005): bus cohesion and loudness
+    /// calibration, as one switch. Neutral by default for the reason
+    /// `PlaybackEngine.producedMaster` is — a request says what it asks for —
+    /// and `PresetPerformance.exportRequest` is what carries the owner's actual
+    /// setting here, so the file and live playback agree about it.
+    public let producedMaster: ProducedMasterSettings
+
     public let settings: AudioExportSettings
 
     public init(
@@ -241,12 +248,14 @@ public struct AudioExportRequest: Sendable {
         voices: LineVoiceAssignment,
         mixer: [ScoreLineID: LineMixerState] = [:],
         masterGain: Float = 1,
+        producedMaster: ProducedMasterSettings = .off,
         settings: AudioExportSettings = .standard
     ) {
         self.timeline = timeline
         self.voices = voices
         self.mixer = mixer
         self.masterGain = masterGain
+        self.producedMaster = producedMaster
         self.settings = settings
     }
 
@@ -256,6 +265,11 @@ public struct AudioExportRequest: Sendable {
     /// program happened to start at.
     /// Public so an app-level equality check can render the same mix the
     /// export applies; staging (STG002) made the mixer half load-bearing.
+    ///
+    /// The bus goes on at the end — the master gain, and the produced master
+    /// (MST001) — because both are part of "the mix this preset stores" and a
+    /// render that applied the strips and left the bus neutral would be a
+    /// different mix from the one the owner heard.
     public func applyMixer(to engine: PlaybackEngine) {
         guard let program = engine.loadedProgram else { return }
         for (index, lineID) in program.lineIDs.enumerated() {
@@ -269,6 +283,7 @@ public struct AudioExportRequest: Sendable {
             strip.depth = Float(state.depth)
         }
         engine.masterGain = masterGain
+        engine.producedMaster = producedMaster
     }
 }
 
@@ -299,6 +314,7 @@ extension PresetPerformance {
                 lines.map { ($0.lineID, $0.mixer) }, uniquingKeysWith: { first, _ in first }
             ),
             masterGain: 1,
+            producedMaster: preset.content.producedMaster,
             settings: settings
         )
     }

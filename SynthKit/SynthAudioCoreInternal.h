@@ -94,6 +94,76 @@ typedef struct {
     int32_t allpassLength[2][SYNTH_ROOM_ALLPASS_COUNT];
 } SynthRoomState;
 
+#pragma mark - The produced master
+
+/*
+ The master stage after the line sum (MST001, AD-P2), in the order it runs:
+ gentle bus cohesion, the per-piece loudness calibration gain, the owner's
+ master gain, and then the always-on true-peak ceiling. The declick fade is
+ applied *after* all of it — see `synth_audio_core_render`.
+
+ **Two of the four are switchable and one is not.** Cohesion and calibration
+ are the "Produced master" setting (owner decision D65-2, option A); the
+ ceiling has no control, because an export that clips is a defect rather than a
+ taste (AD-P6). With the setting off, cohesion is skipped and the calibration
+ gain is unity, so the stage is the ceiling alone and the ceiling multiplies by
+ exactly `1.0f` for any material that stays under it — which is what makes
+ REQ-004's composed bypass bit-identical to the raw line sum rather than
+ identical-to-a-tolerance.
+
+ **Why the ceiling looks ahead, and why that costs no alignment.** True peak is
+ an inter-sample quantity: a signal whose every sample sits under the ceiling
+ can still reconstruct above it, so the detector interpolates between samples
+ (`synth_master_interval_peak`) and therefore cannot know a peak's height until
+ the samples after it have arrived. The signal is delayed by
+ `SYNTH_MASTER_LOOKAHEAD_FRAMES` so the reduction can ramp in and land exactly
+ on the peak. That delay is then given back: the first lookahead's worth of
+ program is rendered into the delay line before any output frame is emitted
+ (`synth_master_prime`, re-run after every relocate), so output frame *k* is
+ still program frame *k*. `synth_output_frame` is the one place that
+ conversion lives.
+*/
+
+/// Ceiling in linear amplitude: −1.0 dBFS, the REQ-005 figure.
+#define SYNTH_MASTER_CEILING 0.891250938f
+
+/// How far below the ceiling a reduction actually aims, as a linear factor:
+/// −0.09 dB.
+///
+/// The detector's four-tap interpolation is an estimate, and a measurement made
+/// with a longer filter reads a few thousandths of a decibel higher — enough to
+/// make "true peak ≤ −1 dBFS" false by a rounding error rather than by a defect.
+/// This is the allowance for that difference, and it is deliberately applied to
+/// the *target* of a reduction and not to the threshold that triggers one, so
+/// material under the ceiling is still passed through untouched and bit-exact.
+#define SYNTH_MASTER_SAFETY 0.99f
+
+/// Lookahead, in frames, fixed rather than derived from the rate so that a
+/// render is bit-identical at 44.1 and 48 kHz for the same reason the event
+/// scheduler is: nothing about the stage may depend on how time was chopped up.
+/// Must be a power of two — the ring index is masked.
+#define SYNTH_MASTER_LOOKAHEAD_FRAMES 64
+
+/// How long the ceiling takes to give a full reduction back, in seconds. Long
+/// enough not to pump on a tutti, short enough not to duck the bar after one.
+#define SYNTH_MASTER_RELEASE_SECONDS 0.150
+
+/*
+ Bus cohesion: one gentle, slow wideband compressor over the whole mix.
+
+ Gentle on purpose. The point is that a tutti and a solo line belong to the same
+ record, not that the dynamic range is flattened — so the ratio is barely over
+ one, the threshold sits well above the piece's own measured loudness
+ (`synth_engine_set_master_calibration` carries it, because where "loud for this
+ piece" is can only be known from the analysis pass), and the timing is slower
+ than any note.
+*/
+#define SYNTH_MASTER_COHESION_RATIO 1.4f
+/// `1 − 1/ratio`: the exponent that turns an over-threshold ratio into a gain.
+#define SYNTH_MASTER_COHESION_EXPONENT 0.285714286f
+#define SYNTH_MASTER_COHESION_ATTACK_SECONDS 0.015
+#define SYNTH_MASTER_COHESION_RELEASE_SECONDS 0.220
+
 #pragma mark - Program
 
 typedef struct {
@@ -178,6 +248,16 @@ struct SynthRenderEngine {
     _Atomic int32_t  realtimeMode;
     _Atomic float    masterGain;
     _Atomic int32_t  requestedPauseReason;
+    /// The "Produced master" setting (D65-2): cohesion and calibration
+    /// together. The ceiling is not behind it.
+    _Atomic int32_t  producedMaster;
+    /// Per-piece loudness calibration, from the bounded analysis pass
+    /// (`MasterCalibration`). Unity for a silent piece and for an analysis that
+    /// could not run.
+    _Atomic float    calibrationGain;
+    /// Where "loud for this piece" is, in linear amplitude, for cohesion.
+    /// Zero or less disables cohesion entirely.
+    _Atomic float    cohesionThreshold;
 
     /* Render thread writes, control thread reads. */
     _Atomic int64_t  playheadFrame;
@@ -205,6 +285,38 @@ struct SynthRenderEngine {
     int32_t consecutiveOverloads;
     /// mach_absolute_time units to nanoseconds.
     double  timebaseScale;
+
+    /* --- The master stage. Render thread only, sized at compile time. --- */
+
+    /// The ceiling's lookahead delay, one ring per channel.
+    float   masterDelayLeft[SYNTH_MASTER_LOOKAHEAD_FRAMES];
+    float   masterDelayRight[SYNTH_MASTER_LOOKAHEAD_FRAMES];
+    /// The gain each delayed frame may not exceed, in step with the rings
+    /// above: `1.0f` for a frame that needs nothing, and that exact value is
+    /// what keeps the stage bit-transparent.
+    float   masterTarget[SYNTH_MASTER_LOOKAHEAD_FRAMES];
+    int32_t masterWrite;
+    /// How many entries of `masterTarget` are below unity, so the common case —
+    /// a mix nowhere near the ceiling — skips the window scan entirely.
+    int32_t masterNonUnity;
+    /// Frames of program sitting in the delay line: zero until the stage is
+    /// primed, `SYNTH_MASTER_LOOKAHEAD_FRAMES` after. The difference between
+    /// the program cursor and the frame being emitted.
+    int32_t masterLookaheadFilled;
+    int32_t masterNeedsPrime;
+    /// The reduction currently applied by the ceiling.
+    float   masterGainState;
+    float   masterReleaseStep;
+    /// Bus cohesion's level follower and its rate-derived timing.
+    float   cohesionEnvelope;
+    float   cohesionAttackCoefficient;
+    float   cohesionReleaseCoefficient;
+    /// Last produced-master state the render thread saw, so turning the setting
+    /// on does not inherit a stale envelope.
+    int32_t cohesionWasEnabled;
+    /// Where the priming render puts the bus it is not going to emit.
+    float   primeLeft[SYNTH_MASTER_LOOKAHEAD_FRAMES];
+    float   primeRight[SYNTH_MASTER_LOOKAHEAD_FRAMES];
 };
 
 #pragma mark - Room construction
@@ -215,5 +327,13 @@ struct SynthRenderEngine {
 /// the construction — the same split that lets `RealtimeSafetyTests` scan the
 /// render core as a whole file.
 void synth_room_prepare(SynthRoomState *room, double sampleRate);
+
+#pragma mark - Master stage construction
+
+/// Derive the master stage's rate-dependent timing and clear its state.
+///
+/// Control thread, beside `synth_room_prepare` and for the same reason: it runs
+/// when the engine is built and again on a rate change.
+void synth_master_prepare(SynthRenderEngine *engine, double sampleRate);
 
 #endif /* SYNTH_AUDIO_CORE_INTERNAL_H */

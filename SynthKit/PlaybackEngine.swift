@@ -70,6 +70,23 @@ public final class PlaybackEngine: @unchecked Sendable {
     private var timeline: PerformanceTimeline?
     private var mode: RenderMode = .realtime
 
+    /// The produced master, as the preset stores it.
+    ///
+    /// **Off until something asks otherwise, and that is not the product
+    /// default.** `ProducedMasterSettings.standard` is on (D65-3) and reaches
+    /// here from the active preset; the engine itself is a mechanism, and a
+    /// mechanism that quietly ran a loudness analysis and applied a gain because
+    /// nobody said not to would make every render in this repository a statement
+    /// about something the caller never asked for. The always-on ceiling is the
+    /// one part of the stage nobody can decline, and it is bit-transparent below
+    /// itself.
+    private var producedMasterSetting: ProducedMasterSettings = .off
+
+    /// This program's measured calibration, or nil until it has been measured.
+    /// Dropped on every program rebuild, so the gain follows the piece, the
+    /// preset, the settings and the resolved voices (P65-5).
+    private var calibration: MasterCalibration?
+
     /// Set while the engine is deliberately reconfiguring itself, so the
     /// configuration-change notification does not chase its own tail.
     private var isReconfiguring = false
@@ -276,6 +293,14 @@ public final class PlaybackEngine: @unchecked Sendable {
 
         rebuildGraph(sampleRate: rate)
         restore(carried)
+
+        // A new program is a new measurement. Piece, preset, performance
+        // settings and resolved voices all reach the render thread by way of a
+        // rebuild, so dropping the old figure here is what makes the gain follow
+        // every one of them (P65-5) — including a substitute replaced by its
+        // downloaded library, which already rebuilds.
+        calibration = nil
+        applyProducedMaster()
 
         if let program, carried.microseconds > 0 {
             let frame = RenderProgram.frame(forMicroseconds: carried.microseconds, sampleRate: rate)
@@ -486,6 +511,52 @@ public final class PlaybackEngine: @unchecked Sendable {
     public var masterGain: Float {
         get { program.map { synth_engine_master_gain($0.engine) } ?? 1 }
         set { program.map { synth_engine_set_master_gain($0.engine, newValue) } }
+    }
+
+    // MARK: The produced master (MST001)
+
+    /// Bus cohesion and loudness calibration, together, as one preset-stored
+    /// switch (D65-2 option A).
+    ///
+    /// **Setting this needs no re-realization and no program rebuild.** The
+    /// timeline does not change — only two numbers on the bus do — so the
+    /// change is audible on the next buffer with the playhead exactly where it
+    /// was, the way a mixer move is. Turning it on measures the program first if
+    /// it has not been measured yet; that is the one cost, it is bounded by
+    /// `MasterStage.maximumAnalyzedSeconds`, and it happens once per program.
+    public var producedMaster: ProducedMasterSettings {
+        get { producedMasterSetting }
+        set {
+            producedMasterSetting = newValue
+            applyProducedMaster()
+        }
+    }
+
+    /// What the analysis pass measured about the loaded program, or nil if it
+    /// has not run. `MasterCalibration.statusSentence` is what the owner is
+    /// told when it could not.
+    public var masterCalibration: MasterCalibration? { calibration }
+
+    /// Measure the program if the produced master is on and has not been
+    /// measured, then publish the setting and its figures to the render thread.
+    private func applyProducedMaster() {
+        guard let program else { return }
+
+        if producedMasterSetting.isEnabled, calibration == nil, let timeline {
+            calibration = MasterCalibration.calibrate(
+                timeline: timeline, voices: voices, sampleRate: program.sampleRate
+            )
+        }
+
+        synth_engine_set_produced_master(
+            program.engine, producedMasterSetting.isEnabled ? 1 : 0
+        )
+        // Unity when there is nothing measured: a program whose analysis never
+        // ran plays at the level it already had, never silence.
+        let measured = calibration ?? .unity(.silentProgram)
+        synth_engine_set_master_calibration(
+            program.engine, measured.gain, measured.cohesionThreshold
+        )
     }
 
     // MARK: Telemetry
@@ -794,26 +865,36 @@ public final class PlaybackEngine: @unchecked Sendable {
         _ timeline: PerformanceTimeline,
         sampleRate: Double = 48_000,
         voiceProvider: LineVoiceProvider = SynthPatchVoiceProvider(),
+        producedMaster: ProducedMasterSettings = .off,
         configure: (PlaybackEngine) -> Void = { _ in }
     ) throws -> RenderedAudio {
         try renderTimelineOffline(
             timeline,
             sampleRate: sampleRate,
             voices: .uniform(voiceProvider),
+            producedMaster: producedMaster,
             configure: configure
         )
     }
 
     /// The same, with each line through the sound `voices` names for it.
+    ///
+    /// `producedMaster` defaults to off for the reason the engine's own property
+    /// does: a render helper must produce what it was asked for. The always-on
+    /// ceiling is in the graph either way. Turning it on here is also what
+    /// `MasterCalibration` must *not* do — that is what keeps the analysis pass
+    /// from recursing into itself.
     public static func renderTimelineOffline(
         _ timeline: PerformanceTimeline,
         sampleRate: Double = 48_000,
         voices: LineVoiceAssignment,
+        producedMaster: ProducedMasterSettings = .off,
         configure: (PlaybackEngine) -> Void = { _ in }
     ) throws -> RenderedAudio {
         let engine = PlaybackEngine(voices: voices)
         try engine.setRenderMode(.offline(sampleRate: sampleRate))
         try engine.load(timeline: timeline)
+        engine.producedMaster = producedMaster
         configure(engine)
         engine.play()
         let frames = engine.program?.totalFrames ?? 0

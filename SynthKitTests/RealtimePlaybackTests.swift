@@ -224,8 +224,9 @@ final class RealtimePlaybackTests: XCTestCase {
         )
     }
 
-    /// REQ-007 (increment 001): the pinned reference piece, staged, plays
-    /// start to finish without an overload pause.
+    /// REQ-007 (increment 003): the pinned reference piece, with every feature
+    /// delivered so far on — register-aware staging, expression, and the produced
+    /// master — plays start to finish without an overload pause.
     ///
     /// Gated like the other full-length guardrails, plus the piece itself:
     /// SYNTH_REFERENCE_PIECE names the owner's imported MusicXML file (the
@@ -246,7 +247,14 @@ final class RealtimePlaybackTests: XCTestCase {
         let expectedSeconds = Double(timeline.totalMicroseconds) / 1_000_000
 
         let engine = PlaybackEngine()
+        // On before the program is built, so the guardrail pays the calibration
+        // pass where the owner pays it and then renders through the whole master
+        // stage — cohesion, the calibration gain and the ceiling — for the full
+        // length of the piece (MST001).
+        engine.producedMaster = .standard
+        let buildStarted = Date()
         try engine.load(timeline: timeline)
+        let buildElapsed = Date().timeIntervalSince(buildStarted)
         // Stage every line exactly as a fresh preset would (REQ-001's
         // derivation, register-aware since STG003), so the guardrail measures
         // the staged engine the owner actually gets.
@@ -275,16 +283,81 @@ final class RealtimePlaybackTests: XCTestCase {
         let reason = engine.pauseReason
         engine.stopEngine()
 
+        let calibration = engine.masterCalibration
         print("""
-            REQ-007 guardrail — staged reference piece
-              lines:            \(count)
-              timeline length:  \(String(format: "%.1f", expectedSeconds)) s
-              overload blocks:  \(statistics.overloadBlocks)
-              overload pauses:  \(statistics.overloadPauses)
+            REQ-007 guardrail — reference piece, staged + expression + produced master
+              lines:             \(count)
+              timeline length:   \(String(format: "%.1f", expectedSeconds)) s
+              overload blocks:   \(statistics.overloadBlocks)
+              overload pauses:   \(statistics.overloadPauses)
+              peak level:        \(String(format: "%.3f", statistics.peakLevel))
+              program build:     \(String(format: "%.3f", buildElapsed)) s (calibration included)
+              analysed:          \(calibration?.analyzedSeconds ?? 0) s
+              calibration gain:  \(String(format: "%+.2f", calibration?.appliedDecibels ?? 0)) dB
             """)
 
         XCTAssertEqual(reason, .reachedEnd, "Playback did not run to the end; it stopped for \(reason).")
         XCTAssertEqual(statistics.overloadPauses, 0, "REQ-007: the staged engine paused under load.")
+        XCTAssertLessThanOrEqual(
+            Double(statistics.peakLevel), Double(synth_master_ceiling()),
+            "REQ-005: live playback of the reference piece went above the ceiling."
+        )
+    }
+
+    /// The calibration cost bound (P65-5), measured on the pinned reference
+    /// piece: turning the produced master on must not add more than one second
+    /// to the time it takes to get from a realized timeline to a playable
+    /// program.
+    ///
+    /// Measured as the difference between two program builds of the same
+    /// timeline rather than as the absolute time of one, because the rest of a
+    /// build — eighteen voices, every event converted to frames — is a cost the
+    /// produced master did not introduce and is not being asked to carry.
+    ///
+    /// Gated on the reference piece rather than on the real-time guardrail: this
+    /// needs no output device, only the owner's file.
+    func testTheCalibrationCostOnTheReferencePieceStaysUnderASecond() throws {
+        guard let path = ProcessInfo.processInfo.environment["SYNTH_REFERENCE_PIECE"] else {
+            throw XCTSkip("Set SYNTH_REFERENCE_PIECE to the pinned reference piece's MusicXML file.")
+        }
+        let musicXML = try Data(contentsOf: URL(fileURLWithPath: path))
+        let score = try ScoreCompiler().compile(pieceID: "reference", musicXML: musicXML)
+        let timeline = PerformanceRealizer().realize(score, settings: .standard)
+
+        func build(_ producedMaster: ProducedMasterSettings) throws -> (Double, MasterCalibration?) {
+            let engine = PlaybackEngine()
+            try engine.setRenderMode(.offline(sampleRate: 48_000))
+            engine.producedMaster = producedMaster
+            let started = Date()
+            try engine.load(timeline: timeline)
+            return (Date().timeIntervalSince(started), engine.masterCalibration)
+        }
+
+        // Once each way round, discarding a first warm-up build, so the figure is
+        // the calibration rather than the first touch of a cold code path.
+        _ = try build(.off)
+        let (without, _) = try build(.off)
+        let (with, calibration) = try build(.standard)
+        let added = with - without
+
+        print("""
+            MST001 calibration cost — pinned reference piece
+              lines:            \(timeline.lines.count)
+              timeline length:  \(String(format: "%.1f", Double(timeline.totalMicroseconds) / 1e6)) s
+              build, master off: \(String(format: "%.3f", without)) s
+              build, master on:  \(String(format: "%.3f", with)) s
+              added:             \(String(format: "%.3f", added)) s
+              analysed:          \(calibration?.analyzedSeconds ?? 0) s
+              calibration gain:  \(String(format: "%+.2f", calibration?.appliedDecibels ?? 0)) dB
+              outcome:           \(String(describing: calibration?.outcome))
+            """)
+
+        XCTAssertEqual(calibration?.outcome, .calibrated, "the reference piece was not measured")
+        XCTAssertLessThanOrEqual(
+            added, 1.0,
+            "the produced master added \(String(format: "%.3f", added)) s to the reference "
+                + "piece's program build, over the one-second bound"
+        )
     }
 
     /// The same guardrail with D7's shared room carrying every line.

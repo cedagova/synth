@@ -110,6 +110,9 @@ final class AssignmentModel {
     /// The same for the preset's whole-piece phrase expression.
     var onExpressionLoaded: ((ExpressionSettings) -> Void)?
 
+    /// The active preset's produced master, as loaded (MST001, D65-3).
+    var onProducedMasterLoaded: ((ProducedMasterSettings) -> Void)?
+
     /// The same for the preset's whole-piece tempo.
     var onTempoLoaded: ((Int) -> Void)?
 
@@ -216,6 +219,7 @@ final class AssignmentModel {
             keepSelectionValid()
             onHumanizationLoaded?(preset.content.humanization)
             onExpressionLoaded?(preset.content.expression)
+            onProducedMasterLoaded?(preset.content.producedMaster)
             onTempoLoaded?(preset.content.tempoPercent)
 
             if applyingToEngine { applyToEngine(performance) }
@@ -806,6 +810,18 @@ final class AssignmentModel {
         }
     }
 
+    /// Stores the whole-piece produced master on the active preset, like any
+    /// other custom value the preset holds (REQ-024). Auto-saved.
+    func saveProducedMaster(_ settings: ProducedMasterSettings) {
+        guard let preset = activePreset, preset.content.producedMaster != settings else { return }
+        do {
+            activePreset = try store.presets.setProducedMaster(settings, in: preset)
+            presets = try store.presets.presets(forPieceID: preset.pieceID)
+        } catch {
+            alert = AssignmentAlert(title: "Could not save the produced master change", error)
+        }
+    }
+
     /// Stores the whole-piece humanization on the active preset, like any
     /// other custom value the preset holds (REQ-024). Auto-saved.
     func saveHumanization(_ settings: HumanizationSettings) {
@@ -1004,6 +1020,7 @@ final class AssignmentModel {
             keepSelectionValid()
             onHumanizationLoaded?(preset.content.humanization)
             onExpressionLoaded?(preset.content.expression)
+            onProducedMasterLoaded?(preset.content.producedMaster)
             onTempoLoaded?(preset.content.tempoPercent)
             applyToEngine(performance)
         } catch {

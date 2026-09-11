@@ -210,10 +210,21 @@ extension MasterCalibration {
     ///
     /// Renders through `PlaybackEngine.renderTimelineOffline` — the one render
     /// path, with the produced master off so this cannot recurse into itself.
+    /// - Parameter render: how an excerpt set becomes audio. Defaults to the one
+    ///   render path. It is a parameter only so that the failure branch below is
+    ///   reachable from a test: "an analysis that cannot run leaves the piece at
+    ///   unity and says so" is a promise about what happens when rendering
+    ///   throws, and a promise no test can reach is not one.
     public static func calibrate(
         timeline: PerformanceTimeline,
         voices: LineVoiceAssignment,
-        sampleRate: Double
+        sampleRate: Double,
+        render: (PerformanceTimeline, Double, LineVoiceAssignment) throws
+            -> PlaybackEngine.RenderedAudio = { timeline, rate, voices in
+                try PlaybackEngine.renderTimelineOffline(
+                    timeline, sampleRate: rate, voices: voices
+                )
+            }
     ) -> MasterCalibration {
         let excerpts = MasterStage.excerpts(in: timeline)
         guard !excerpts.isEmpty else { return .unity(.silentProgram) }
@@ -223,9 +234,7 @@ extension MasterCalibration {
 
         let audio: PlaybackEngine.RenderedAudio
         do {
-            audio = try PlaybackEngine.renderTimelineOffline(
-                analysisTimeline, sampleRate: sampleRate, voices: voices
-            )
+            audio = try render(analysisTimeline, sampleRate, voices)
         } catch {
             return .unity(.unavailable(reason: String(describing: error)), analyzedSeconds: 0)
         }

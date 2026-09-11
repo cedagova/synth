@@ -39,11 +39,13 @@ final class AudioExportTests: XCTestCase {
 
     private func request(
         _ timeline: PerformanceTimeline,
+        producedMaster: ProducedMasterSettings = .off,
         settings: AudioExportSettings = .cdQuality
     ) -> AudioExportRequest {
         AudioExportRequest(
             timeline: timeline,
             voices: .uniform(SynthPatchVoiceProvider()),
+            producedMaster: producedMaster,
             settings: settings
         )
     }
@@ -277,6 +279,80 @@ final class AudioExportTests: XCTestCase {
             XCTAssertEqual(
                 exported.suffix(from: writer.header().count), expected,
                 "The \(label) export does not match live playback of the \(label) state."
+            )
+        }
+    }
+
+    // MARK: The produced master (REQ-005 carried into the export)
+
+    /// The produced master off and on produce correspondingly raw and levelled
+    /// files, and each matches live playback of *that* state.
+    ///
+    /// The second assertion is the one that matters, and it matters more here
+    /// than for any other setting on the bus: the calibration gain is *measured*
+    /// rather than stored, so an export that measured the program differently
+    /// from live playback would break REQ-026 while looking plausible. Byte
+    /// equality against an offline render of the same state is what says the two
+    /// measurements agree.
+    func testTheProducedMasterOffAndOnExportDifferentlyAndEachMatchesItsOwnLivePath() throws {
+        let timeline = try AudioRenderFixtures.timeline(
+            MusicXMLScoreFixtures.melodyOverAccompaniment()
+        )
+        let settings = AudioExportSettings.cdQuality
+        let offURL = destination("master-off.wav")
+        let onURL = destination("master-on.wav")
+        try AudioExporter(
+            request: request(timeline, producedMaster: .off, settings: settings)
+        ).run(to: offURL)
+        try AudioExporter(
+            request: request(timeline, producedMaster: .standard, settings: settings)
+        ).run(to: onURL)
+
+        XCTAssertNotEqual(
+            try Data(contentsOf: offURL), try Data(contentsOf: onURL),
+            "The produced master off and on exported to identical files."
+        )
+
+        for (url, produced, label) in [
+            (offURL, ProducedMasterSettings.off, "master off"),
+            (onURL, ProducedMasterSettings.standard, "master on")
+        ] {
+            let live = try PlaybackEngine.renderTimelineOffline(
+                timeline, sampleRate: settings.sampleRate.hertz, producedMaster: produced
+            )
+            let writer = AudioFileWriter(settings: settings, frameCount: Int64(live.frameCount))
+            let expected = writer.encode(left: live.left[...], right: live.right[...])
+            let exported = try Data(contentsOf: url)
+            XCTAssertEqual(
+                exported.suffix(from: writer.header().count), expected,
+                "The \(label) export does not match live playback of the \(label) state."
+            )
+        }
+    }
+
+    /// And a resolved preset carries the owner's setting into the request, so the
+    /// export is not quietly neutral while playback is levelled.
+    func testAnExportRequestBuiltFromAPresetCarriesItsProducedMaster() throws {
+        let timeline = try AudioRenderFixtures.timeline(
+            MusicXMLScoreFixtures.melodyOverAccompaniment()
+        )
+        for stored in [ProducedMasterSettings.standard, .off] {
+            let preset = Preset(
+                id: "p1",
+                pieceID: "piece",
+                name: "Default",
+                isActive: true,
+                documentVersion: PresetContent.currentVersion,
+                revision: 1,
+                createdAt: "2026-01-01T00:00:00Z",
+                updatedAt: "2026-01-01T00:00:00Z",
+                content: PresetContent(lines: [], producedMaster: stored)
+            )
+            let performance = PresetPerformance(preset: preset, lines: [])
+            let built = performance.exportRequest(timeline: timeline, settings: .cdQuality)
+            XCTAssertEqual(
+                built.producedMaster, stored,
+                "the export request dropped the preset's produced master"
             )
         }
     }

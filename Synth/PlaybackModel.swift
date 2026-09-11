@@ -952,6 +952,11 @@ final class PlaybackModel {
         await apply(ProducedMasterSettings(isEnabled: isEnabled))
     }
 
+    /// What the engine measured about the loaded program, or nil if it has not
+    /// been measured. Read by the status message and by the wiring tests; the
+    /// group's row itself needs only the switch.
+    var masterCalibration: MasterCalibration? { engine.masterCalibration }
+
     /// A loaded or switched preset brought its own produced master: play under
     /// it, but do not write it back — it is already what the preset stores.
     func adoptPresetProducedMaster(_ settings: ProducedMasterSettings) async {

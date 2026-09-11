@@ -325,6 +325,81 @@ final class PerformanceSettingsWiringTests: XCTestCase {
         )
     }
 
+    // MARK: The produced master (REQ-005, MST001)
+
+    /// A fresh piece opens with the produced master on and the engine levelling
+    /// it — the other half of D65-3 reaching the ear.
+    func testAPieceOpensWithTheProducedMasterOnAndTheProgramMeasured() async throws {
+        let playback = try await openPreparedPiece()
+
+        XCTAssertEqual(playback.producedMaster, .standard)
+        XCTAssertEqual(
+            playback.assignment.activePreset?.content.producedMaster, .standard,
+            "the piece's first preset should store the setting it is playing under"
+        )
+        let calibration = try XCTUnwrap(
+            playback.masterCalibration,
+            "the engine never measured the program, so nothing is being levelled"
+        )
+        XCTAssertEqual(calibration.outcome, .calibrated)
+        XCTAssertNotEqual(calibration.gain, 1, "the measurement produced no gain at all")
+    }
+
+    /// Toggling the row applies the change, saves it, and announces it — and does
+    /// it *without* re-realizing the piece, which is the one way this row
+    /// deliberately differs from the three above it.
+    func testTogglingTheProducedMasterSavesAndAnnouncesWithoutReRealizing() async throws {
+        let playback = try await openPreparedPiece()
+        let timeline = try XCTUnwrap(playback.timeline)
+        let revision = try XCTUnwrap(playback.assignment.activePreset?.revision)
+
+        await playback.setProducedMasterEnabled(false)
+
+        XCTAssertFalse(playback.producedMaster.isEnabled)
+        XCTAssertEqual(
+            playback.assignment.activePreset?.content.producedMaster, .off,
+            "the change was not saved to the preset"
+        )
+        XCTAssertGreaterThan(
+            try XCTUnwrap(playback.assignment.activePreset?.revision), revision,
+            "a save that did not bump the revision did not happen"
+        )
+        let after = try XCTUnwrap(playback.timeline)
+        XCTAssertEqual(
+            try after.canonicalData(), try timeline.canonicalData(),
+            "the produced master re-realized the timeline; it changes the bus, not the notes"
+        )
+        XCTAssertEqual(
+            playback.statusMessage,
+            PlaybackModel.producedMasterMessage(.off, calibration: playback.masterCalibration),
+            "the change has to be announced, or the group is unusable without seeing it"
+        )
+
+        await playback.setProducedMasterEnabled(true)
+        XCTAssertTrue(playback.producedMaster.isEnabled)
+        XCTAssertEqual(playback.assignment.activePreset?.content.producedMaster, .standard)
+    }
+
+    /// A preset that stores the produced master off opens with it off.
+    func testAStoredProducedMasterIsWhatThePieceOpensUnder() async throws {
+        let playback = try await openPreparedPiece()
+        let store = try XCTUnwrap(model.store)
+        let preset = try XCTUnwrap(playback.assignment.activePreset)
+        try store.presets.setProducedMaster(.off, in: preset)
+
+        model.closePlayback()
+        model.openPlayback(for: playback.piece)
+        let reopened = try XCTUnwrap(model.playback)
+        await reopened.prepare()
+
+        XCTAssertEqual(reopened.producedMaster, .off)
+        XCTAssertNil(
+            reopened.masterCalibration,
+            "the piece opened with the produced master off, so it should not have paid for a "
+                + "measurement at all"
+        )
+    }
+
     /// The adoption runs in a task off the closure, so it is awaited rather than
     /// assumed.
     private func waitForExpression(

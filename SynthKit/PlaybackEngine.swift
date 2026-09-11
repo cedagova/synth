@@ -82,6 +82,16 @@ public final class PlaybackEngine: @unchecked Sendable {
     /// itself.
     private var producedMasterSetting: ProducedMasterSettings = .off
 
+    /// The temperament and reference pitch the program is built with (TUN001,
+    /// REQ-006).
+    ///
+    /// **The identity until something asks otherwise, and here that *is* the
+    /// product default**, unlike the produced master above. REQ-006 requires the
+    /// default tuning to be indistinguishable from what the app did before this
+    /// existed, so "the engine does what it was asked for" and "the product's
+    /// default" are the same value and there is nothing to reconcile.
+    private var tuningSetting: TuningSettings = .standard
+
     /// This program's measured calibration, or nil until it has been measured.
     /// Dropped on every program rebuild, so the gain follows the piece, the
     /// preset, the settings and the resolved voices (P65-5).
@@ -170,6 +180,49 @@ public final class PlaybackEngine: @unchecked Sendable {
         avEngine.stop()
 
         voices = newVoices
+        try rebuildProgramAndGraph()
+
+        if wasRunning, case .realtime = mode {
+            try startAVEngine()
+        }
+    }
+
+    // MARK: Tuning (TUN001, REQ-006)
+
+    /// The temperament and reference pitch every voice is rendering at.
+    public var tuning: TuningSettings { tuningSetting }
+
+    /// Change the temperament or the reference pitch (REQ-006).
+    ///
+    /// **Throwing, and a program rebuild, because tuning is not a bus control.**
+    /// The produced master moves two numbers on the summed output and therefore
+    /// lands on the next buffer with the playhead untouched; a temperament decides
+    /// the frequency a voice derives when a note starts, and a voice reads it when
+    /// it is built. So this takes the `setVoices` path exactly — stop the graph,
+    /// rebuild, restart — and for the same reason: stopping the AVAudioEngine is
+    /// the synchronisation edge that publishes non-scalar state to the render
+    /// thread.
+    ///
+    /// **The playhead and the whole mix are carried across** by
+    /// `rebuildProgramAndGraph`, so changing tuning mid-piece resumes where it was
+    /// with every strip where the owner put it.
+    ///
+    /// **It also pays for a fresh loudness calibration**, when the produced master
+    /// is on: a rebuild drops the measurement so the gain follows the program
+    /// (P65-5), and on the pinned reference piece that measurement is about
+    /// 0.36 s on the calling actor. That is by design rather than an oversight —
+    /// a tempo nudge, an expression change and a preset switch already pay it, and
+    /// a tuning change is a rarer act than any of them — but it is real, and it is
+    /// why this is not a control anybody drags.
+    ///
+    /// A value that is already in force does nothing at all, so an adopted preset
+    /// setting that matches costs no rebuild.
+    public func setTuning(_ newTuning: TuningSettings) throws {
+        guard newTuning != tuningSetting else { return }
+        let wasRunning = avEngine.isRunning
+        avEngine.stop()
+
+        tuningSetting = newTuning
         try rebuildProgramAndGraph()
 
         if wasRunning, case .realtime = mode {
@@ -285,7 +338,8 @@ public final class PlaybackEngine: @unchecked Sendable {
             program = try RenderProgram(
                 timeline: timeline,
                 sampleRate: rate,
-                voices: voices
+                voices: voices,
+                tuning: tuningSetting
             )
         } else {
             program = nil
@@ -866,6 +920,7 @@ public final class PlaybackEngine: @unchecked Sendable {
         sampleRate: Double = 48_000,
         voiceProvider: LineVoiceProvider = SynthPatchVoiceProvider(),
         producedMaster: ProducedMasterSettings = .off,
+        tuning: TuningSettings = .standard,
         configure: (PlaybackEngine) -> Void = { _ in }
     ) throws -> RenderedAudio {
         try renderTimelineOffline(
@@ -873,6 +928,7 @@ public final class PlaybackEngine: @unchecked Sendable {
             sampleRate: sampleRate,
             voices: .uniform(voiceProvider),
             producedMaster: producedMaster,
+            tuning: tuning,
             configure: configure
         )
     }
@@ -889,10 +945,16 @@ public final class PlaybackEngine: @unchecked Sendable {
         sampleRate: Double = 48_000,
         voices: LineVoiceAssignment,
         producedMaster: ProducedMasterSettings = .off,
+        tuning: TuningSettings = .standard,
         configure: (PlaybackEngine) -> Void = { _ in }
     ) throws -> RenderedAudio {
         let engine = PlaybackEngine(voices: voices)
         try engine.setRenderMode(.offline(sampleRate: sampleRate))
+        // Before `load`, so the program is built tuned rather than built and then
+        // rebuilt. `tuning` defaults to the identity for the reason
+        // `producedMaster` defaults to off: a render helper produces what it was
+        // asked for.
+        try engine.setTuning(tuning)
         try engine.load(timeline: timeline)
         engine.producedMaster = producedMaster
         configure(engine)

@@ -488,6 +488,17 @@ public final class PresetLibrary: @unchecked Sendable, PieceDependentStore, Soun
         }
     }
 
+    /// Replaces the preset's whole-piece tuning (REQ-006): temperament and
+    /// reference pitch. Auto-saved, like humanization.
+    @discardableResult
+    public func setTuning(_ tuning: TuningSettings, in preset: Preset) throws -> Preset {
+        try write(preset) { current in
+            var content = current.content
+            content.tuning = tuning
+            return (name: current.name, isActive: current.isActive, content: content)
+        }
+    }
+
     /// Replaces the whole-piece tempo. Auto-saved, like humanization.
     @discardableResult
     public func setTempoPercent(_ percent: Int, in preset: Preset) throws -> Preset {

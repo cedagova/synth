@@ -35,10 +35,11 @@ final class SynthVoiceHarness {
     /// Publishing here is what a knob move does.
     let live: SynthPatchLiveVoices?
 
-    init(patch: SynthPatch, sampleRate: Double = 48_000) {
+    init(patch: SynthPatch, sampleRate: Double = 48_000, tuning: TuningSettings = .standard) {
         self.sampleRate = sampleRate
         self.live = nil
-        self.instance = SynthPatchVoiceProvider(patch: patch).makeVoice(sampleRate: sampleRate)
+        self.instance = SynthPatchVoiceProvider(patch: patch)
+            .makeVoice(sampleRate: sampleRate, tuning: tuning)
         self.vtable = instance.vtable
         vtable.prepare(vtable.state, sampleRate)
         vtable.reset(vtable.state)

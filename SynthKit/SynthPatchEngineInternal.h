@@ -404,6 +404,24 @@ struct SynthPatchVoiceState {
     SynthPatchConfig config;
     double  sampleRate;
 
+    /*
+     The program's tuning (TUN001, REQ-006).
+
+     Deliberately *not* part of `SynthPatchConfig`. A config is the sound — a
+     patch, which the library stores and the owner edits — and a temperament is a
+     property of the performance every sound in the piece shares. Folding it into
+     the patch would mean a preset's tuning choice was stored twelve times over,
+     once per assigned sound, and a sound edited in the studio would carry one
+     piece's temperament into another.
+
+     Written once on the control thread by `synth_patch_voice_set_tuning`, before
+     the voice is handed to the engine, and read at note-on. Not atomic for that
+     reason: the edge that publishes the program publishes this with it. A
+     tuning change rebuilds the program, which is the same edge a sound change
+     already uses.
+    */
+    SynthTuningTable tuning;
+
     int32_t sustainPedalDown;
     int64_t ageCounter;
     int64_t noteCounter;

@@ -6,19 +6,24 @@ import XCTest
 /// off, what comes out is written notation plus uniform humanization and nothing
 /// else — the raw sum of the lines, with nothing applied to it (D65-2).
 ///
-/// This is increment 002's acceptance line for the recipe, so it composes every
-/// term the plan has delivered so far rather than re-proving one of them:
+/// **The recipe is now complete**: increment 004 is the last, so every one of
+/// REQ-004's four terms is a real setting with a real off state, and this file
+/// composes all four rather than re-proving one of them:
 ///
 /// - **expression off** — EXP001's phrase term, and EXP002's balance with it;
 /// - **staging neutral** — STG003's term, register-aware seating flattened;
-/// - **tuning at default** — TUN001 has not landed, so equal temperament at
-///   A=440 is what both voice engines do and there is nothing to switch off; and
+/// - **tuning at default** — TUN001's temperament and reference pitch at equal
+///   and A=440, which resolves to twelve ratios of *exactly* 1.0 and is
+///   therefore the identity rather than a small setting; and
 /// - **produced master off** — MST001's switch, off: no bus cohesion and a
 ///   calibration gain of exactly one.
 ///
-/// The tuning term is still trivially true. It is asserted as such rather than
-/// assumed, so the day it stops being trivial this test fails instead of quietly
-/// narrowing.
+/// The tuning term was trivially true while TUN001 was unlanded, and the header
+/// said so. It is a term now: `testTheComposedBypassRendersTheRawLineSum` reads
+/// the program's own tuning back and asserts each of its twelve ratios is the
+/// 1.0 bit pattern, and `testANonDefaultTuningChangesTheRender` is its
+/// discrimination guard — the same notes in Werckmeister III at A=415 render
+/// differently, so switching tuning *off* is switching something off.
 ///
 /// **What the produced master off does *not* switch off is the true-peak
 /// ceiling**, which is always in the graph (owner decision D65-2, AD-P6). That
@@ -121,6 +126,28 @@ final class BypassRecipeRenderTests: XCTestCase {
             "the produced master is off but cohesion is armed"
         )
 
+        // And the tuning term (TUN001), read off the program the render used
+        // rather than assumed: equal temperament at A=440, resolved to twelve
+        // ratios that are the 1.0 bit pattern. The bit pattern and not merely a
+        // value near one, because that is what makes the multiply in each engine
+        // the identity — so "tuning at default" takes nothing away from the raw
+        // line sum the recipe is stated against.
+        let program = try XCTUnwrap(probe.loadedProgram)
+        XCTAssertEqual(
+            probe.tuning, .standard, "the recipe renders at the default tuning"
+        )
+        XCTAssertTrue(
+            program.tuning.isDefault,
+            "the program was built with \(program.tuning) rather than the default tuning"
+        )
+        for (pitchClass, ratio) in program.tuning.ratiosByPitchClass.enumerated() {
+            XCTAssertEqual(
+                ratio.bitPattern, (1.0 as Double).bitPattern,
+                "the default tuning's ratio for pitch class \(pitchClass) is \(ratio) rather "
+                    + "than exactly 1.0, so it is a setting rather than a bypass"
+            )
+        }
+
         let deviation = try largestDeviationFromTheLineSum(timeline, lineCount: lineCount)
         XCTAssertLessThanOrEqual(
             deviation.largest, 4 * deviation.peak.ulp,
@@ -214,6 +241,82 @@ final class BypassRecipeRenderTests: XCTestCase {
             plain.canonicalData(), staged.canonicalData(),
             "staging leaves no trace in the render, so flattening it proves nothing"
         )
+
+        // Tuning on: a temperament and a reference pitch that are not the default.
+        let retuned = try render(
+            bypassed, lineCount: lineCount,
+            tuning: TuningSettings(temperament: .werckmeisterIII, referencePitch: .a415)
+        )
+        XCTAssertNotEqual(
+            plain.canonicalData(), retuned.canonicalData(),
+            "a non-default tuning leaves no trace in the render, so the recipe's tuning term "
+                + "is a name for nothing"
+        )
+    }
+
+    /// The tuning term's own discrimination guard, stated on its own rather than
+    /// only inside the composed vacuity check: each of the two pickers moves the
+    /// render by itself, so neither is carried by the other.
+    ///
+    /// **Why this is the interesting half of "tuning at default".** The recipe above
+    /// asserts the default is the identity; that is a statement about twelve ratios
+    /// being 1.0, and it would be equally true of an engine that threw the table
+    /// away. What says the bypass is a bypass *of something* is that turning the
+    /// setting away from its default changes the audio — and that each control does
+    /// so alone.
+    func testANonDefaultTuningChangesTheRender() throws {
+        let score = try compile(MusicXMLScoreFixtures.expressiveKeyboardPiece())
+        let timeline = PerformanceRealizer().realize(
+            score, settings: .humanizedWithoutExpression
+        )
+        let lineCount = timeline.lines.count
+        let plain = try render(timeline, lineCount: lineCount)
+        XCTAssertGreaterThan(plain.rms(), 0.001, "the render is silent, so this proves nothing")
+
+        let temperamentOnly = try render(
+            timeline, lineCount: lineCount,
+            tuning: TuningSettings(temperament: .werckmeisterIII)
+        )
+        XCTAssertNotEqual(
+            plain.canonicalData(), temperamentOnly.canonicalData(),
+            "Werckmeister III at A=440 renders the same audio as equal temperament"
+        )
+
+        let referenceOnly = try render(
+            timeline, lineCount: lineCount,
+            tuning: TuningSettings(referencePitch: .a415)
+        )
+        XCTAssertNotEqual(
+            plain.canonicalData(), referenceOnly.canonicalData(),
+            "A=415 renders the same audio as A=440"
+        )
+        XCTAssertNotEqual(
+            temperamentOnly.canonicalData(), referenceOnly.canonicalData(),
+            "the two pickers produce the same render, so one of them is being ignored"
+        )
+    }
+
+    /// And the tuning term composes with the other three rather than merely
+    /// coexisting with them: the default tuning on top of the full bypass leaves the
+    /// render byte-identical to the one that never mentioned tuning.
+    ///
+    /// The `testFlattenedStagingLeavesNoResidueOnTopOfTheExpressionBypass`
+    /// construction, for this leaf's term.
+    func testTheDefaultTuningLeavesNoResidueOnTopOfTheWholeBypass() throws {
+        let score = try compile(MusicXMLScoreFixtures.melodyOverAccompaniment())
+        let timeline = PerformanceRealizer().realize(
+            score, settings: .humanizedWithoutExpression
+        )
+        let lineCount = timeline.lines.count
+
+        let neverTuned = try render(timeline, lineCount: lineCount)
+        let explicitlyDefault = try render(
+            timeline, lineCount: lineCount, tuning: .standard
+        )
+        XCTAssertEqual(
+            neverTuned.canonicalData(), explicitlyDefault.canonicalData(),
+            "default must be an honest bypass: the tuning path left residue in the render"
+        )
     }
 
     /// And the term this leaf composes with, isolated and bit-exact: flattening
@@ -305,10 +408,12 @@ final class BypassRecipeRenderTests: XCTestCase {
         onlyLineAt audible: Int? = nil,
         masterGain: Float = 1,
         producedMaster: ProducedMasterSettings = .off,
+        tuning: TuningSettings = .standard,
         staged score: CompiledScore? = nil
     ) throws -> PlaybackEngine.RenderedAudio {
         try PlaybackEngine.renderTimelineOffline(
-            timeline, sampleRate: Self.sampleRate, producedMaster: producedMaster
+            timeline, sampleRate: Self.sampleRate,
+            producedMaster: producedMaster, tuning: tuning
         ) { engine in
             self.flattenStaging(engine, lineCount: lineCount)
             engine.masterGain = masterGain

@@ -811,6 +811,12 @@ void synth_patch_voice_init(SynthPatchVoiceState *state,
     }
     synth_patch_config_sanitize(&state->config);
 
+    /* Equal temperament at A=440 — twelve ratios of exactly 1.0 — so a caller
+       that says nothing about tuning renders what this engine rendered before
+       TUN001 existed, bit for bit. Set before anything can sound, because the
+       storage arrives zeroed and a zero ratio would be a silent note. */
+    synth_tuning_table_default(&state->tuning);
+
     state->ageCounter = 0;
     state->noteCounter = 0;
     state->sustainPedalDown = 0;
@@ -837,4 +843,27 @@ void synth_patch_voice_init(SynthPatchVoiceState *state,
     outVoice->setSustainPedal = synth_patch_voice_set_pedal;
     outVoice->render          = synth_patch_voice_render;
     outVoice->reset           = synth_patch_voice_reset;
+}
+
+#pragma mark - Tuning (TUN001, REQ-006)
+
+void synth_patch_voice_set_tuning(SynthPatchVoiceState *state,
+                                  const SynthTuningTable *table) {
+    if (state == NULL) { return; }
+    if (table == NULL) {
+        synth_tuning_table_default(&state->tuning);
+        return;
+    }
+    state->tuning = *table;
+    /* Sanitised on the way in, once, rather than checked at every note-on: the
+       render thread's share of tuning is a single multiply by a number that is
+       already known finite and already known to be a real interval. */
+    synth_tuning_table_sanitize(&state->tuning);
+}
+
+SynthTuningTable synth_patch_voice_tuning(const SynthPatchVoiceState *state) {
+    SynthTuningTable table;
+    synth_tuning_table_default(&table);
+    if (state == NULL) { return table; }
+    return state->tuning;
 }

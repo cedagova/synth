@@ -106,6 +106,26 @@ int64_t sample_voice_customization_adoptions(const SampleVoiceState *state) {
     return atomic_load_explicit(&state->customizationAdoptions, memory_order_relaxed);
 }
 
+void sample_voice_set_tuning(SampleVoiceState *state, const SynthTuningTable *table) {
+    if (state == NULL) { return; }
+    if (table == NULL) {
+        synth_tuning_table_default(&state->tuning);
+        return;
+    }
+    state->tuning = *table;
+    /* Sanitised once, on the way in, rather than checked at every note-on: what
+       the render thread pays for tuning is one multiply by a number already
+       known finite and already known to be a real interval. */
+    synth_tuning_table_sanitize(&state->tuning);
+}
+
+SynthTuningTable sample_voice_tuning(const SampleVoiceState *state) {
+    SynthTuningTable table;
+    synth_tuning_table_default(&table);
+    if (state == NULL) { return table; }
+    return state->tuning;
+}
+
 SampleVoiceState *sample_voice_create(const SampleInstrumentData *instrument,
                                       SynthLineVoice *outVoice,
                                       double sampleRate,
@@ -139,6 +159,12 @@ SampleVoiceState *sample_voice_create(const SampleInstrumentData *instrument,
     const SampleVoiceCustomization neutral = sample_voice_customization_neutral();
     sample_voice_set_customization(state, &neutral);
     atomic_store_explicit(&state->customizationAdoptions, 0, memory_order_relaxed);
+
+    /* Equal temperament at A=440 — twelve ratios of exactly 1.0 — so a voice
+       nobody tells about tuning plays a note at the rate INS002's sampler played
+       it at, bit for bit. `calloc` zeroed this block, and a zero ratio would be
+       a note that never advances through its sample. */
+    synth_tuning_table_default(&state->tuning);
 
     /* Clears every slot, seats the default keyswitch and rewinds the seeded
        sequence, so a freshly built voice and a reset one are the same voice. */

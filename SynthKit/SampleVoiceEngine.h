@@ -367,6 +367,36 @@ SampleVoiceCustomization sample_voice_customization(const SampleVoiceState *stat
 /// actually sounding rather than assume it.
 int64_t sample_voice_customization_adoptions(const SampleVoiceState *state);
 
+/*
+ Seat the program's tuning on this voice (TUN001, REQ-006).
+
+ **Control thread, before the voice is handed to the engine**, and — unlike
+ `sample_voice_set_customization` — *not* safe while rendering. That costs
+ nothing, because these are different kinds of value. A customization is an edit
+ the owner makes while listening, so it crosses atomically per field; a
+ temperament is chosen for the piece, and changing it rebuilds the render
+ program, which is the publication edge a sound change already uses.
+
+ What arrives here is already a table of ratios rather than cents: the control
+ thread converts (`TuningSettings.renderTable`), exactly as it does for the
+ customization's tuning offset, so note-on pays one multiply and no `pow`.
+
+ **It composes with the customization's tuning offset and does not replace it**
+ (P65-4). This table scales a slot's playback rate when the note starts; the
+ offset scales that rate again every block, which is what keeps the offset
+ audible on a note already sounding. Neither bounds the other.
+
+ The table is sanitised here, so a hand-edited document cannot reach the rate
+ with a NaN. Passing NULL restores equal temperament at A=440, which is also
+ what `sample_voice_create` installs — so an instrument nobody has told anything
+ about plays exactly as INS002's sampler played it.
+ */
+void sample_voice_set_tuning(SampleVoiceState *state, const SynthTuningTable *table);
+
+/// The tuning this voice is currently applying. Control thread; for a caller
+/// that needs to prove a setting reached the engine rather than assume it.
+SynthTuningTable sample_voice_tuning(const SampleVoiceState *state);
+
 #pragma mark - Telemetry (render thread writes, control thread reads)
 
 /*

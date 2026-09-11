@@ -365,6 +365,37 @@ enum SFZFixtures {
         )
     }
 
+    /// An unpitched instrument whose sample nevertheless has a readable pitch:
+    /// `pitch_keytrack=0` over a sine, spanning a range of keys.
+    ///
+    /// **The fixture that makes a tuning exemption measurable** (TUN001,
+    /// REQ-006). `oneShotInstrument` is unpitched too, but its sample is a
+    /// constant — and a constant resampled at any rate is the same constant, so
+    /// "this instrument was not retuned" would be unfalsifiable over it. A sine
+    /// pinned to 440 Hz whatever key is played says exactly what happened: the
+    /// frequency is 440 if the instrument was left alone and something else if it
+    /// was not.
+    static func unpitchedToneInstrument(in root: URL, sampleRate: Double = 44_100) throws
+        -> AvailableInstrument {
+        try writeWave(
+            sine(hertz: 440, seconds: 1.0, sampleRate: sampleRate),
+            to: root.appending(path: "samples/pinned440.wav"),
+            sampleRate: sampleRate
+        )
+        return try writeInstrument(
+            """
+            <control>
+            default_path=samples\\
+
+            <group>
+            ampeg_attack=0 ampeg_release=0.01 amp_veltrack=0 pitch_keytrack=0
+            <region> sample=pinned440.wav lokey=48 hikey=96 pitch_keycenter=69
+            """,
+            named: "unpitched-tone.sfz", in: root, instrumentName: "Unpitched Tone",
+            family: .percussion
+        )
+    }
+
     /// A pitched instrument with two velocity layers and a long sustaining
     /// sine, for the render tests that need both a measurable pitch and a
     /// dynamics response to reshape.

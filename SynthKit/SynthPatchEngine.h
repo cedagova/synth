@@ -395,6 +395,24 @@ void synth_patch_voice_init(SynthPatchVoiceState *state,
 /// from rendering.
 void synth_patch_prepare_tables(void);
 
+/// Seat the program's tuning on this voice (TUN001, REQ-006).
+///
+/// **Control thread, before the voice is handed to the engine**, and not safe
+/// while `render` is running — which costs nothing, because a tuning change is a
+/// program rebuild. It is a property of the performance rather than of the patch
+/// (see `SynthPatchVoiceState.tuning`), so it arrives here rather than inside
+/// `SynthPatchConfig`, and a voice that is never told anything stays at equal
+/// temperament and A=440 — `synth_patch_voice_init` installs that default.
+///
+/// `table` is sanitised here, so a hand-edited document cannot reach the
+/// frequency derivation with a NaN. Passing NULL restores the default.
+void synth_patch_voice_set_tuning(SynthPatchVoiceState *state,
+                                  const SynthTuningTable *table);
+
+/// The tuning this voice is currently applying. For a caller — or a test — that
+/// needs to prove a setting reached the engine rather than assume it.
+SynthTuningTable synth_patch_voice_tuning(const SynthPatchVoiceState *state);
+
 #pragma mark - Live editing (control thread, safe while rendering)
 
 /*

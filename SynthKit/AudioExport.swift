@@ -108,6 +108,10 @@ public struct AudioExporter: Sendable {
 
         let engine = PlaybackEngine(voices: request.voices)
         try engine.setRenderMode(.offline(sampleRate: request.settings.sampleRate.hertz))
+        // Before `load`: tuning is built into the voices, so a program loaded first
+        // would have to be thrown away and rebuilt. The rest of the bus goes on
+        // after, in `applyMixer`, because it addresses the loaded program's lines.
+        try engine.setTuning(request.tuning)
         try engine.load(timeline: request.timeline)
 
         guard let program = engine.loadedProgram else {
@@ -241,6 +245,21 @@ public struct AudioExportRequest: Sendable {
     /// setting here, so the file and live playback agree about it.
     public let producedMaster: ProducedMasterSettings
 
+    /// The preset's temperament and reference pitch (REQ-006).
+    ///
+    /// **Not applied by `applyMixer` with the rest of the bus, and it cannot be.**
+    /// Tuning is baked into a voice when the voice is built, so it has to reach the
+    /// engine before the program is loaded rather than after — which is exactly
+    /// what makes an export and live playback the same render under AD-P2: both
+    /// build a program from a tuning, and neither can build one without saying what
+    /// it is.
+    ///
+    /// The identity by default, for the reason `producedMaster` is neutral by
+    /// default: a request says what it asks for, and
+    /// `PresetPerformance.exportRequest` is what carries the owner's actual
+    /// setting here.
+    public let tuning: TuningSettings
+
     public let settings: AudioExportSettings
 
     public init(
@@ -249,6 +268,7 @@ public struct AudioExportRequest: Sendable {
         mixer: [ScoreLineID: LineMixerState] = [:],
         masterGain: Float = 1,
         producedMaster: ProducedMasterSettings = .off,
+        tuning: TuningSettings = .standard,
         settings: AudioExportSettings = .standard
     ) {
         self.timeline = timeline
@@ -256,6 +276,7 @@ public struct AudioExportRequest: Sendable {
         self.mixer = mixer
         self.masterGain = masterGain
         self.producedMaster = producedMaster
+        self.tuning = tuning
         self.settings = settings
     }
 
@@ -315,6 +336,7 @@ extension PresetPerformance {
             ),
             masterGain: 1,
             producedMaster: preset.content.producedMaster,
+            tuning: preset.content.tuning,
             settings: settings
         )
     }

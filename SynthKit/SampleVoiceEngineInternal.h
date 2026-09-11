@@ -143,6 +143,25 @@ struct SampleVoiceState {
     _Atomic float customTuningRatio;
     _Atomic int64_t customizationAdoptions;
 
+    /*
+     The program's tuning (TUN001, REQ-006), and deliberately *not* one of the
+     atomics above.
+
+     The customization is an edit the owner makes while the music plays, so every
+     field of it crosses to the render thread at a block boundary. Tuning is
+     program state: it is chosen once for the piece and a change to it rebuilds
+     the program, which is the same publication edge a sound change uses. So it
+     is a plain struct written before the voice is handed to the engine, and the
+     render thread only ever reads it.
+
+     It composes with `customTuningRatio` rather than replacing it (P65-4). This
+     table is folded into a slot's rate at note-on; the customization multiplies
+     that rate again in `render`, per block, which is what keeps a tuning-offset
+     edit audible on a note already sounding. Neither clamps the other: the
+     offset keeps its own ±100-cent bound and this keeps its own.
+    */
+    SynthTuningTable tuning;
+
     _Atomic int64_t stolenSlots;
     _Atomic int64_t unmappedNotes;
     _Atomic int32_t peakSlots;

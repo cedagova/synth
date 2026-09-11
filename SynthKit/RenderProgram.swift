@@ -28,6 +28,19 @@ public final class RenderProgram: @unchecked Sendable {
     public let lineIDs: [ScoreLineID]
     public let lineNames: [String]
 
+    /// The temperament and reference pitch every voice in this program was built
+    /// with (TUN001, REQ-006).
+    ///
+    /// **Program state, not engine state, and the distinction is the design.** The
+    /// produced master is two numbers on the summed bus, so it can change under a
+    /// playing program; tuning decides the frequency a voice derives at note-on,
+    /// so it is baked into the voice when the voice is built. A tuning change is
+    /// therefore a program rebuild — exactly as a sound change is — which is also
+    /// what keeps live playback and an offline export literally the same code
+    /// under AD-P2: both build a program, and a program cannot be built without
+    /// saying what it is tuned to.
+    public let tuning: TuningSettings
+
     private let voices: [LineVoiceInstance]
     private var isDestroyed = false
 
@@ -94,20 +107,30 @@ public final class RenderProgram: @unchecked Sendable {
     public convenience init(
         timeline: PerformanceTimeline,
         sampleRate: Double,
-        voiceProvider: LineVoiceProvider = SynthPatchVoiceProvider()
+        voiceProvider: LineVoiceProvider = SynthPatchVoiceProvider(),
+        tuning: TuningSettings = .standard
     ) throws {
         try self.init(
-            timeline: timeline, sampleRate: sampleRate, voices: .uniform(voiceProvider)
+            timeline: timeline,
+            sampleRate: sampleRate,
+            voices: .uniform(voiceProvider),
+            tuning: tuning
         )
     }
 
     /// Each line through the sound `voices` names for it (REQ-006).
+    ///
+    /// `tuning` defaults to the identity, which is what it was before TUN001: a
+    /// caller with no opinion about temperament renders the same bytes it always
+    /// did.
     public init(
         timeline: PerformanceTimeline,
         sampleRate: Double,
-        voices: LineVoiceAssignment
+        voices: LineVoiceAssignment,
+        tuning: TuningSettings = .standard
     ) throws {
         self.sampleRate = sampleRate
+        self.tuning = tuning
         self.lineCount = timeline.lines.count
         self.lineIDs = timeline.lines.map(\.id)
         self.lineNames = timeline.lines.map(\.name)
@@ -181,7 +204,7 @@ public final class RenderProgram: @unchecked Sendable {
             let lineProvider = voices(line.id)
             longestTailSeconds = max(longestTailSeconds, lineProvider.releaseTailSeconds)
 
-            let voice = lineProvider.makeVoice(sampleRate: sampleRate)
+            let voice = lineProvider.makeVoice(sampleRate: sampleRate, tuning: tuning)
             var vtable = voice.vtable
             synth_engine_set_line_voice(engine, Int32(lineIndex), &vtable)
             builtVoices.append(voice)

@@ -400,6 +400,177 @@ final class PerformanceSettingsWiringTests: XCTestCase {
         )
     }
 
+    // MARK: Tuning (REQ-006, TUN001)
+
+    /// A fresh piece opens at equal temperament and A=440 — the identity, which is
+    /// REQ-006's default and therefore what a library of existing pieces keeps
+    /// sounding like.
+    func testAPieceOpensAtTheDefaultTuning() async throws {
+        let playback = try await openPreparedPiece()
+
+        XCTAssertEqual(playback.tuning, .standard)
+        XCTAssertTrue(playback.tuning.isDefault)
+        XCTAssertEqual(
+            playback.assignment.activePreset?.content.tuning, .standard,
+            "the piece's first preset should store the tuning it is playing under"
+        )
+    }
+
+    /// Picking a temperament applies it, rebuilds the program around the *same*
+    /// notes, saves it to the preset, and announces it.
+    ///
+    /// **The three things only this suite can prove**, and the middle one is this
+    /// row's own character: tuning changes neither the timeline (so the realized
+    /// events are byte-identical afterwards) nor only the bus (so the program is a
+    /// new one, carrying the new table into every voice).
+    func testPickingATemperamentRebuildsTheProgramSavesAndAnnounces() async throws {
+        let playback = try await openPreparedPiece()
+        let timeline = try XCTUnwrap(playback.timeline)
+        let revision = try XCTUnwrap(playback.assignment.activePreset?.revision)
+
+        await playback.setTemperament(.werckmeisterIII)
+
+        XCTAssertEqual(playback.tuning.temperament, .werckmeisterIII)
+        XCTAssertEqual(
+            playback.assignment.activePreset?.content.tuning,
+            TuningSettings(temperament: .werckmeisterIII),
+            "the change was not saved to the preset"
+        )
+        XCTAssertGreaterThan(
+            try XCTUnwrap(playback.assignment.activePreset?.revision), revision,
+            "a save that did not bump the revision did not happen"
+        )
+        let after = try XCTUnwrap(playback.timeline)
+        XCTAssertEqual(
+            try after.canonicalData(), try timeline.canonicalData(),
+            "a tuning change re-realized the timeline; it changes what each note is tuned to, "
+                + "not which notes there are"
+        )
+        XCTAssertEqual(
+            playback.statusMessage,
+            PlaybackModel.tuningMessage(TuningSettings(temperament: .werckmeisterIII)),
+            "the change has to be announced, or the group is unusable without seeing it"
+        )
+    }
+
+    /// And the reference-pitch row is its own control: it moves independently of the
+    /// temperament and saves the pair.
+    func testPickingAReferencePitchIsIndependentOfTheTemperament() async throws {
+        let playback = try await openPreparedPiece()
+
+        await playback.setReferencePitch(.a415)
+        XCTAssertEqual(
+            playback.tuning, TuningSettings(temperament: .equal, referencePitch: .a415)
+        )
+
+        await playback.setTemperament(.werckmeisterIII)
+        XCTAssertEqual(
+            playback.tuning,
+            TuningSettings(temperament: .werckmeisterIII, referencePitch: .a415),
+            "picking a temperament discarded the reference pitch"
+        )
+        XCTAssertEqual(
+            playback.assignment.activePreset?.content.tuning,
+            TuningSettings(temperament: .werckmeisterIII, referencePitch: .a415)
+        )
+
+        await playback.setReferencePitch(.a440)
+        XCTAssertEqual(
+            playback.tuning, TuningSettings(temperament: .werckmeisterIII, referencePitch: .a440),
+            "going back to concert pitch discarded the temperament"
+        )
+    }
+
+    /// **A tuning change keeps the playhead.**
+    ///
+    /// This one caught a real defect and is here to stop it coming back. Every
+    /// engine-level assertion was already true — `PlaybackEngine.setTuning` does
+    /// carry the playhead across its rebuild — and the piece still restarted from
+    /// the top, because putting the preset back re-seats the voices and that is a
+    /// *second* rebuild: the engine's carry re-issues a seek, a seek lands when the
+    /// render thread applies it, and the second rebuild therefore read zero. The
+    /// position is held in the model now (`restorePlayback`), which is the only layer
+    /// that knows the two rebuilds are one act.
+    func testATuningChangeKeepsThePlayhead() async throws {
+        let playback = try await openPreparedPiece()
+        playback.seek(toMicroseconds: 4_000_000)
+        let position = playback.positionMicroseconds
+        XCTAssertGreaterThan(position, 0, "the seek has to have moved somewhere")
+
+        await playback.setTemperament(.werckmeisterIII)
+        XCTAssertEqual(
+            playback.positionMicroseconds, position,
+            "the temperament change restarted the piece"
+        )
+
+        await playback.setReferencePitch(.a415)
+        XCTAssertEqual(
+            playback.positionMicroseconds, position,
+            "the reference-pitch change restarted the piece"
+        )
+
+        // And the mix survived both, which is the other thing the second rebuild
+        // would have thrown away.
+        XCTAssertEqual(
+            playback.assignment.activePreset?.content.tuning,
+            TuningSettings(temperament: .werckmeisterIII, referencePitch: .a415)
+        )
+    }
+
+    /// A preset that stores a tuning opens under it, and the program the transport
+    /// loaded is built with it.
+    func testAStoredTuningIsWhatThePieceOpensUnder() async throws {
+        let playback = try await openPreparedPiece()
+        let store = try XCTUnwrap(model.store)
+        let preset = try XCTUnwrap(playback.assignment.activePreset)
+        let stored = TuningSettings(temperament: .werckmeisterIII, referencePitch: .a415)
+        try store.presets.setTuning(stored, in: preset)
+
+        model.closePlayback()
+        model.openPlayback(for: playback.piece)
+        let reopened = try XCTUnwrap(model.playback)
+        await reopened.prepare()
+
+        XCTAssertEqual(reopened.tuning, stored)
+        XCTAssertEqual(
+            reopened.loadedProgramTuning, stored,
+            "the piece opened under the stored tuning but built its program without it"
+        )
+    }
+
+    /// A preset whose stored temperament this build does not know opens the piece —
+    /// in equal temperament, with the sentence in the status bar.
+    ///
+    /// REQ-006's failure clause at the level the owner meets it: not a thrown error,
+    /// not a silent line, a piece that plays and a status bar that explains.
+    func testAnUnknownStoredTemperamentOpensThePieceAndIsReported() async throws {
+        let playback = try await openPreparedPiece()
+        let store = try XCTUnwrap(model.store)
+        let preset = try XCTUnwrap(playback.assignment.activePreset)
+        // Written the way a later version of the app would have written it.
+        try store.presets.setTuning(
+            TuningSettings(
+                temperament: .equal, referencePitch: .a415,
+                unrecognizedTemperament: "kirnberger-iii"
+            ),
+            in: preset
+        )
+
+        model.closePlayback()
+        model.openPlayback(for: playback.piece)
+        let reopened = try XCTUnwrap(model.playback)
+        await reopened.prepare()
+
+        XCTAssertTrue(reopened.isReady, "the piece must still open")
+        XCTAssertEqual(reopened.tuning.temperament, .equal)
+        XCTAssertEqual(reopened.tuning.referencePitch, .a415)
+        let status = try XCTUnwrap(reopened.statusMessage)
+        XCTAssertTrue(
+            status.contains("kirnberger-iii"),
+            "the owner is not told which temperament could not be read: “\(status)”"
+        )
+    }
+
     /// The adoption runs in a task off the closure, so it is awaited rather than
     /// assumed.
     private func waitForExpression(

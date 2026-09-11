@@ -154,6 +154,10 @@ final class PlaybackModel {
     /// is not here because it has no control (AD-P6).
     private(set) var producedMaster: ProducedMasterSettings
 
+    /// The temperament and reference pitch the owner has chosen (REQ-006,
+    /// D65-1): two pickers, and no third control.
+    private(set) var tuning: TuningSettings
+
     /// Bumped so the view can move keyboard focus to a field a menu command
     /// asked for — the same mechanism the library uses for Find.
     private(set) var measureFocusRequests = 0
@@ -224,6 +228,7 @@ final class PlaybackModel {
         self.expression = .standard
         self.expressionAmountDraft = Double(ExpressionSettings.standard.amount)
         self.producedMaster = .standard
+        self.tuning = .standard
 
         wireExport()
         // **Compared now, not when the task runs.** A preset load fires these
@@ -243,6 +248,10 @@ final class PlaybackModel {
         assignment.onProducedMasterLoaded = { [weak self] settings in
             guard let self, settings != self.producedMaster else { return }
             Task { await self.adoptPresetProducedMaster(settings) }
+        }
+        assignment.onTuningLoaded = { [weak self] settings in
+            guard let self, settings != self.tuning else { return }
+            Task { await self.adoptPresetTuning(settings) }
         }
         assignment.onTempoLoaded = { [weak self] percent in
             guard let self, percent != self.tempoPercent else { return }
@@ -380,6 +389,7 @@ final class PlaybackModel {
                 expression = preset.content.expression
                 expressionAmountDraft = Double(preset.content.expression.amount)
                 producedMaster = preset.content.producedMaster
+                tuning = preset.content.tuning
                 tempoPercent = preset.content.tempoPercent
                 tempoDraft = Double(preset.content.tempoPercent)
             }
@@ -463,6 +473,10 @@ final class PlaybackModel {
         // Before `load`, so the program is measured once as it is built rather
         // than built, measured and then measured again (MST001).
         engine.producedMaster = producedMaster
+        // Before `load` for a stronger reason (TUN001): tuning is built into each
+        // voice, so setting it afterwards would throw the program away and build a
+        // second one. With no timeline loaded yet this is a bookkeeping write.
+        try engine.setTuning(tuning)
         try engine.load(timeline: realized)
         refreshTransport()
     }
@@ -474,13 +488,22 @@ final class PlaybackModel {
         let expansion = measures == notated
             ? "\(measures) measures"
             : "\(notated) notated measures played as \(measures)"
-        let ready = "Ready — \(expansion), \(events) notes."
+        var ready = "Ready — \(expansion), \(events) notes."
         // The produced master's one failure mode the owner has to be told about:
         // the analysis could not run, so the piece plays at its own level rather
         // than the calibrated one. Silence is never the answer, and neither is
         // saying nothing (MST001).
-        guard let sentence = engine.masterCalibration?.statusSentence else { return ready }
-        return ready + " " + sentence
+        if let sentence = engine.masterCalibration?.statusSentence {
+            ready += " " + sentence
+        }
+        // And the tuning's one failure mode, said here for the same reason: the
+        // preset named a temperament this build does not know, the piece is
+        // playing in equal temperament, and the owner would otherwise have no way
+        // to find that out (REQ-006's failure clause, TUN001).
+        if let sentence = tuning.failureSentence {
+            ready += " " + sentence
+        }
+        return ready
     }
 
     // MARK: Transport
@@ -978,6 +1001,120 @@ final class PlaybackModel {
         )
     }
 
+    // MARK: Tuning (REQ-006)
+
+    /// Picks a temperament and plays the piece in it (REQ-006).
+    func setTemperament(_ temperament: Temperament) async {
+        // `unrecognizedTemperament` is deliberately dropped: the owner choosing a
+        // temperament is the one moment replacing a name this build could not read
+        // is exactly what they asked for.
+        await apply(
+            TuningSettings(temperament: temperament, referencePitch: tuning.referencePitch)
+        )
+    }
+
+    /// Picks what A is tuned to and plays the piece at it (REQ-006).
+    func setReferencePitch(_ referencePitch: ReferencePitch) async {
+        await apply(
+            TuningSettings(
+                temperament: tuning.temperament,
+                referencePitch: referencePitch,
+                unrecognizedTemperament: tuning.unrecognizedTemperament
+            )
+        )
+    }
+
+    /// The tuning the engine's current program was actually built with, or nil
+    /// before there is a program.
+    ///
+    /// Read by the wiring tests for the reason `masterCalibration` is: a setting
+    /// that reached this model and not the program would leave every assertion
+    /// about the model passing while the piece played at concert pitch.
+    var loadedProgramTuning: TuningSettings? { engine.loadedProgram?.tuning }
+
+    /// A loaded or switched preset brought its own tuning: play under it, but do
+    /// not write it back — it is already what the preset stores.
+    func adoptPresetTuning(_ settings: TuningSettings) async {
+        await apply(settings, savingToPreset: false)
+    }
+
+    /// **The one row in this group that rebuilds the program without re-realizing
+    /// the piece**, and the reason is worth stating because it is neither of the
+    /// other two mechanisms.
+    ///
+    /// Humanization, expression and tempo change the *timeline* — which notes
+    /// sound when, and how hard — so they re-realize and then reload. The produced
+    /// master changes two numbers on the summed *bus*, so it needs neither. Tuning
+    /// changes neither the timeline nor the bus: it changes the frequency a voice
+    /// derives when a note starts, and a voice reads that when it is built. So the
+    /// notes are untouched — the same realized timeline is reloaded verbatim — and
+    /// the program is rebuilt around it. `PlaybackEngine.setTuning` carries the
+    /// playhead and the mix across, exactly as a sound change does.
+    ///
+    /// **It therefore pays for a fresh loudness calibration** when the produced
+    /// master is on — about 0.36 s on the pinned reference piece, synchronously on
+    /// this actor, because a rebuild drops the measurement so the gain follows the
+    /// program (P65-5). By design, and the same cost a tempo nudge already pays;
+    /// worth knowing, because this control is two clicks rather than a drag.
+    ///
+    /// Everything else the group's rows share is kept: applied at once, written to
+    /// the active preset at once, announced through the status bar's live region.
+    private func apply(_ settings: TuningSettings, savingToPreset: Bool = true) async {
+        guard settings != tuning else { return }
+        tuning = settings
+
+        if savingToPreset {
+            assignment.saveTuning(settings)
+        }
+
+        guard timeline != nil else {
+            statusMessage = Self.tuningMessage(settings)
+            return
+        }
+
+        // Read before the change, for the reason `restorePlayback` gives: the
+        // engine's own carry cannot survive the second rebuild that putting the
+        // preset back costs.
+        let wasPlaying = transportState == .playing
+        let resumeAt = positionMicroseconds
+
+        do {
+            // No re-realization: the notes do not move, only what each one is
+            // tuned to. The engine rebuilds the program around the same timeline.
+            try engine.setTuning(settings)
+            try restorePlayback(at: resumeAt, playing: wasPlaying)
+            statusMessage = Self.tuningMessage(settings)
+            refreshTransport()
+        } catch {
+            statusMessage = "Could not apply the tuning change: \(error)"
+        }
+    }
+
+    /// Put the piece back together after something rebuilt the render program: the
+    /// preset's sounds and mix, the playhead, and whether it was playing.
+    ///
+    /// **Why the position is held here rather than left to `PlaybackEngine`'s own
+    /// carry, which exists and works.** Restoring the preset means re-seating the
+    /// voices, and re-seating the voices is *a second rebuild*. The engine carries
+    /// the playhead by re-issuing a seek, and a seek lands when the render thread
+    /// applies it — so the second rebuild reads a playhead that is still at zero,
+    /// carries zero, and starts the piece again from the top. This model is the only
+    /// layer that knows the two rebuilds are one act, so this is where the position
+    /// lives.
+    ///
+    /// Found by the smoke test rather than by a unit test, which is worth recording:
+    /// every assertion about the engine in isolation was true.
+    private func restorePlayback(at resumeAt: Int64, playing wasPlaying: Bool) throws {
+        // A fresh program's strips start at unity, centred and unmuted, which would
+        // silently throw the owner's mix away.
+        assignment.programWasReloaded()
+        seekEngine(to: resumeAt)
+        if wasPlaying {
+            try engine.start()
+            engine.play()
+        }
+    }
+
     /// Realizes the piece again under whatever the performance settings now
     /// say, keeping the playhead and whether it was playing.
     ///
@@ -998,17 +1135,10 @@ final class PlaybackModel {
         )
 
         do {
-            // `load` stops the graph; the position is carried across by hand
-            // because a new program starts at zero. So are the preset's sounds
-            // and mix — a fresh program's strips start at unity, centred and
-            // unmuted, which would silently throw the owner's mix away.
+            // `load` stops the graph; the position, the preset's sounds and the
+            // mix are all carried across by hand — see `restorePlayback`.
             try loadIntoEngine(realized)
-            assignment.programWasReloaded()
-            seekEngine(to: resumeAt)
-            if wasPlaying {
-                try engine.start()
-                engine.play()
-            }
+            try restorePlayback(at: resumeAt, playing: wasPlaying)
             statusMessage = message
             refreshTransport()
         } catch {
@@ -1085,12 +1215,12 @@ final class PlaybackModel {
 
         do {
             try loadIntoEngine(realized)
-            assignment.programWasReloaded()
-            seekEngine(to: rescaled.tempoMap.microseconds(atPlaybackTicks: ticks))
-            if wasPlaying {
-                try engine.start()
-                engine.play()
-            }
+            // The same place in the *music* rather than the same second, which the
+            // rescaled clock has moved.
+            try restorePlayback(
+                at: rescaled.tempoMap.microseconds(atPlaybackTicks: ticks),
+                playing: wasPlaying
+            )
             statusMessage = Self.tempoMessage(percent, score: sourceScore)
             refreshTransport()
         } catch {
@@ -1146,6 +1276,18 @@ final class PlaybackModel {
         settings.isNeutral
             ? "Expression off — phrases are played without shaping or breathing."
             : "Expression on at \(settings.amount)% — phrases shaped, cadences breathing."
+    }
+
+    /// What the status bar says about the tuning, including REQ-006's one thing
+    /// the owner has to be told rather than left to notice: a stored temperament
+    /// this build does not know, which plays as equal temperament.
+    static func tuningMessage(_ settings: TuningSettings) -> String {
+        if let failure = settings.failureSentence { return failure }
+        let pitch = settings.referencePitch.displayName
+        guard !settings.isDefault else {
+            return "Tuning: equal temperament at \(pitch) — standard."
+        }
+        return "Tuning: \(settings.temperament.displayName) at \(pitch)."
     }
 
     // MARK: The ticker

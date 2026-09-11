@@ -404,9 +404,9 @@ final class InstrumentAssignmentTests: XCTestCase {
         var identifier: String { "unbuildable:\(displayName)" }
         var unbuiltVoiceCount: Int { 1 }
 
-        func makeVoice(sampleRate: Double) -> LineVoiceInstance {
+        func makeVoice(sampleRate: Double, tuning: TuningSettings) -> LineVoiceInstance {
             SilentVoiceProvider(identifier: identifier, displayName: displayName)
-                .makeVoice(sampleRate: sampleRate)
+                .makeVoice(sampleRate: sampleRate, tuning: tuning)
                 .failing()
         }
     }

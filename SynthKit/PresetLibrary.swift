@@ -206,7 +206,8 @@ public final class PresetLibrary: @unchecked Sendable, PieceDependentStore, Soun
             name: trimmed,
             partName: entry.partName,
             staff: entry.staff,
-            voice: entry.voice
+            voice: entry.voice,
+            register: entry.register
         )
     }
 
@@ -224,7 +225,8 @@ public final class PresetLibrary: @unchecked Sendable, PieceDependentStore, Soun
             name: nil,
             partName: entry.partName,
             staff: entry.staff,
-            voice: entry.voice
+            voice: entry.voice,
+            register: entry.register
         )
     }
 
@@ -298,6 +300,9 @@ public final class PresetLibrary: @unchecked Sendable, PieceDependentStore, Soun
         // cannot cover is reported, never dropped into a preset that looks
         // complete and plays nothing on it.
         let count = inventory.entries.count
+        // The *grown* ensemble's registers, so an added line is seated against
+        // the piece it joined rather than the piece it did not (STG003).
+        let registers = PresetStaging.StageRegisters(inventory: inventory)
         let rebuilt = try inventory.entries.enumerated().map { index, entry -> PresetLine in
             if let kept = existing[entry.id] { return kept }
             return PresetLine(
@@ -309,7 +314,8 @@ public final class PresetLibrary: @unchecked Sendable, PieceDependentStore, Soun
                 mixer: PresetStaging.mixer(
                     lineIndex: index,
                     lineCount: count,
-                    family: PresetAutoAssignment.family(for: entry)
+                    family: PresetAutoAssignment.family(for: entry),
+                    registers: registers
                 )
             )
         }

@@ -216,11 +216,13 @@ final class PresetLibraryTests: XCTestCase {
         XCTAssertTrue(preset.lines.allSatisfy { !$0.assignment.isEmbedded })
         XCTAssertTrue(preset.lines.allSatisfy { $0.mixer.roomSend > 0 && $0.mixer.depth > 0 })
         let inventory = try store.lineInventory(for: score)
+        let registers = PresetStaging.StageRegisters(inventory: inventory)
         let expectedMixers = inventory.entries.enumerated().map { index, entry in
             PresetStaging.mixer(
                 lineIndex: index,
                 lineCount: inventory.entries.count,
-                family: PresetAutoAssignment.family(for: entry)
+                family: PresetAutoAssignment.family(for: entry),
+                registers: registers
             )
         }
         XCTAssertEqual(
@@ -331,8 +333,97 @@ final class PresetLibraryTests: XCTestCase {
         let added = try XCTUnwrap(grownInventory.entries.last)
         XCTAssertEqual(
             reconciled.line(withID: added.id)?.mixer,
-            PresetStaging.mixer(lineIndex: 4, lineCount: 5, family: .percussion),
+            PresetStaging.mixer(
+                lineIndex: 4,
+                lineCount: 5,
+                family: .percussion,
+                registers: PresetStaging.StageRegisters(inventory: grownInventory)
+            ),
             "The added Timpani line must arrive staged for its seat, not neutral."
+        )
+    }
+
+    /// Issue #71 (STG003): a line reconcile adds is seated by the register of
+    /// the ensemble it *joined*, while every line already in the preset passes
+    /// through byte-untouched — the reconcile half of "existing presets are
+    /// never re-seated" (D65-3).
+    func testReconcileSeatsAnAddedBassLineByRegisterAndReSeatsNothingElse() throws {
+        func band(withBass: Bool) -> Data {
+            func part(id: String, name: String, pitches: [String]) -> ScoreXML.Part {
+                ScoreXML.Part(id: id, name: name, measures: [
+                    ScoreXML.Measure(number: "1", items:
+                        [.attributes(ScoreXML.Attributes(
+                            divisions: 4, fifths: 0, time: (4, 4), clefs: [("G", 2)]
+                        ))]
+                        + pitches.map {
+                            .note(ScoreXML.Note(pitch: $0, duration: 4, type: "quarter"))
+                        }
+                    )
+                ])
+            }
+            // Three violins sit inside one register, so the stored preset was
+            // staged with no register bias in it at all.
+            var parts = [part(id: "P1", name: "Violin I", pitches: ["A5", "B5", "C6", "G5"])]
+            if withBass {
+                parts.append(part(id: "P4", name: "Contrabass", pitches: ["A2", "B2", "C3", "G2"]))
+            }
+            parts.append(part(id: "P2", name: "Violin II", pitches: ["E5", "F5", "G5", "A5"]))
+            parts.append(part(id: "P3", name: "Violin III", pitches: ["D5", "E5", "F5", "G5"]))
+            return ScoreXML.Score(
+                workTitle: withBass ? "Band With Bass" : "Violin Band",
+                composer: "Fixture",
+                parts: parts
+            ).data()
+        }
+
+        let trioScore = try compile(try importScore(band(withBass: false), named: "trio.musicxml"))
+        let preset = try store.activePreset(for: trioScore)
+        let trioInventory = try store.lineInventory(for: trioScore)
+        XCTAssertEqual(
+            preset.lines.map(\.mixer),
+            trioInventory.entries.enumerated().map { index, entry in
+                PresetStaging.mixer(
+                    lineIndex: index, lineCount: 3, family: PresetAutoAssignment.family(for: entry)
+                )
+            },
+            "One register means the stored preset carries the family-only derivation."
+        )
+
+        let grownScore = try compile(try importScore(band(withBass: true), named: "band.musicxml"))
+        let grownInventory = try store.lineInventory(for: grownScore)
+        XCTAssertEqual(grownInventory.entries.count, 4)
+        XCTAssertEqual(grownInventory.entries[1].partName, "Contrabass")
+
+        let reconciled = try store.presets.reconcile(
+            preset, with: grownInventory, palette: try store.sounds.allSounds()
+        )
+
+        for kept in preset.lines {
+            XCTAssertEqual(
+                reconciled.line(withID: kept.lineID)?.mixer, kept.mixer,
+                "A line already in the preset must never be re-seated."
+            )
+        }
+
+        let added = try XCTUnwrap(reconciled.line(withID: grownInventory.entries[1].id))
+        XCTAssertEqual(
+            added.mixer,
+            PresetStaging.mixer(
+                lineIndex: 1,
+                lineCount: 4,
+                family: .strings,
+                registers: PresetStaging.StageRegisters(inventory: grownInventory)
+            ),
+            "The added line must be staged against the grown inventory."
+        )
+        XCTAssertGreaterThan(
+            added.mixer.pan, 0,
+            "The added bass line sits right of centre, not on its bare score-order seat."
+        )
+        XCTAssertGreaterThan(
+            added.mixer.depth,
+            try XCTUnwrap(reconciled.line(withID: grownInventory.entries[0].id)).mixer.depth,
+            "The added bass line sits further back than the violin above it."
         )
     }
 

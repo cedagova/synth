@@ -91,6 +91,19 @@ struct RealizedNote {
     /// quarter, which would make the gesture silently depend on the engraver's
     /// division setting.
     var breathShorteningMicroseconds: Int64 = 0
+
+    /// How much later than its shaped length the note is released, so a slurred
+    /// line overlaps the note it runs into instead of merely reaching it
+    /// (`Realization.shapedLength`).
+    ///
+    /// In microseconds, and kept out of `durationTicks`, for the same two
+    /// reasons `breathShorteningMicroseconds` is. An overlap is a property of
+    /// the *performance* — a piano roll reading `durationTicks` wants the
+    /// shaped notated length, not a value that runs past the next note — and a
+    /// tick-valued overlap is whatever size one tick happens to be on the score
+    /// in front of it, which is a sixteenth note on a score written at four
+    /// divisions to the quarter and a whole quarter note at one.
+    var legatoOverlapMicroseconds: Int64 = 0
 }
 
 extension Realization {
@@ -113,24 +126,29 @@ extension Realization {
 
     mutating func realize(
         line: ScoreLine,
+        stream: [StreamEntry],
         curve: DynamicCurve,
-        pedalSpans: [PerformancePedalSpan]
+        pedalSpans: [PerformancePedalSpan],
+        balance: PassageBalance
     ) -> PerformanceLine {
-        let stream = buildStream(line)
         let slurs = slurSpans(stream, line: line)
         var notes = soundNotes(stream, line: line, curve: curve)
 
-        // **Order matters, and only in one place.** The phrase shaping and the
-        // humanization both add to velocity, so those two are order-free. The
-        // breath is not: it clamps its lateness together with whatever
-        // humanization put in `timingOffsetMicroseconds` into one shared local
-        // bound, which it can only do once that value is there.
+        // **Order matters, and only in one place.** The phrase shaping, the line
+        // balance and the humanization all add to velocity, so those three are
+        // order-free. The breath is not: it clamps its lateness together with
+        // whatever humanization put in `timingOffsetMicroseconds` into one
+        // shared local bound, which it can only do once that value is there.
         //
-        // With expression off or at zero there are no phrases, so both calls
-        // return having read nothing and written nothing — REQ-004's bypass is
-        // this pair of guards, not a tolerance.
+        // With expression off or at zero there are no phrases and no balance, so
+        // all three of those calls return having read nothing and written
+        // nothing — REQ-004's bypass is those guards, not a tolerance. The
+        // articulation reading in `soundNotes` above is deliberately *not* in
+        // that set: a slur and a staccato dot are written notation, which the
+        // bypass recipe keeps rather than suppresses.
         let phrases = expressionPhrases(stream, slurs: slurs)
         shapePhraseDynamics(&notes, phrases: phrases)
+        applyPassageBalance(&notes, balance: balance)
         humanize(&notes, line: line, slurs: slurs)
         breathe(&notes, phrases: phrases)
 
@@ -141,7 +159,11 @@ extension Realization {
             )
             return PerformanceEvent(
                 onsetMicroseconds: max(0, onset + note.timingOffsetMicroseconds),
-                durationMicroseconds: max(1, end - onset - note.breathShorteningMicroseconds),
+                durationMicroseconds: max(
+                    1,
+                    end - onset - note.breathShorteningMicroseconds
+                        + note.legatoOverlapMicroseconds
+                ),
                 midiNoteNumber: note.midiNoteNumber,
                 velocity: min(127, max(1, note.velocity)),
                 origin: note.origin,
@@ -286,13 +308,15 @@ extension Realization {
                tie.notatedEndTicks == entry.absoluteTicks {
                 tie.notatedTicks += note.durationTicks
                 tie.notatedEndTicks = entry.absoluteTicks + note.durationTicks
-                out[tie.index].durationTicks = shapedDuration(
+                let extended = shapedLength(
                     notated: tie.notatedTicks,
                     shortening: tie.shortening,
                     slurredToNext: depths[index],
                     nextOnsetTicks: nextOnset[index],
                     onsetTicks: out[tie.index].onsetTicks
                 )
+                out[tie.index].durationTicks = extended.ticks
+                out[tie.index].legatoOverlapMicroseconds = extended.legatoOverlapMicroseconds
                 if note.tiesForward {
                     openTies[midi] = tie
                 } else {
@@ -322,13 +346,14 @@ extension Realization {
             let principalVelocity = velocity(atTicks: entry.absoluteTicks)
 
             var onset = entry.absoluteTicks
-            var duration = shapedDuration(
+            let shaped = shapedLength(
                 notated: note.durationTicks,
                 shortening: shaping.percent,
                 slurredToNext: depths[index],
                 nextOnsetTicks: nextOnset[index],
                 onsetTicks: entry.absoluteTicks
             )
+            var duration = shaped.ticks
 
             // Grace notes take their time from the principal, so they are
             // placed before it is shaped into events.
@@ -396,7 +421,8 @@ extension Realization {
                     origin: .notated,
                     playbackMeasureIndex: entry.playbackMeasureIndex,
                     sourceMeasureIndex: entry.sourceMeasureIndex,
-                    ordinal: ordinal
+                    ordinal: ordinal,
+                    legatoOverlapMicroseconds: shaped.legatoOverlapMicroseconds
                 )
             )
             if note.tiesForward {
@@ -428,27 +454,82 @@ extension Realization {
         var notatedEndTicks: Int
     }
 
+    /// How long a note actually sounds: its shaped notated length, plus the
+    /// overlap a slur carries it past the note it runs into.
+    ///
+    /// Two values rather than one because they are two different kinds of
+    /// thing, and conflating them is what made the overlap depend on the
+    /// engraver. The length is notation, measured on the tick grid where the
+    /// score's own arithmetic is exact. The overlap is performance, measured in
+    /// microseconds where a gesture means the same thing on every score — the
+    /// same division `RealizedNote.breathShorteningMicroseconds` already makes
+    /// for the release side.
+    struct ShapedLength {
+        /// Sounding length on the tick grid, after the articulation and the
+        /// slur have been read.
+        let ticks: Int
+
+        /// How far past `ticks` the note is carried, in microseconds. Non-zero
+        /// only under a slur.
+        let legatoOverlapMicroseconds: Int64
+
+        static let silent = ShapedLength(ticks: 0, legatoOverlapMicroseconds: 0)
+    }
+
     /// How long a note actually sounds.
-    func shapedDuration(
+    ///
+    /// **Always on, and not scaled by the expression amount**, because this is
+    /// reading rather than interpreting: a slur and a staccato dot are printed
+    /// on the page, so the expression setting's off state keeps them exactly as
+    /// its on state does (REQ-004 reads "written notation plus uniform
+    /// humanization", and these three readings are the written notation).
+    func shapedLength(
         notated: Int,
         shortening: Int?,
         slurredToNext: Bool,
         nextOnsetTicks: Int,
         onsetTicks: Int
-    ) -> Int {
-        guard notated > 0 else { return 0 }
+    ) -> ShapedLength {
+        guard notated > 0 else { return .silent }
         if let percent = shortening {
             // An articulation that shortens wins over the slur: staccato
             // under a slur is portato, not legato.
-            return max(1, notated * percent / 100)
+            return ShapedLength(
+                ticks: max(1, notated * percent / 100),
+                legatoOverlapMicroseconds: 0
+            )
         }
         if slurredToNext {
             // Legato: hold into the next note and overlap it slightly, so the
             // engine has something to bind rather than a gap to disguise.
-            let overlap = max(1, ticksPerQuarter / 32)
-            let gap = max(notated, nextOnsetTicks - onsetTicks)
-            return max(1, gap + overlap)
+            let gap = max(1, max(notated, nextOnsetTicks - onsetTicks))
+            return ShapedLength(
+                ticks: gap,
+                legatoOverlapMicroseconds: legatoOverlapMicroseconds(
+                    onsetTicks: onsetTicks, soundingTicks: gap
+                )
+            )
         }
-        return max(1, notated * PerformanceRealizer.detachedPercent / 100)
+        return ShapedLength(
+            ticks: max(1, notated * PerformanceRealizer.detachedPercent / 100),
+            legatoOverlapMicroseconds: 0
+        )
+    }
+
+    /// The slur overlap for a note of `soundingTicks` starting at `onsetTicks`.
+    ///
+    /// A fixed gesture, bounded by the note's own sounding time so a fast
+    /// slurred figure overlaps proportionally less and can never be swallowed
+    /// by the note before it. Read through the tempo map rather than assumed,
+    /// so the bound is the note's real duration at whatever tempo is in force.
+    func legatoOverlapMicroseconds(onsetTicks: Int, soundingTicks: Int) -> Int64 {
+        let end = min(onsetTicks + soundingTicks, totalTicks)
+        let sounding = score.tempoMap.microseconds(atPlaybackTicks: end)
+            - score.tempoMap.microseconds(atPlaybackTicks: onsetTicks)
+        guard sounding > 0 else { return 0 }
+        return min(
+            PerformanceRealizer.legatoOverlapMicroseconds,
+            sounding / PerformanceRealizer.legatoOverlapSpanDivisor
+        )
     }
 }

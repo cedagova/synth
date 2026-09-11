@@ -1310,6 +1310,88 @@ enum MusicXMLScoreFixtures {
         ).data()
     }
 
+    /// A melody over an accompaniment: two parts, one clearly on top, writing
+    /// the same dynamic and nothing else.
+    ///
+    /// Built so the *only* thing that can separate the two lines' realized
+    /// velocities is the per-passage balance (EXP002). Neither part carries a
+    /// slur, an articulation, a rest or a second dynamic, and both run unbroken
+    /// even values, so both lines phrase identically — the arch and the
+    /// cadential easing are the same number at the same tick for both of them.
+    /// Subtract one from the other at a tick they share and what is left is the
+    /// balance.
+    ///
+    /// The accompaniment moves in eighths against the melody's quarters, which
+    /// is what makes this a melody *over* an accompaniment rather than a
+    /// homophonic texture: when every line attacks together there is no leading
+    /// line to find, and `stringQuartetMovement` is the fixture for that case.
+    static func melodyOverAccompaniment(measureCount: Int = 8) -> Data {
+        let melody = ["C5", "D5", "E5", "F5", "G5", "A5", "B5", "C6"]
+        let accompaniment = ["C3", "E3", "G3", "E3", "F3", "A3", "C4", "A3"]
+
+        func part(
+            id: String,
+            name: String,
+            clef: (String, Int),
+            pitches: [String],
+            notesPerMeasure: Int
+        ) -> ScoreXML.Part {
+            let value = whole / notesPerMeasure
+            var measures: [ScoreXML.Measure] = []
+            for measureIndex in 0..<measureCount {
+                var items: [ScoreXML.Item] = []
+                if measureIndex == 0 {
+                    items.append(
+                        .attributes(
+                            ScoreXML.Attributes(
+                                divisions: divisions,
+                                fifths: 0,
+                                time: (4, 4),
+                                clefs: [clef]
+                            )
+                        )
+                    )
+                    items.append(
+                        .direction(
+                            ScoreXML.Direction(metronome: ("quarter", 80), sound: ["tempo": "80"])
+                        )
+                    )
+                    items.append(.direction(.dynamic("mf")))
+                }
+                for position in 0..<notesPerMeasure {
+                    items.append(
+                        .note(
+                            ScoreXML.Note(
+                                pitch: pitches[
+                                    (measureIndex * notesPerMeasure + position) % pitches.count
+                                ],
+                                duration: value,
+                                type: notesPerMeasure == 4 ? "quarter" : "eighth"
+                            )
+                        )
+                    )
+                }
+                measures.append(ScoreXML.Measure(number: String(measureIndex + 1), items: items))
+            }
+            return ScoreXML.Part(id: id, name: name, measures: measures)
+        }
+
+        return ScoreXML.Score(
+            workTitle: "Melody over Accompaniment",
+            composer: "Fixture",
+            parts: [
+                part(
+                    id: "P1", name: "Flute", clef: ("G", 2),
+                    pitches: melody, notesPerMeasure: 4
+                ),
+                part(
+                    id: "P2", name: "Harp", clef: ("F", 4),
+                    pitches: accompaniment, notesPerMeasure: 8
+                )
+            ]
+        ).data()
+    }
+
     /// The increment's expressive reference piece: one keyboard part, two
     /// staves, two voices per staff, at the density of a real edition.
     ///

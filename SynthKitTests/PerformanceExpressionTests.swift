@@ -47,18 +47,39 @@ final class PerformanceExpressionTests: XCTestCase {
 
     // MARK: REQ-004 — the bypass renders what it always rendered
 
-    /// The event digests of the four reference fixtures, recorded on
-    /// `eb7d0d3` — the collector base, before this leaf added a line of
-    /// realization code — from two agreeing runs in separate processes.
+    /// The three reference fixtures, at both bypass settings, with the digest each
+    /// one must produce.
     ///
     /// **This is REQ-004's expression term, stated as strongly as it can be
     /// stated.** Not "no phrase dynamics are detectable" and not "the character
-    /// is restored", but: with expression off, the realizer emits the same
-    /// bytes it emitted before the feature existed. A leak anywhere on the
-    /// phrasing path — a shape applied at amount zero, a breath clamped to a
-    /// small number instead of skipped, a seed that moved because a settings
-    /// field was added — moves one of these.
-    private static let preFeatureEventDigests: [String: (Data, RealizationSettings)] = [
+    /// is restored", but: with expression off, the realizer emits an exact,
+    /// pinned byte stream. A leak anywhere on the phrasing or balance path — a
+    /// shape applied at amount zero, a breath clamped to a small number instead
+    /// of skipped, a balance term that survived the guard, a seed that moved
+    /// because a settings field was added — moves one of these.
+    ///
+    /// **Two of the six are still the pre-feature bytes, and that is load-bearing
+    /// rather than an accident.** The fugue fixture carries no slur anywhere in
+    /// it, so EXP002's legato change cannot reach it; its two rows are the ones
+    /// recorded on `eb7d0d3`, the collector base, before EXP001 added a line of
+    /// realization code. They still hold, which is the historical half of the
+    /// claim: the expression bypass has never moved.
+    ///
+    /// The other four moved **once**, on EXP002, for one deliberate reason: the
+    /// legato overlap stopped being `ticksPerQuarter / 32` — a fraction of
+    /// whatever one tick happens to be on the score in front of it — and became a
+    /// bounded number of microseconds
+    /// (`PerformanceRealizer.legatoOverlapMicroseconds`). Articulation is written
+    /// notation and therefore always on, in the bypass state as much as anywhere
+    /// else, so correcting it necessarily moves the bypass bytes of any fixture
+    /// that contains a slur. The values below were recorded from two agreeing runs
+    /// in separate processes. What did *not* move is the music:
+    /// `testExpressionOffStillPlaysThePreFeatureNotesTimesAndLoudness` holds all
+    /// six fixtures against digests taken on `e6c1697` over every event field
+    /// except the lengths, so the claim "only sounding lengths changed" is
+    /// measured rather than asserted.
+    private static let bypassEventDigests: [String: (Data, RealizationSettings)] = [
+        // Unchanged since before the expression setting existed — no slurs.
         "0c9046485c9f33a95560be4a96117d3f3a3490518d2eba063a4c8cb0aa26b1c3": (
             MusicXMLScoreFixtures.keyboardFugueExposition(measureCount: 4), .literal
         ),
@@ -66,28 +87,98 @@ final class PerformanceExpressionTests: XCTestCase {
             MusicXMLScoreFixtures.keyboardFugueExposition(measureCount: 4),
             .humanizedWithoutExpression
         ),
-        "9424ddfd3476560e60d614a51bb56e8e54aa8f8462dd8cb0be59c903e1c85662": (
+        // Moved once on EXP002, for the legato overlap. Slurred fixtures.
+        "0340c87ca747a45f783907f13beef0286db95562e506058d2685843c86b8a8bd": (
             MusicXMLScoreFixtures.expressiveKeyboardPiece(), .literal
         ),
-        "f572cc354f024f982ece14ac4c245d2dc7d0f65c210e90eb8ea031514c82b8f1": (
+        "d6c211dd6a1ce2da40d0bf278222caac06eab49f23321d245434fc89a38d3aac": (
             MusicXMLScoreFixtures.expressiveKeyboardPiece(), .humanizedWithoutExpression
         ),
-        "f1e0f422a9e066713df15d23fc462075a53314c827e61b5e13bb4824c85af7a4": (
+        "61f1e793ebf3af20970c4aad99d9c0315afc01983770207ef6df8eafaed54891": (
             MusicXMLScoreFixtures.stringQuartetMovement(), .literal
         ),
-        "b7631adf25e339f3c2638707839e6b09d463807421cdd65fce0be59c8da44ba2": (
+        "509f9c470ed2d0d99adb95db4a1729aa07db26cced9c281f9b0195b8de67240f": (
             MusicXMLScoreFixtures.stringQuartetMovement(), .humanizedWithoutExpression
         )
     ]
 
-    func testExpressionOffRendersExactlyWhatWasRenderedBeforeTheSettingExisted() throws {
-        for (expected, testCase) in Self.preFeatureEventDigests {
+    /// The same six fixtures and settings, digested over every event field
+    /// *except* the two length fields — recorded on `e6c1697`, the collector base
+    /// this leaf branched from, from two agreeing runs in separate processes.
+    ///
+    /// **The provenance the table above has to give up, recovered.** A full-byte
+    /// digest cannot survive a deliberate correction to an always-on notation
+    /// reading, but the interesting claim can: with expression off, EXP002 plays
+    /// the same notes, at the same times, at the same loudness, in the same
+    /// measures as the base did. Only how long each note sounds changed, and only
+    /// under a slur. If the articulation fix had touched a velocity, a
+    /// micro-timing offset, an ornament expansion or a measure index, one of these
+    /// would move — and no refreeze of the table above would hide it.
+    private static let preFeatureShapeDigests: [(String, Data, RealizationSettings)] = [
+        (
+            "9cf3b923b8ba80062e3e427ec1afae2887c81416388cd129c51bd269382d57d3",
+            MusicXMLScoreFixtures.keyboardFugueExposition(measureCount: 4), .literal
+        ),
+        (
+            "708c354d3f968536c8f30fd3e9da2e3efaf60567d3421b9e9719992a6c9b1107",
+            MusicXMLScoreFixtures.keyboardFugueExposition(measureCount: 4),
+            .humanizedWithoutExpression
+        ),
+        (
+            "3c6190db332c9fb2f56b26c33ee9534200c19b19f374ca4ca56437d45a33f7ea",
+            MusicXMLScoreFixtures.expressiveKeyboardPiece(), .literal
+        ),
+        (
+            "7876ebfda1003c7b51836adb1c6a5bea316019603a10953119e4401ceecf7021",
+            MusicXMLScoreFixtures.expressiveKeyboardPiece(), .humanizedWithoutExpression
+        ),
+        (
+            "d00d027223215bc7cf32ae7a2b502ecb817e7ba1a84b68222086c4a821577841",
+            MusicXMLScoreFixtures.stringQuartetMovement(), .literal
+        ),
+        (
+            "b823ad1d4e38f10870733dae12987782d72dab6127383ddb02b1ede59c1b4b48",
+            MusicXMLScoreFixtures.stringQuartetMovement(), .humanizedWithoutExpression
+        )
+    ]
+
+    /// SHA-256 of a timeline's events with both length fields left out: the
+    /// notes, where they sound, how loud, and which measure they belong to.
+    private func shapeDigest(_ timeline: PerformanceTimeline) -> String {
+        var text = ""
+        for line in timeline.lines {
+            text += line.id.rawValue + "|"
+            for event in line.events {
+                text += "\(event.onsetMicroseconds),\(event.midiNoteNumber),"
+                    + "\(event.velocity),\(event.origin.rawValue),\(event.onsetTicks),"
+                    + "\(event.playbackMeasureIndex),\(event.sourceMeasureIndex);"
+            }
+            text += "\n"
+        }
+        return MusicXMLImporter.sha256Hex(Data(text.utf8))
+    }
+
+    func testExpressionOffRendersTheExactPinnedBypassTimeline() throws {
+        for (expected, testCase) in Self.bypassEventDigests {
             let score = try compile(testCase.0, id: "frozen")
             let digest = try eventDigest(realizer.realize(score, settings: testCase.1))
             XCTAssertEqual(
                 digest, expected,
-                "with expression off the realizer no longer produces the pre-feature timeline, "
-                    + "so REQ-004's bypass recipe is broken for the expression term"
+                "with expression off the realizer no longer produces the pinned bypass "
+                    + "timeline, so REQ-004's bypass recipe is broken for the expression term"
+            )
+        }
+    }
+
+    func testExpressionOffStillPlaysThePreFeatureNotesTimesAndLoudness() throws {
+        for (expected, data, settings) in Self.preFeatureShapeDigests {
+            let score = try compile(data, id: "frozen")
+            let digest = shapeDigest(realizer.realize(score, settings: settings))
+            XCTAssertEqual(
+                digest, expected,
+                "with expression off the realizer plays different notes, times or "
+                    + "loudnesses from the collector base; EXP002 was only allowed to change "
+                    + "how long a slurred note sounds"
             )
         }
     }

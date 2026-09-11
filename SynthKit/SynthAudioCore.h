@@ -229,6 +229,50 @@ float synth_engine_line_depth(const SynthRenderEngine *engine, int32_t lineIndex
 void  synth_engine_set_master_gain(SynthRenderEngine *engine, float gain);
 float synth_engine_master_gain(const SynthRenderEngine *engine);
 
+#pragma mark - The produced master (control thread, safe while rendering)
+
+/*
+ The master stage after the line sum (MST001): bus cohesion, the per-piece
+ loudness calibration gain, and the always-on true-peak ceiling.
+
+ **One switch covers two of the three** (owner decision D65-2, option A).
+ Cohesion and calibration are the "Produced master" setting; the ceiling has no
+ control and is always in the graph, because an export that clips is a defect
+ and not a matter of taste (AD-P6). With the setting off the stage multiplies by
+ exactly `1.0f` for any material that stays under the ceiling, so the output is
+ the raw line sum bit for bit — REQ-004's composed bypass.
+
+ The stage is program state, not an owner-facing mix control: the calibration
+ figures come from `MasterCalibration`'s bounded analysis of this exact program
+ and are rewritten whenever the program is rebuilt. Nothing here adapts while
+ the piece is playing.
+*/
+
+/// Turn bus cohesion and the calibration gain on or off together.
+void    synth_engine_set_produced_master(SynthRenderEngine *engine, int32_t enabled);
+int32_t synth_engine_produced_master(const SynthRenderEngine *engine);
+
+/// Publish the analysis pass's two figures: the gain that brings this piece to
+/// the fixed loudness target, and where "loud for this piece" sits so cohesion
+/// has something piece-relative to work against. A `cohesionThreshold` of zero
+/// or less turns cohesion off; a `gain` of 1 is the no-calibration answer a
+/// silent piece and a failed analysis both take.
+void synth_engine_set_master_calibration(SynthRenderEngine *engine,
+                                         float gain,
+                                         float cohesionThreshold);
+float synth_engine_master_calibration_gain(const SynthRenderEngine *engine);
+float synth_engine_master_cohesion_threshold(const SynthRenderEngine *engine);
+
+/// The ceiling, in linear amplitude. One definition, readable from Swift, so a
+/// test asserting REQ-005's −1 dBFS cannot drift from the value the render
+/// thread enforces.
+float synth_master_ceiling(void);
+
+/// Frames of lookahead the ceiling uses. Reported for the record rather than
+/// for correction: the stage primes its own delay line, so output frame *k* is
+/// program frame *k* and no caller has to compensate for anything.
+int32_t synth_master_lookahead_frames(void);
+
 #pragma mark - Transport (control thread, safe while rendering)
 
 void synth_engine_play(SynthRenderEngine *engine);

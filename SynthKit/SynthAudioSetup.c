@@ -80,6 +80,38 @@ void synth_room_prepare(SynthRoomState *room, double sampleRate) {
     }
 }
 
+/// Derive the master stage's rate-dependent timing and clear its state.
+///
+/// Both timings are stated in seconds and converted here, so the stage behaves
+/// the same at 44.1 and 48 kHz. The lookahead itself is *not* rate-derived — it
+/// is a fixed frame count, because it is the one part of the stage whose length
+/// must not change what a render produces.
+void synth_master_prepare(SynthRenderEngine *engine, double sampleRate) {
+    if (engine == NULL) { return; }
+    const double rate = sampleRate > 0.0 ? sampleRate : 48000.0;
+
+    engine->masterReleaseStep = (float)(1.0 / (SYNTH_MASTER_RELEASE_SECONDS * rate));
+    engine->cohesionAttackCoefficient =
+        (float)(1.0 - exp(-1.0 / (SYNTH_MASTER_COHESION_ATTACK_SECONDS * rate)));
+    engine->cohesionReleaseCoefficient =
+        (float)(1.0 - exp(-1.0 / (SYNTH_MASTER_COHESION_RELEASE_SECONDS * rate)));
+
+    for (int32_t frame = 0; frame < SYNTH_MASTER_LOOKAHEAD_FRAMES; frame++) {
+        engine->masterDelayLeft[frame] = 0.0f;
+        engine->masterDelayRight[frame] = 0.0f;
+        engine->masterTarget[frame] = 1.0f;
+        engine->primeLeft[frame] = 0.0f;
+        engine->primeRight[frame] = 0.0f;
+    }
+    engine->masterWrite = 0;
+    engine->masterNonUnity = 0;
+    engine->masterGainState = 1.0f;
+    engine->masterLookaheadFilled = 0;
+    engine->masterNeedsPrime = 1;
+    engine->cohesionEnvelope = 0.0f;
+    engine->cohesionWasEnabled = 0;
+}
+
 SynthRenderEngine *synth_engine_create(int32_t lineCount,
                                        int32_t maximumFrameCount,
                                        double sampleRate) {
@@ -133,6 +165,14 @@ SynthRenderEngine *synth_engine_create(int32_t lineCount,
     }
 
     atomic_store_explicit(&engine->masterGain, 1.0f, memory_order_relaxed);
+    /* The produced master is off and neutral until something asks otherwise:
+       the engine is the mechanism, and the product's "on by default" (D65-3)
+       lives in `ProducedMasterSettings.standard` and reaches here from the
+       preset. A render therefore does exactly what it was asked for, and the
+       always-on ceiling is the only part of the stage nobody can decline. */
+    atomic_store_explicit(&engine->producedMaster, 0, memory_order_relaxed);
+    atomic_store_explicit(&engine->calibrationGain, 1.0f, memory_order_relaxed);
+    atomic_store_explicit(&engine->cohesionThreshold, 0.0f, memory_order_relaxed);
     atomic_store_explicit(&engine->transportCommand, SynthTransportStopped, memory_order_relaxed);
     atomic_store_explicit(&engine->transportState, SynthTransportStopped, memory_order_relaxed);
     atomic_store_explicit(&engine->pauseReason, SynthPauseReasonNone, memory_order_relaxed);
@@ -144,6 +184,7 @@ SynthRenderEngine *synth_engine_create(int32_t lineCount,
     engine->declickGain = 0.0f;
     engine->declickTarget = 0.0f;
     engine->declickStep = (float)(1.0 / (SYNTH_DECLICK_SECONDS * sampleRate));
+    synth_master_prepare(engine, sampleRate);
 
     mach_timebase_info_data_t timebase;
     mach_timebase_info(&timebase);
@@ -257,6 +298,7 @@ void synth_engine_set_sample_rate(SynthRenderEngine *engine, double sampleRate) 
     engine->sampleRate = sampleRate;
     engine->declickStep = (float)(1.0 / (SYNTH_DECLICK_SECONDS * sampleRate));
     synth_room_prepare(engine->room, sampleRate);
+    synth_master_prepare(engine, sampleRate);
     for (int32_t l = 0; l < engine->lineCount; l++) {
         const SynthLineVoice *voice = &engine->lines[l].voice;
         if (voice->prepare) { voice->prepare(voice->state, sampleRate); }

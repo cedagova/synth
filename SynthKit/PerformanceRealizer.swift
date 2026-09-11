@@ -18,10 +18,24 @@ import Foundation
 /// - the offline export (REQ-026) renders the very value live playback used,
 ///   so export-equals-live is structural instead of a QA hope.
 ///
-/// What this stage does *not* do is interpret. Rubato, period-performance
-/// conventions and phrase-by-phrase editing are explicit non-goals (D4). The
-/// shaping here is the literal meaning of the notation plus a small, bounded
-/// amount of human unevenness.
+/// What this stage does *not* do is interpret freely. Rubato, period-
+/// performance conventions and phrase-by-phrase editing are explicit non-goals
+/// (D4). The shaping here is the literal meaning of the notation, plus a small
+/// bounded amount of human unevenness (`PerformanceHumanization`), plus — when
+/// the owner leaves the expression setting on — a deterministic reading of the
+/// phrase structure the notation already states: an arch across each phrase, a
+/// breath between phrases (`PerformancePhrasing`, REQ-003) and a little room
+/// above the accompaniment for whichever line is leading the passage
+/// (`PerformanceBalance`, REQ-003). Every one of those is derived from the
+/// compiled score and the settings, so all of them stay inside the purity
+/// contract above, and the three the setting owns have an off state that skips
+/// their code path entirely (REQ-004).
+///
+/// The articulation reading — legato under a slur, détaché otherwise, a written
+/// articulation winning over both (`Realization.shapedLength`) — is in the first
+/// group rather than the third. It is what the page says, so it is on in every
+/// state and is not scaled by the expression amount; REQ-004's bypass keeps the
+/// written notation and suppresses only the interpretation laid over it.
 public struct PerformanceRealizer: Sendable {
     /// Velocity used before the score says anything about loudness. `mf` is
     /// what a player defaults to and what every notation program assumes.
@@ -37,6 +51,29 @@ public struct PerformanceRealizer: Sendable {
     /// two repeated notes re-attack instead of fusing. A player's default
     /// détaché, not an articulation.
     public static let detachedPercent = 90
+
+    /// How far a slurred note is carried past the onset it runs into, in
+    /// microseconds, so the engine has an overlap to bind rather than a gap to
+    /// disguise.
+    ///
+    /// **In microseconds, and that is the point.** The overlap used to be
+    /// `ticksPerQuarter / 32`, and `ticksPerQuarter` is the least common
+    /// multiple of the `<divisions>` values the *engraver* happened to write
+    /// (`ScoreCompiler.resolveTicksPerQuarter`) — not a normalized grid. A
+    /// score at 480 divisions got the intended thirty-second of a quarter; the
+    /// same music at 4 divisions got a whole sixteenth note, and at 1 division
+    /// a whole quarter note, because the expression floors to zero and then
+    /// `max(1, …)` promotes it to one tick of whatever size that score uses.
+    /// Twenty milliseconds is the same gesture at every division setting, and
+    /// it is the same reasoning `RealizedNote.breathShorteningMicroseconds`
+    /// already states for the release side.
+    public static let legatoOverlapMicroseconds: Int64 = 20_000
+
+    /// …and never more than this fraction of the note's own sounding span, as
+    /// a reciprocal: an eighth of it. A slurred thirty-second in a fast figure
+    /// overlaps proportionally less, so the gesture scales with the music
+    /// rather than swallowing the note it runs into.
+    public static let legatoOverlapSpanDivisor: Int64 = 8
 
     public init() {}
 
@@ -105,11 +142,14 @@ struct DynamicCurve: Equatable {
 /// The working state of a single `realize` call. Created and discarded per
 /// call, so nothing can leak between realizations.
 ///
-/// Split over two files: this one builds the staff-wide context (dynamics and
-/// pedal), `PerformanceLineRealization.swift` turns one line's notes into
-/// events. They are one type because the second needs the first's report
-/// collector and seed, and two files because a single one would be a thousand
-/// lines about two different problems.
+/// Split over files by problem: this one builds the staff-wide context (dynamics
+/// and pedal), `PerformanceLineRealization.swift` turns one line's notes into
+/// events, `PerformanceHumanization.swift` adds the seeded unevenness,
+/// `PerformancePhrasing.swift` reads phrases out of the score, and
+/// `PerformanceBalance.swift` decides which line leads each passage. They are one
+/// type because each needs this one's report collector, seed and tempo map, and
+/// separate files because one would be several thousand lines about five
+/// different problems.
 struct Realization {
     let score: CompiledScore
     let settings: RealizationSettings
@@ -156,15 +196,24 @@ struct Realization {
             pedals[key] = buildPedalSpans(events, at: location(of: key))
         }
 
+        // Every line's playback stream, built once. Lines are realized
+        // independently, but the balance between them is the one reading that
+        // has to see them together — which is why this is built here and then
+        // handed down as a value rather than reached for from inside a line.
+        let streams = score.lines.map { buildStream($0) }
+        let balances = passageBalance(streams: streams)
+
         var lines: [PerformanceLine] = []
         lines.reserveCapacity(score.lines.count)
-        for line in score.lines {
+        for (index, line) in score.lines.enumerated() {
             let key = StaffKey(partID: line.partID, staff: line.staff)
             lines.append(
                 realize(
                     line: line,
+                    stream: streams[index],
                     curve: curves[key] ?? DynamicCurve(segments: [], accents: [:]),
-                    pedalSpans: pedals[key] ?? []
+                    pedalSpans: pedals[key] ?? [],
+                    balance: balances[index]
                 )
             )
         }

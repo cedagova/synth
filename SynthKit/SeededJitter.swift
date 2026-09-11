@@ -28,10 +28,18 @@ enum SeededJitter {
 
     /// Derives the seed for one (piece, preset, humanization) configuration.
     ///
-    /// Everything the interpretation may legitimately depend on goes into the
-    /// digest, and nothing else can: change the piece, the stored bytes, the
-    /// preset or a humanization control and the noise moves; change nothing
-    /// and it cannot.
+    /// Everything the *noise* may legitimately depend on goes into the digest,
+    /// and nothing else can: change the piece, the stored bytes, the preset or
+    /// a humanization control and the noise moves; change nothing and it
+    /// cannot.
+    ///
+    /// **The expression setting is deliberately absent**, and that is the
+    /// REQ-004 bypass working rather than an omission. Phrase expression is a
+    /// deterministic reading of the notation — it draws no pseudo-noise at all,
+    /// so it has nothing to seed. Keeping it out means turning expression off
+    /// leaves the humanization of every note exactly where it was, which is
+    /// what makes the bypass bit-identical to the realization from before the
+    /// setting existed instead of merely similar in character.
     static func seed(
         pieceID: String,
         contentSHA256: String,

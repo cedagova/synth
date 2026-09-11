@@ -129,6 +129,16 @@ struct PlaybackCommands: Commands {
             // Both were observed by driving the built app, not reasoned about.
             .keyboardShortcut("u", modifiers: .command)
 
+            // Every control in the Performance group also exists as a menu
+            // item, which is what REQ-027 means on macOS. Shift-Command-U, to
+            // sit beside Toggle Humanization: the two settings are the same
+            // kind of thing and the owner A/Bs them together.
+            Button("Toggle Expression") {
+                guard let playback = model.playback else { return }
+                Task { await playback.setExpressionEnabled(!playback.expression.isEnabled) }
+            }
+            .keyboardShortcut("u", modifiers: [.command, .shift])
+
             Divider()
 
             // Shift-Command-E, not Command-E: plain Command-E is Use Selection

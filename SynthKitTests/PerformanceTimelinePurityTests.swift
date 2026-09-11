@@ -37,19 +37,54 @@ final class PerformanceTimelinePurityTests: XCTestCase {
     ///
     /// Tell them apart by running the suite twice in two processes: a
     /// deliberate change gives the same wrong digest twice.
+    ///
+    /// Moved once on EXP001, when `RealizationSettings` gained its `expression`
+    /// field and the canonical bytes changed even where not one note did. Moved
+    /// again on EXP002, and this time the music really did change, for two
+    /// deliberate reasons:
+    ///
+    /// - **the legato overlap** stopped being `ticksPerQuarter / 32` — a fraction
+    ///   of whatever one tick happens to be on the score in front of it, which is
+    ///   a whole sixteenth note at four divisions to the quarter — and became a
+    ///   bounded number of microseconds. Articulation is written notation and so
+    ///   always on, which is why this reaches the `literal` and `expression-off`
+    ///   rows as well: every fixture here that carries a slur moved; and
+    /// - **the per-passage line balance** (`PerformanceBalance`) shades the
+    ///   leading line above the accompaniment, which moves every row realized
+    ///   with expression on whose texture names a leader.
+    ///
+    /// Both were refrozen from two agreeing runs in separate processes. The claim
+    /// that nothing *else* moved in the bypass state is a separate and stronger
+    /// one, and `PerformanceExpressionTests` holds it two ways: the fugue
+    /// fixture's bypass digests are still the ones recorded before EXP001
+    /// existed — it carries no slur, so articulation cannot reach it — and every
+    /// fixture's notes, onset times, velocities and measure indices are held
+    /// against digests taken on the collector base with the lengths left out.
     private static let frozenTimelineDigests: [String: String] = [
         "ornamentStudy/literal":
-            "18fe0fbe1c4d1b95fb2fd4ab8dae21c65b4826e36bf574431667516f27e48173",
+            "85f8ca7d4f5683f0e9b3c30c8bef27471b5662c411d30f0b37ff419cbcb31d29",
         "expressiveKeyboardPiece/literal":
-            "86913f7878a67733fe3b6dccbfc5609bb79c742beee573b5cac6c352d2db5f60",
+            "db894d3b4499133bb81898fe74b7c734ded0bf99c58cdfa96d684b2dae6db8d7",
         "expressiveKeyboardPiece/standard":
-            "561a1e931e2f6984a201eab8dbe39ad724d9f505491b5d98bdc6034c518cd31a",
+            "c0de18f380cce798513a6e554692935db95700590a28a97fb41984ba2b146c24",
         "expressiveKeyboardPiece/intensity-100":
-            "8a9c7f6b0faf3f22f806ded63e07dac9c4088abad0d6e4a0cc536552a874c8b3",
+            "7db183a6a665ef81eb00c0c5aabc9d9a2f0be181ea1a9acf5b5f25e16cc87416",
         "stringQuartetMovement/standard":
-            "dac4b34f95c1b7a33d8eeca12a86bffd397acff8d771807066671896c3c99557",
+            "e26d01c2ce88976849bab6efe6bb779bd8ac71aa4c0f23981b2a080dc60c606c",
         "fastOrnamentsAndGraceNotes/intensity-100":
-            "39a2c2d97dedf993b674d371c67c7835d42a2000f3ac6826978b211a2c5ff727"
+            "bcfa84f69f4c6d1e3820e42fe2702709a3d9701ba77397a73a7b10df671caee9",
+        "expressiveKeyboardPiece/expression-off":
+            "500e3de196a927e9dfdac8200b15648b8bb48967fbd1d63a734a8570472ff0fc",
+        "expressiveKeyboardPiece/expression-100":
+            "6972fe0bd1434637026c6580dc990f4d510d0127972f58033581a164049c1172",
+        "stringQuartetMovement/expression-only":
+            "a220b2f1af69f22e9d612e81306c6bcb7f18260e2f56ec810f280dd52605d2d4",
+        "keyboardFugueExposition/expression-100":
+            "b9d0cd67068f87b6aa2cdca3cbb2eefa54f3999b78fe900e4e323ea971d4f2ce",
+        "articulationAndSlurStudy/literal": "9892001882eaed6f8f42cb43c0ac097c824b9575ad2280b430609170a85a4151",
+        "articulationAndSlurStudy/expression-100": "2c93bee833576b25efa2d028f79487af92e4aa52931a9bd984b1be3e7de4ae81",
+        "melodyOverAccompaniment/expression-off": "c216e6e05cf4429ae9edd6b17cbe31e3d8daa6d2ebd734a2f335134940d3f5c8",
+        "melodyOverAccompaniment/expression-100": "8899911065240758f6d9f61abfe9c0c73aea2b1160c8d357e68c29f5b9870bf4"
     ]
 
     private static let frozenCases: [(name: String, data: Data, settings: RealizationSettings)] = [
@@ -81,6 +116,70 @@ final class PerformanceTimelinePurityTests: XCTestCase {
             RealizationSettings(
                 humanization: HumanizationSettings(isEnabled: true, intensity: 100)
             )
+        ),
+        // Phrase expression (REQ-003) is a second realization stage with its
+        // own bypass, so the frozen set covers both of its states and not only
+        // the default. Without the `expression-off` row, a change that quietly
+        // made the bypass stop bypassing would move no digest here at all.
+        (
+            "expressiveKeyboardPiece/expression-off",
+            MusicXMLScoreFixtures.expressiveKeyboardPiece(),
+            .humanizedWithoutExpression
+        ),
+        (
+            "expressiveKeyboardPiece/expression-100",
+            MusicXMLScoreFixtures.expressiveKeyboardPiece(),
+            RealizationSettings(expression: ExpressionSettings(isEnabled: true, amount: 100))
+        ),
+        // Expression alone, with the noise switched off: the only thing
+        // separating these bytes from the literal reading of the score is the
+        // phrasing, so this digest moves when — and only when — the phrasing
+        // itself changes.
+        (
+            "stringQuartetMovement/expression-only",
+            MusicXMLScoreFixtures.stringQuartetMovement(),
+            RealizationSettings(humanization: .off, expression: .standard)
+        ),
+        (
+            "keyboardFugueExposition/expression-100",
+            MusicXMLScoreFixtures.keyboardFugueExposition(),
+            RealizationSettings(
+                humanization: HumanizationSettings(isEnabled: true, intensity: 100),
+                expression: ExpressionSettings(isEnabled: true, amount: 100)
+            )
+        ),
+        // Articulation (EXP002) is always on, so its reading has to be frozen in
+        // the bypass state — where no other stage is running and nothing else
+        // could be moving these bytes. The study writes a staccato measure, an
+        // accent measure, a tenuto measure and a slurred measure, so one digest
+        // covers the shortening table, the détaché default, the legato overlap
+        // and the rule that a written mark beats the slur.
+        (
+            "articulationAndSlurStudy/literal",
+            MusicXMLScoreFixtures.articulationAndSlurStudy(),
+            .literal
+        ),
+        (
+            "articulationAndSlurStudy/expression-100",
+            MusicXMLScoreFixtures.articulationAndSlurStudy(),
+            RealizationSettings(
+                humanization: .off,
+                expression: ExpressionSettings(isEnabled: true, amount: 100)
+            )
+        ),
+        // Per-passage line balance (EXP002) on the fixture built for it: a melody
+        // over an accompaniment, where a leader is found in every passage. The
+        // `expression-off` companion is the bypass — the balance term has to be
+        // absent from it, and a balance that stopped being guarded would move it.
+        (
+            "melodyOverAccompaniment/expression-off",
+            MusicXMLScoreFixtures.melodyOverAccompaniment(),
+            .humanizedWithoutExpression
+        ),
+        (
+            "melodyOverAccompaniment/expression-100",
+            MusicXMLScoreFixtures.melodyOverAccompaniment(),
+            RealizationSettings(expression: ExpressionSettings(isEnabled: true, amount: 100))
         )
     ]
 
@@ -112,7 +211,9 @@ final class PerformanceTimelinePurityTests: XCTestCase {
         "PerformanceRealizer.swift",
         "PerformanceLineRealization.swift",
         "PerformanceOrnaments.swift",
-        "PerformanceHumanization.swift"
+        "PerformanceHumanization.swift",
+        "PerformancePhrasing.swift",
+        "PerformanceBalance.swift"
     ]
 
     /// APIs whose result depends on when, where, or on which run the code is

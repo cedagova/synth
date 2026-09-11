@@ -228,6 +228,59 @@ final class AudioExportTests: XCTestCase {
         }
     }
 
+    /// REQ-003's "export equals live", for the expression setting: each state
+    /// exports to what live playback of that same state renders, and the two
+    /// states do not export to the same file.
+    ///
+    /// The same shape as the humanization case above, and a separate test for
+    /// the reason that one is separate from the plain equality test: a feature
+    /// that reached the realizer but not the export would pass every
+    /// single-state comparison.
+    func testExpressionOffAndOnExportDifferentlyAndEachMatchesItsOwnLivePath() throws {
+        let musicXML = MusicXMLScoreFixtures.keyboardFugueExposition(measureCount: 4)
+        let plain = try AudioRenderFixtures.timeline(
+            musicXML, settings: .humanizedWithoutExpression
+        )
+        let shaped = try AudioRenderFixtures.timeline(
+            musicXML,
+            settings: RealizationSettings(
+                expression: ExpressionSettings(isEnabled: true, amount: 100)
+            )
+        )
+
+        XCTAssertNotEqual(
+            plain.lines.flatMap { $0.events.map { [$0.onsetMicroseconds, Int64($0.velocity)] } },
+            shaped.lines.flatMap { $0.events.map { [$0.onsetMicroseconds, Int64($0.velocity)] } },
+            "The fixture realized identically both ways, so this test proves nothing."
+        )
+
+        let settings = AudioExportSettings.cdQuality
+        let plainURL = destination("expression-off.wav")
+        let shapedURL = destination("expression-on.wav")
+        try AudioExporter(request: request(plain, settings: settings)).run(to: plainURL)
+        try AudioExporter(request: request(shaped, settings: settings)).run(to: shapedURL)
+
+        XCTAssertNotEqual(
+            try Data(contentsOf: plainURL), try Data(contentsOf: shapedURL),
+            "Expression off and on exported to identical files."
+        )
+
+        for (url, timeline, label) in [
+            (plainURL, plain, "expression off"), (shapedURL, shaped, "expression on")
+        ] {
+            let live = try PlaybackEngine.renderTimelineOffline(
+                timeline, sampleRate: settings.sampleRate.hertz
+            )
+            let writer = AudioFileWriter(settings: settings, frameCount: Int64(live.frameCount))
+            let expected = writer.encode(left: live.left[...], right: live.right[...])
+            let exported = try Data(contentsOf: url)
+            XCTAssertEqual(
+                exported.suffix(from: writer.header().count), expected,
+                "The \(label) export does not match live playback of the \(label) state."
+            )
+        }
+    }
+
     // MARK: Format and quality (REQ-026's "CD quality or better")
 
     /// The settings surface cannot express anything below CD quality.

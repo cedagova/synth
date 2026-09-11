@@ -107,6 +107,9 @@ final class AssignmentModel {
     /// which owns re-realization. Installed by `PlaybackModel`.
     var onHumanizationLoaded: ((HumanizationSettings) -> Void)?
 
+    /// The same for the preset's whole-piece phrase expression.
+    var onExpressionLoaded: ((ExpressionSettings) -> Void)?
+
     /// The same for the preset's whole-piece tempo.
     var onTempoLoaded: ((Int) -> Void)?
 
@@ -212,6 +215,7 @@ final class AssignmentModel {
             lines = performance.lines
             keepSelectionValid()
             onHumanizationLoaded?(preset.content.humanization)
+            onExpressionLoaded?(preset.content.expression)
             onTempoLoaded?(preset.content.tempoPercent)
 
             if applyingToEngine { applyToEngine(performance) }
@@ -790,6 +794,18 @@ final class AssignmentModel {
         }
     }
 
+    /// Stores the whole-piece phrase expression on the active preset, like any
+    /// other custom value the preset holds (REQ-024). Auto-saved.
+    func saveExpression(_ settings: ExpressionSettings) {
+        guard let preset = activePreset, preset.content.expression != settings else { return }
+        do {
+            activePreset = try store.presets.setExpression(settings, in: preset)
+            presets = try store.presets.presets(forPieceID: preset.pieceID)
+        } catch {
+            alert = AssignmentAlert(title: "Could not save the expression change", error)
+        }
+    }
+
     /// Stores the whole-piece humanization on the active preset, like any
     /// other custom value the preset holds (REQ-024). Auto-saved.
     func saveHumanization(_ settings: HumanizationSettings) {
@@ -987,6 +1003,7 @@ final class AssignmentModel {
             lines = performance.lines
             keepSelectionValid()
             onHumanizationLoaded?(preset.content.humanization)
+            onExpressionLoaded?(preset.content.expression)
             onTempoLoaded?(preset.content.tempoPercent)
             applyToEngine(performance)
         } catch {

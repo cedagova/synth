@@ -420,6 +420,92 @@ final class AppModel {
             return
         }
         openPlayback(for: piece)
+        runLaunchPerformanceScriptIfRequested()
+        #endif
+    }
+
+    /// The second half of that automation:
+    /// `SYNTH_PERFORMANCE_SCRIPT_ON_LAUNCH=seek:20,expression:off,expression:on,expression:100`
+    /// applies each step to the piece just opened, through the very
+    /// `PlaybackModel` methods the Performance group's controls call, dwelling
+    /// between them so a screen capture can catch each state, and logging what
+    /// it did and what happened to it.
+    ///
+    /// **It exists for the reason the piece hook above exists, and has the same
+    /// one limitation.** A machine that grants no assistive access cannot be
+    /// made to deliver a synthetic click to a switch, so this drives the model
+    /// the switch drives: the real app, the real library, the real audio graph,
+    /// the real re-realization and the real preset write, in the real window.
+    /// What it does not exercise is AppKit's hit-testing of the control itself,
+    /// and a smoke record that used this should say so rather than claim a
+    /// click.
+    ///
+    /// Steps are `name:value`, comma-separated:
+    /// `expression:on|off|<0…100>`, `humanize:on|off|<0…100>`,
+    /// `tempo:<50…150>`, `seek:<seconds>`. `SYNTH_PERFORMANCE_SCRIPT_DWELL`
+    /// sets the pause between them in seconds (default 4).
+    private func runLaunchPerformanceScriptIfRequested() {
+        #if DEBUG
+        let environment = ProcessInfo.processInfo.environment
+        guard let script = environment["SYNTH_PERFORMANCE_SCRIPT_ON_LAUNCH"],
+              !script.isEmpty, let playback else { return }
+        let dwell = environment["SYNTH_PERFORMANCE_SCRIPT_DWELL"].flatMap(Double.init) ?? 4
+
+        Task { @MainActor in
+            var waited = 0
+            while !playback.isReady, waited < 600 {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                waited += 1
+            }
+            guard playback.isReady else {
+                return NSLog("Synth: the piece never became ready; the script did not run")
+            }
+
+            for step in script.split(separator: ",") {
+                let parts = step.split(separator: ":", maxSplits: 1).map {
+                    $0.trimmingCharacters(in: .whitespaces)
+                }
+                guard parts.count == 2 else { continue }
+                let before = playback.positionMicroseconds
+
+                switch (parts[0], parts[1]) {
+                case ("seek", let value):
+                    playback.seek(toMicroseconds: Int64((Double(value) ?? 0) * 1_000_000))
+                case ("expression", "on"), ("expression", "off"):
+                    await playback.setExpressionEnabled(parts[1] == "on")
+                case ("expression", let value):
+                    playback.expressionAmountDraft = Double(value) ?? 0
+                    await playback.commitExpressionAmount()
+                case ("humanize", "on"), ("humanize", "off"):
+                    await playback.setHumanizationEnabled(parts[1] == "on")
+                case ("humanize", let value):
+                    playback.intensityDraft = Double(value) ?? 0
+                    await playback.commitIntensity()
+                case ("tempo", let value):
+                    await playback.setTempoPercent(Int(value) ?? 100)
+                default:
+                    NSLog("Synth: the script step %@ means nothing; skipped", step.description)
+                    continue
+                }
+
+                NSLog(
+                    "Synth script: %@ | position %lld -> %lld | expression %@ %d | "
+                        + "humanize %@ %d | preset %@ revision %d | status: %@",
+                    step.description,
+                    before,
+                    playback.positionMicroseconds,
+                    playback.expression.isEnabled ? "on" : "off",
+                    playback.expression.amount,
+                    playback.humanization.isEnabled ? "on" : "off",
+                    playback.humanization.intensity,
+                    playback.assignment.activePreset?.name ?? "none",
+                    playback.assignment.activePreset?.revision ?? 0,
+                    playback.statusMessage ?? ""
+                )
+                try? await Task.sleep(nanoseconds: UInt64(max(0, dwell) * 1_000_000_000))
+            }
+            NSLog("Synth script: finished")
+        }
         #endif
     }
 

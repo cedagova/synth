@@ -10,8 +10,9 @@ import XCTest
 /// the raw line sum, and a render that is byte-identical between two runs and
 /// two host buffer sizes.
 ///
-/// The true peak is measured by `MasterStage.truePeak`, a 64-tap windowed-sinc
-/// oversampler that shares no code with the render thread's four-tap detector.
+/// The true peak is measured by `MasterStage.truePeak`, a polyphase windowed-sinc
+/// oversampler (sixteen taps per phase across a four-phase bank) that shares no
+/// code with the render thread's four-tap detector.
 /// That separation is the point: a ceiling measured with its own estimator would
 /// agree with itself whatever it did.
 final class MasterStageRenderTests: XCTestCase {

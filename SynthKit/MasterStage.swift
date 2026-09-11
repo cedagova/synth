@@ -485,9 +485,10 @@ extension MasterStage {
     ///
     /// Shares no code with the render thread's detector on purpose: a ceiling
     /// measured with its own estimator would agree with itself whatever it did.
-    /// This is the textbook version — a 64-tap windowed-sinc interpolator, a
-    /// different filter of a different length — so the two have to agree about
-    /// the signal rather than about the method.
+    /// This is the textbook version — a polyphase windowed-sinc interpolator,
+    /// sixteen taps per phase across a four-phase bank, a different filter of a
+    /// different length — so the two have to agree about the signal rather than
+    /// about the method.
     public static func truePeak(_ samples: [Float]) -> Float {
         guard !samples.isEmpty else { return 0 }
         let oversample = 4

@@ -442,9 +442,14 @@ final class AppModel {
     ///
     /// Steps are `name:value`, comma-separated:
     /// `expression:on|off|<0…100>`, `humanize:on|off|<0…100>`,
-    /// `master:on|off`, `tempo:<50…150>`, `seek:<seconds>`.
+    /// `master:on|off`, `tempo:<50…150>`, `seek:<seconds>`, `play:on|off`.
     /// `SYNTH_PERFORMANCE_SCRIPT_DWELL` sets the pause between them in seconds
     /// (default 4).
+    ///
+    /// `play` exists because MST001's row claims something the others do not:
+    /// that changing it does *not* interrupt the music. A script that only ever
+    /// drove a stopped transport could not show that, and the position this logs
+    /// on either side of each step is what does.
     private func runLaunchPerformanceScriptIfRequested() {
         #if DEBUG
         let environment = ProcessInfo.processInfo.environment
@@ -477,6 +482,10 @@ final class AppModel {
                 case ("expression", let value):
                     playback.expressionAmountDraft = Double(value) ?? 0
                     await playback.commitExpressionAmount()
+                case ("play", "off"):
+                    playback.pause()
+                case ("play", _):
+                    playback.play()
                 case ("master", "on"), ("master", "off"):
                     await playback.setProducedMasterEnabled(parts[1] == "on")
                 case ("humanize", "on"), ("humanize", "off"):

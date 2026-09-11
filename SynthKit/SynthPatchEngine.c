@@ -404,8 +404,36 @@ void synth_patch_voice_note_on(void *opaque, int32_t midiNoteNumber, int32_t vel
     if (slot->rng == 0) { slot->rng = 0x2545F4914F6CDD1DULL; }
     slot->noteRandom = synth_patch_random(&slot->rng);
 
-    /* Equal temperament, A4 = 440 Hz. */
-    const double frequency = 440.0 * pow(2.0, ((double)midiNoteNumber - 69.0) / 12.0);
+    /*
+     Equal temperament at A4 = 440 Hz, times the program's tuning (TUN001,
+     REQ-006).
+
+     The equal-temperament line is deliberately left exactly as it was and the
+     tuning applied as one multiply after it, rather than folded into the
+     exponent. Two reasons, and both are about what the default costs:
+
+       - at default tuning the ratio is literally 1.0, and multiplying a double
+         by 1.0 is the identity in IEEE-754 — so this note's frequency is the
+         same bit pattern it was before this engine knew what a temperament is.
+         REQ-006's bit-identity clause is therefore a property of the
+         arithmetic, not a tolerance in a test; and
+       - one table lookup and one multiply is all the render thread pays. No
+         allocation, no lock, and no second `pow` — the same single `pow` this
+         line has always called.
+
+     The pitch class is taken from the played note, so a table entry means "how
+     this degree of the chromatic scale is tuned" however many octaves of it the
+     piece uses. The double modulo is not superstition: C's `%` keeps the sign of
+     its left operand, and this function does not validate its note number (the
+     editor's live notes reach it too), so a negative one would index before the
+     table. Two integer operations is a cheap price for an out-of-bounds read on
+     the audio thread being impossible rather than merely unlikely.
+    */
+    const int32_t pitchClass =
+        ((midiNoteNumber % SYNTH_TUNING_PITCH_CLASS_COUNT) + SYNTH_TUNING_PITCH_CLASS_COUNT)
+        % SYNTH_TUNING_PITCH_CLASS_COUNT;
+    const double frequency = 440.0 * pow(2.0, ((double)midiNoteNumber - 69.0) / 12.0)
+        * state->tuning.ratioByPitchClass[pitchClass];
     slot->noteFrequency = frequency;
 
     for (int32_t index = 0; index < SYNTH_PATCH_OSCILLATOR_COUNT; index++) {

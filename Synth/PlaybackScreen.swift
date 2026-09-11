@@ -754,6 +754,53 @@ private struct PerformanceSettingsGroup: View {
                 )
             }
 
+            // Tuning (REQ-006, D65-1): two pickers and no third control — which
+            // temperament, and what A is. The mechanism underneath is a
+            // twelve-entry table of ratios applied by both voice engines at
+            // note-on; nothing about that is a taste surface, so nothing about it
+            // is here.
+            //
+            // Two rows rather than one with two pickers side by side, because they
+            // are two independent facts and the group's name column is what makes
+            // each of them readable: "Tuning: Werckmeister III" and "Pitch: A=415"
+            // each state one thing. Each row keeps the group's alignment by way of
+            // the switch placeholder, exactly as Tempo does.
+            PerformanceSettingRow(name: "Tuning") {
+                PerformanceSettingSwitch.placeholder
+                PerformanceSettingPicker(
+                    selection: Binding(
+                        get: { model.tuning.temperament },
+                        set: { choice in Task { await model.setTemperament(choice) } }
+                    ),
+                    label: "Temperament",
+                    spokenValue: model.tuning.temperament.accessibilityDescription,
+                    hint: "How the twelve notes of the octave are spaced. Equal is the modern "
+                        + "standard; Werckmeister III is a baroque well temperament. Applies to "
+                        + "exports too. Saved with the preset.",
+                    isEnabled: model.isReady,
+                    choices: Temperament.allCases,
+                    title: \.displayName
+                )
+            }
+
+            PerformanceSettingRow(name: "Pitch") {
+                PerformanceSettingSwitch.placeholder
+                PerformanceSettingPicker(
+                    selection: Binding(
+                        get: { model.tuning.referencePitch },
+                        set: { choice in Task { await model.setReferencePitch(choice) } }
+                    ),
+                    label: "Reference pitch",
+                    spokenValue: model.tuning.referencePitch.accessibilityDescription,
+                    hint: "What the A above middle C is tuned to, and with it the whole piece. "
+                        + "440 is modern concert pitch; 415 is baroque pitch, about a semitone "
+                        + "lower. Applies to exports too. Saved with the preset.",
+                    isEnabled: model.isReady,
+                    choices: ReferencePitch.allCases,
+                    title: \.displayName
+                )
+            }
+
             // Tempo (REQ-009): the file's tempo at 100, half at 50, half again
             // as fast at 150. Here because it is the same kind of setting —
             // preset-stored, whole-piece, re-realized on change — and the one
@@ -856,6 +903,56 @@ private struct PerformanceSettingSwitch: View {
             }
         }
         .frame(width: Self.slotWidth, alignment: .leading)
+    }
+}
+
+/// The choice control of a row: one pop-up menu over a closed set of options.
+///
+/// The third primitive of the group, beside the switch and the slider, and drawn
+/// the same way: it owns its own width so the rows that have one line up with the
+/// rows that do not, and it says nothing about layout beyond that. The two tuning
+/// rows (REQ-006) are its only callers today.
+///
+/// **Committed on selection, unlike the slider.** A slider passes through fifty
+/// intermediate values on the way to the one the owner wants, and each of those
+/// would rebuild the program; a menu has no intermediate values, so there is
+/// nothing to defer and `commit` would be a second click for no reason.
+///
+/// Generic over the choice rather than over a list of strings, so the caller
+/// cannot hand it an option that is not one of the model's cases — the picker and
+/// the setting stay the same closed set by construction.
+private struct PerformanceSettingPicker<Choice: Hashable>: View {
+    @Binding var selection: Choice
+    let label: String
+
+    /// What VoiceOver reads as the value. The whole sentence, because the visible
+    /// title is abbreviated to fit the row and "A=415" is not something to read
+    /// aloud.
+    let spokenValue: String
+
+    let hint: String
+    let isEnabled: Bool
+    let choices: [Choice]
+    let title: KeyPath<Choice, String>
+
+    /// Wide enough for "Werckmeister III" plus the menu's own chevron, and fixed
+    /// so the two tuning rows line up with each other rather than each sizing
+    /// itself to its longest option.
+    private static var width: CGFloat { 194 }
+
+    var body: some View {
+        Picker(label, selection: $selection) {
+            ForEach(choices, id: \.self) { choice in
+                Text(choice[keyPath: title]).tag(choice)
+            }
+        }
+        .labelsHidden()
+        .controlSize(.small)
+        .frame(width: Self.width)
+        .disabled(!isEnabled)
+        .accessibilityLabel(label)
+        .accessibilityValue(spokenValue)
+        .accessibilityHint(hint)
     }
 }
 

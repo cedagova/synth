@@ -30,7 +30,10 @@ public struct SilentVoiceProvider: LineVoiceProvider {
     /// Nothing to ring out.
     public var releaseTailSeconds: Double { 0 }
 
-    public func makeVoice(sampleRate: Double) -> LineVoiceInstance {
+    /// `tuning` is ignored, and that is the only honest thing to do with it: this
+    /// voice has no pitch to temper. A silent line in a retuned ensemble is
+    /// silent.
+    public func makeVoice(sampleRate: Double, tuning: TuningSettings) -> LineVoiceInstance {
         var vtable = SynthLineVoice()
         sample_voice_fill_silence(&vtable)
         // Stateless: the C side installs six callbacks that hold no pointer, so

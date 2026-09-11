@@ -33,7 +33,22 @@ public protocol LineVoiceProvider: Sendable {
 
     /// Build one voice. Called once per line, on the control thread, before
     /// rendering starts. Allocate everything the voice will ever need here.
-    func makeVoice(sampleRate: Double) -> LineVoiceInstance
+    ///
+    /// `tuning` is the program's temperament and reference pitch (TUN001,
+    /// REQ-006). It arrives here rather than through a setter on the built voice
+    /// because tuning is fixed for a program's life: a voice bakes it in when it
+    /// is built, and changing it rebuilds the program — the same edge a sound
+    /// change already uses.
+    ///
+    /// **The provider decides whether it applies.** Not the caller, and not
+    /// arithmetic in an engine: an instrument whose samples are pinned to the
+    /// pitch they were recorded at cannot honestly be retuned, and the capability
+    /// model is the one place that judgement lives
+    /// (`InstrumentCapabilities.isSupported(.tuning)`) — exactly as it is for the
+    /// per-instrument tuning offset. So a mixed ensemble retunes its pitched lines
+    /// and leaves the rest alone, without `RenderProgram` knowing what a sample
+    /// is.
+    func makeVoice(sampleRate: Double, tuning: TuningSettings) -> LineVoiceInstance
 
     /// How long this sound can still be heard after its last note ends.
     ///
@@ -65,6 +80,18 @@ public protocol LineVoiceProvider: Sendable {
 }
 
 extension LineVoiceProvider {
+    /// One voice at the default tuning — equal temperament at A=440.
+    ///
+    /// For a caller with no opinion about tuning, which is most of them: a DSP
+    /// measurement about an oscillator or a velocity layer is not a statement
+    /// about temperament, and writing `tuning: .standard` at each of those call
+    /// sites would bury the handful that genuinely are. The default is the
+    /// identity, so this is the behaviour every one of those callers had before
+    /// TUN001 existed.
+    public func makeVoice(sampleRate: Double) -> LineVoiceInstance {
+        makeVoice(sampleRate: sampleRate, tuning: .standard)
+    }
+
     /// Two seconds, which is what the engine used before any sound had an
     /// opinion. Ample for a short release, and the right answer for a sound
     /// that genuinely does not know.

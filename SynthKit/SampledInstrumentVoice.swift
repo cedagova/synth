@@ -135,7 +135,21 @@ public struct SampledInstrumentVoiceProvider: LineVoiceProvider {
         return min(max(scaled, 0), RenderProgram.maximumReleaseTailSeconds)
     }
 
-    public func makeVoice(sampleRate: Double) -> LineVoiceInstance {
+    /// True when this instrument can honestly be retuned at all (REQ-021's rule,
+    /// REQ-006's exemption).
+    ///
+    /// **One gate, two settings.** The per-instrument tuning offset and the
+    /// program's temperament are the same question asked twice — "does this
+    /// instrument follow the key, or is every sample pinned to the pitch it was
+    /// recorded at?" — so they read the same answer from the same place rather
+    /// than each deciding for itself. An instrument the capability model marks
+    /// unpitched has its offset zeroed by `InstrumentCapabilities.bounded` and its
+    /// tuning table left at the identity here, which is what makes a mixed
+    /// ensemble retune its pitched lines and leave its percussion exactly where
+    /// it was.
+    public var canBeRetuned: Bool { capabilities.isSupported(.tuning) }
+
+    public func makeVoice(sampleRate: Double, tuning: TuningSettings) -> LineVoiceInstance {
         var vtable = SynthLineVoice()
         let state = sample_voice_create(
             instrument.renderData, &vtable, sampleRate, renderSeed
@@ -165,6 +179,21 @@ public struct SampledInstrumentVoiceProvider: LineVoiceProvider {
         // exactly the same reason.
         var current = (live?.currentCustomization ?? customization).renderCustomization
         sample_voice_set_customization(state, &current)
+
+        // The program's tuning (TUN001, REQ-006), for an instrument that can
+        // honestly take it. An unpitched one keeps the identity table
+        // `sample_voice_create` installed, so it renders exactly as it did — and
+        // it keeps it by this gate rather than by arithmetic in the engine, which
+        // is what makes the exemption the same fact as the offset's.
+        //
+        // The two compose multiplicatively and neither bounds the other (P65-4):
+        // this table scales the rate a slot starts at, and the customization's own
+        // ratio scales that rate again every block.
+        if canBeRetuned {
+            var table = tuning.renderTable
+            sample_voice_set_tuning(state, &table)
+        }
+
         live?.register(state: UnsafeMutableRawPointer(state), sampleRate: sampleRate)
 
         // The instrument is captured so the mappings the render thread reads

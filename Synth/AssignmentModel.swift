@@ -113,6 +113,10 @@ final class AssignmentModel {
     /// The active preset's produced master, as loaded (MST001, D65-3).
     var onProducedMasterLoaded: ((ProducedMasterSettings) -> Void)?
 
+    /// The active preset's temperament and reference pitch, as loaded (TUN001,
+    /// REQ-006).
+    var onTuningLoaded: ((TuningSettings) -> Void)?
+
     /// The same for the preset's whole-piece tempo.
     var onTempoLoaded: ((Int) -> Void)?
 
@@ -220,6 +224,7 @@ final class AssignmentModel {
             onHumanizationLoaded?(preset.content.humanization)
             onExpressionLoaded?(preset.content.expression)
             onProducedMasterLoaded?(preset.content.producedMaster)
+            onTuningLoaded?(preset.content.tuning)
             onTempoLoaded?(preset.content.tempoPercent)
 
             if applyingToEngine { applyToEngine(performance) }
@@ -822,6 +827,18 @@ final class AssignmentModel {
         }
     }
 
+    /// Stores the whole-piece tuning on the active preset, like any other custom
+    /// value the preset holds (REQ-024, REQ-006). Auto-saved.
+    func saveTuning(_ settings: TuningSettings) {
+        guard let preset = activePreset, preset.content.tuning != settings else { return }
+        do {
+            activePreset = try store.presets.setTuning(settings, in: preset)
+            presets = try store.presets.presets(forPieceID: preset.pieceID)
+        } catch {
+            alert = AssignmentAlert(title: "Could not save the tuning change", error)
+        }
+    }
+
     /// Stores the whole-piece humanization on the active preset, like any
     /// other custom value the preset holds (REQ-024). Auto-saved.
     func saveHumanization(_ settings: HumanizationSettings) {
@@ -1021,6 +1038,7 @@ final class AssignmentModel {
             onHumanizationLoaded?(preset.content.humanization)
             onExpressionLoaded?(preset.content.expression)
             onProducedMasterLoaded?(preset.content.producedMaster)
+            onTuningLoaded?(preset.content.tuning)
             onTempoLoaded?(preset.content.tempoPercent)
             applyToEngine(performance)
         } catch {

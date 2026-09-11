@@ -403,6 +403,19 @@ public struct PresetContent: Equatable, Sendable {
     /// play what playback played (REQ-026).
     public var producedMaster: ProducedMasterSettings
 
+    /// Whole-piece tuning (REQ-006): a temperament and a reference pitch. Stored
+    /// beside the produced master and for the same reason — it is a property of
+    /// the whole performance, and an export must play what playback played
+    /// (REQ-026).
+    ///
+    /// **The per-instrument tuning offset is deliberately not here and is not
+    /// replaced by this** (P65-4). That offset belongs to one sound, travels with
+    /// the variant in the library, and answers a different question — "this cello
+    /// is a little sharp". This answers "the piece is in Werckmeister III at
+    /// A=415". The two multiply; neither clamps the other; and nothing about the
+    /// stored shape of either changed.
+    public var tuning: TuningSettings
+
     /// Whole-piece tempo, as a percentage of what the score marks: 100 is the
     /// file's own tempo, 50 half speed, 150 half again as fast. Stored with
     /// the preset for the reason humanization is — it shapes the one
@@ -417,12 +430,14 @@ public struct PresetContent: Equatable, Sendable {
         humanization: HumanizationSettings = .standard,
         expression: ExpressionSettings = .standard,
         producedMaster: ProducedMasterSettings = .standard,
+        tuning: TuningSettings = .standard,
         tempoPercent: Int = TempoMap.defaultTempoPercent
     ) {
         self.lines = lines
         self.humanization = humanization
         self.expression = expression
         self.producedMaster = producedMaster
+        self.tuning = tuning
         self.tempoPercent = Self.clampedTempo(tempoPercent)
     }
 
@@ -456,11 +471,11 @@ public struct PresetContent: Equatable, Sendable {
 
 extension PresetContent: Codable {
     private enum CodingKeys: String, CodingKey {
-        case lines, humanization, expression, producedMaster, tempoPercent
+        case lines, humanization, expression, producedMaster, tuning, tempoPercent
     }
 
-    /// `humanization`, `expression`, `producedMaster` and `tempoPercent` are
-    /// additive at the same document version, the `LineMixerState.roomSend`
+    /// `humanization`, `expression`, `producedMaster`, `tuning` and `tempoPercent`
+    /// are additive at the same document version, the `LineMixerState.roomSend`
     /// precedent: a document from before a field existed reads as the standard
     /// setting — and the file's own tempo — rather than failing.
     ///
@@ -469,6 +484,17 @@ extension PresetContent: Codable {
     /// expression **on** at the default amount and the produced master **on**,
     /// so every piece already in the library gains both features on its next
     /// open without a migration pass.
+    ///
+    /// **`tuning` is the opposite case, and deliberately.** Its standard value is
+    /// the identity — equal temperament at A=440 — so a stored preset that has
+    /// never heard of this field opens sounding exactly as it did, which is what
+    /// REQ-006 requires of the default. A temperament is a statement about a
+    /// performance, and inferring one the owner never made would be a change to
+    /// every piece in the library.
+    ///
+    /// A temperament *name* this build does not recognise is a third case and is
+    /// handled inside `TuningSettings.init(from:)`: it reads as equal temperament
+    /// and carries its own sentence, rather than failing the document.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
@@ -481,6 +507,9 @@ extension PresetContent: Codable {
             ) ?? .standard,
             producedMaster: try container.decodeIfPresent(
                 ProducedMasterSettings.self, forKey: .producedMaster
+            ) ?? .standard,
+            tuning: try container.decodeIfPresent(
+                TuningSettings.self, forKey: .tuning
             ) ?? .standard,
             tempoPercent: try container.decodeIfPresent(Int.self, forKey: .tempoPercent)
                 ?? TempoMap.defaultTempoPercent

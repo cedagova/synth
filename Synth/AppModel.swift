@@ -442,7 +442,8 @@ final class AppModel {
     ///
     /// Steps are `name:value`, comma-separated:
     /// `expression:on|off|<0…100>`, `humanize:on|off|<0…100>`,
-    /// `master:on|off`, `tempo:<50…150>`, `seek:<seconds>`, `play:on|off`.
+    /// `master:on|off`, `temperament:equal|werckmeisterIII`,
+    /// `pitch:a440|a415`, `tempo:<50…150>`, `seek:<seconds>`, `play:on|off`.
     /// `SYNTH_PERFORMANCE_SCRIPT_DWELL` sets the pause between them in seconds
     /// (default 4).
     ///
@@ -495,6 +496,18 @@ final class AppModel {
                     await playback.commitIntensity()
                 case ("tempo", let value):
                     await playback.setTempoPercent(Int(value) ?? 100)
+                case ("temperament", let value):
+                    guard let choice = Temperament(rawValue: value) else {
+                        NSLog("Synth: %@ is not a temperament; skipped", value)
+                        continue
+                    }
+                    await playback.setTemperament(choice)
+                case ("pitch", let value):
+                    guard let choice = ReferencePitch(rawValue: value) else {
+                        NSLog("Synth: %@ is not a reference pitch; skipped", value)
+                        continue
+                    }
+                    await playback.setReferencePitch(choice)
                 default:
                     NSLog("Synth: the script step %@ means nothing; skipped", step.description)
                     continue
@@ -502,7 +515,8 @@ final class AppModel {
 
                 NSLog(
                     "Synth script: %@ | position %lld -> %lld | expression %@ %d | "
-                        + "humanize %@ %d | master %@ | preset %@ revision %d | status: %@",
+                        + "humanize %@ %d | master %@ | tuning %@ %@ | "
+                        + "preset %@ revision %d | status: %@",
                     step.description,
                     before,
                     playback.positionMicroseconds,
@@ -511,6 +525,8 @@ final class AppModel {
                     playback.humanization.isEnabled ? "on" : "off",
                     playback.humanization.intensity,
                     playback.producedMaster.isEnabled ? "on" : "off",
+                    playback.tuning.temperament.rawValue,
+                    playback.tuning.referencePitch.rawValue,
                     playback.assignment.activePreset?.name ?? "none",
                     playback.assignment.activePreset?.revision ?? 0,
                     playback.statusMessage ?? ""

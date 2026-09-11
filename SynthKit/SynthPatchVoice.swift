@@ -92,7 +92,7 @@ public struct SynthPatchVoiceProvider: LineVoiceProvider {
         return min(tail, RenderProgram.maximumReleaseTailSeconds)
     }
 
-    public func makeVoice(sampleRate: Double) -> LineVoiceInstance {
+    public func makeVoice(sampleRate: Double, tuning: TuningSettings) -> LineVoiceInstance {
         // Sized and aligned by the C core so the layout stays private to it.
         let byteCount = synth_patch_voice_state_size()
         let alignment = synth_patch_voice_state_alignment()
@@ -104,6 +104,18 @@ public struct SynthPatchVoiceProvider: LineVoiceProvider {
         // `SynthPatchVoiceState` is incomplete in the public header on purpose,
         // so it crosses into Swift as an opaque pointer.
         synth_patch_voice_init(OpaquePointer(raw), &vtable, sampleRate, &config)
+
+        // The program's tuning (TUN001, REQ-006), seated after `init` has
+        // installed the default and before the voice can sound.
+        //
+        // **A synth patch is always pitched, so there is no capability gate
+        // here.** The gate exists for sampled instruments, where "retuning" can
+        // be a thing the files cannot honestly do; an oscillator derives its
+        // frequency from the note number by construction and has no recorded
+        // pitch to be pinned to. A patch that renders percussion does so by
+        // shaping noise, whose pitch class is not what makes it what it is.
+        var table = tuning.renderTable
+        synth_patch_voice_set_tuning(OpaquePointer(raw), &table)
 
         // Registered before the voice is handed out and unregistered before its
         // storage is freed, both under the channel's lock, so a live edit can

@@ -377,6 +377,42 @@ static void sample_voice_start_region(SampleVoiceState *state,
     if (waveform->sampleRate > 0.0 && state->sampleRate > 0.0) {
         increment *= waveform->sampleRate / state->sampleRate;
     }
+
+    /*
+     The program's tuning (TUN001, REQ-006): one multiply, by the ratio for this
+     key's pitch class.
+
+     **Where a reference-pitch shift is measured from.** This sampler has no
+     absolute pitch of its own — a rate is relative to the region's recorded key
+     centre — so "A=415" can only mean "415/440 of what the library records A as".
+     That is exactly the plan's rule (P65-4): a reference shift is relative to the
+     sampled library's own recorded standard, and a library recorded at something
+     other than 440 is out of scope. The ratio arrives already containing it.
+
+     **Applied here, not in `render`, and not scaled by `pitch_keytrack`.** Here,
+     because the tuning of the piece is fixed for the program's life and a slot's
+     rate is the one place it can be paid for once per note instead of once per
+     frame. Unscaled by keytrack, because the customization's tuning offset is
+     unscaled too, and the two have to mean the same thing; an instrument whose
+     samples are pinned to their recorded pitch is exempt from this table exactly
+     as it is exempt from that offset, by the capability gate one level up
+     (`InstrumentCapabilities.isSupported(.tuning)`), not by arithmetic here.
+
+     At default tuning the ratio is literally 1.0, so this line leaves
+     `increment` as the identical double it was before TUN001 — which is what
+     makes "default tuning renders bit-identical to pre-feature output" a
+     property of the arithmetic rather than a tolerance. Before the clamp, so the
+     clamp still bounds the rate that is actually used.
+
+     C's `%` keeps the sign of its left operand and this function is reached with
+     whatever note number the caller had; the double modulo makes an
+     out-of-bounds read impossible rather than merely unlikely.
+    */
+    const int32_t pitchClass =
+        ((key % SYNTH_TUNING_PITCH_CLASS_COUNT) + SYNTH_TUNING_PITCH_CLASS_COUNT)
+        % SYNTH_TUNING_PITCH_CLASS_COUNT;
+    increment *= state->tuning.ratioByPitchClass[pitchClass];
+
     /* A ratio outside this range is a corrupt keycenter, not music. */
     slot->increment = increment < 0.000244140625 ? 0.000244140625
                     : (increment > 64.0 ? 64.0 : increment);

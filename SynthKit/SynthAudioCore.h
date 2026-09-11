@@ -96,6 +96,58 @@ typedef struct SynthLineVoice {
     void (*reset)(void *state);
 } SynthLineVoice;
 
+#pragma mark - Tuning (TUN001, REQ-006)
+
+/// Pitch classes in a tuning table: the twelve of a chromatic octave, indexed
+/// by `midiNoteNumber % 12`, so index 0 is C and index 9 is A.
+#define SYNTH_TUNING_PITCH_CLASS_COUNT 12
+
+/*
+ One program's tuning, already resolved into what a voice engine multiplies by.
+
+ **A table of ratios, not of cents, and that is the whole design.** A
+ temperament is written in cents and a reference pitch in hertz; turning either
+ into a playback ratio means a `pow`, and the control thread is where this
+ repository does that conversion (the `SampleVoiceCustomization` precedent:
+ "cents become a playback-rate ratio here, on the control thread, so the audio
+ thread never converts"). `TuningSettings.renderTable` is the one place it
+ happens. A voice then applies tuning as a single multiply by the entry for the
+ note's pitch class, and the two engines apply *the same number* — the
+ synthesizer to the frequency it derives, the sampler to the playback rate it
+ derives — which is what makes one setting mean one thing across both.
+
+ **The default is exactly 1.0, and that is load-bearing.** Equal temperament at
+ A=440 resolves to twelve ratios of exactly one, and a multiply by exactly one
+ is the identity in IEEE-754 — not an approximation of it. So a program at
+ default tuning renders bit-identically to one built before this table existed,
+ which is REQ-006's "default tuning renders bit-identical to pre-feature
+ output", proven by construction rather than by a tolerance.
+
+ Installed on the control thread before a voice is handed to the engine and
+ never written again, so it needs no atomics: the edge that publishes the
+ program publishes this with it. `synth_patch_voice_init` and
+ `sample_voice_create` install the default, so a caller that says nothing about
+ tuning gets the identity rather than a zeroed table — which would be silence.
+ */
+typedef struct SynthTuningTable {
+    /// Multiplier on the frequency (or playback rate) of a note of this pitch
+    /// class. 1.0 leaves the note exactly where equal temperament at A=440 puts
+    /// it.
+    double ratioByPitchClass[SYNTH_TUNING_PITCH_CLASS_COUNT];
+} SynthTuningTable;
+
+/// Equal temperament at A=440: every ratio exactly 1.0.
+void synth_tuning_table_default(SynthTuningTable *table);
+
+/// `table` with every entry known finite and inside the range a tuning can
+/// reach, so a hand-edited document or a NaN can never reach the multiply.
+///
+/// The bound is deliberately wider than the product's own settings need — a
+/// reference shift of 415/440 is 0.943 and the widest temperament offset is a
+/// few cents on top — and narrow enough that nothing here can transpose a note
+/// into another octave.
+void synth_tuning_table_sanitize(SynthTuningTable *table);
+
 #pragma mark - Transport
 
 typedef enum SynthTransportState {

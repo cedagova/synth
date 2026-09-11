@@ -193,6 +193,44 @@ SynthRenderEngine *synth_engine_create(int32_t lineCount,
     return engine;
 }
 
+#pragma mark - Tuning (TUN001, REQ-006)
+
+/*
+ The tuning table's two control-thread operations, here rather than in either
+ engine because both engines take the same table and neither owns it.
+
+ `synth_tuning_table_default` is the identity, and the identity is exact: twelve
+ ratios of literal 1.0, so a voice at default tuning multiplies by one and
+ produces the same bits a voice built before this table existed produced.
+ */
+void synth_tuning_table_default(SynthTuningTable *table) {
+    if (table == NULL) { return; }
+    for (int32_t index = 0; index < SYNTH_TUNING_PITCH_CLASS_COUNT; index++) {
+        table->ratioByPitchClass[index] = 1.0;
+    }
+}
+
+void synth_tuning_table_sanitize(SynthTuningTable *table) {
+    if (table == NULL) { return; }
+    for (int32_t index = 0; index < SYNTH_TUNING_PITCH_CLASS_COUNT; index++) {
+        const double ratio = table->ratioByPitchClass[index];
+        /* A NaN fails every comparison, which is what the first test catches:
+           `ratio == ratio` is false for exactly the one value that would
+           otherwise reach a multiply and turn a note into silence.
+
+           The bounds are a whole tone either side of unity — 2^(±2/12), 0.8909
+           and 1.1225. Everything the product can ask for is well inside them:
+           the widest reference shift is 415/440 = 0.9432 (101.4 cents, already
+           more than a semitone, which is why one semitone would be too tight)
+           and the widest temperament offset on top of it is 11.73 cents, a
+           factor of 1.0068. Nothing inside these bounds can move a note into a
+           neighbouring octave. */
+        if (!(ratio == ratio) || ratio < 0.890898 || ratio > 1.122462) {
+            table->ratioByPitchClass[index] = 1.0;
+        }
+    }
+}
+
 void synth_engine_destroy(SynthRenderEngine *engine) {
     if (engine == NULL) { return; }
     for (int32_t l = 0; l < engine->lineCount; l++) {

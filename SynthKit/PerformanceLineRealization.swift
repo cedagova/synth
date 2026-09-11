@@ -92,6 +92,24 @@ struct RealizedNote {
     /// division setting.
     var breathShorteningMicroseconds: Int64 = 0
 
+    /// How far `durationTicks` — the articulation's reading on the tick grid —
+    /// misses the reading itself, in microseconds
+    /// (`Realization.gridResidualMicroseconds`). Positive when the grid could
+    /// not shorten the note enough and it is released earlier than its ticks
+    /// say; negative when the grid floored past the mark and it is held a
+    /// little longer.
+    ///
+    /// In microseconds, and kept out of `durationTicks`, for the same reasons
+    /// the other two are, and for one more: the ticks stay what the grace-note
+    /// and ornament placement read, while the sound stops depending on the
+    /// engraver. A shortening expressed only on the tick grid is whatever
+    /// fraction of one tick the `<divisions>` setting allows — at one division
+    /// to the quarter, ninety percent of a one-tick quarter floors to nothing,
+    /// the guard hands the note its full value back, and détaché became tenuto
+    /// (staccato too) on exactly the scores that could not notate anything
+    /// shorter (#80).
+    var articulationShorteningMicroseconds: Int64 = 0
+
     /// How much later than its shaped length the note is released, so a slurred
     /// line overlaps the note it runs into instead of merely reaching it
     /// (`Realization.shapedLength`).
@@ -161,7 +179,8 @@ extension Realization {
                 onsetMicroseconds: max(0, onset + note.timingOffsetMicroseconds),
                 durationMicroseconds: max(
                     1,
-                    end - onset - note.breathShorteningMicroseconds
+                    end - onset - note.articulationShorteningMicroseconds
+                        - note.breathShorteningMicroseconds
                         + note.legatoOverlapMicroseconds
                 ),
                 midiNoteNumber: note.midiNoteNumber,
@@ -316,6 +335,8 @@ extension Realization {
                     onsetTicks: out[tie.index].onsetTicks
                 )
                 out[tie.index].durationTicks = extended.ticks
+                out[tie.index].articulationShorteningMicroseconds =
+                    extended.articulationShorteningMicroseconds
                 out[tie.index].legatoOverlapMicroseconds = extended.legatoOverlapMicroseconds
                 if note.tiesForward {
                     openTies[midi] = tie
@@ -354,9 +375,12 @@ extension Realization {
                 onsetTicks: entry.absoluteTicks
             )
             var duration = shaped.ticks
+            var shortening = shaped.articulationShorteningMicroseconds
 
             // Grace notes take their time from the principal, so they are
-            // placed before it is shaped into events.
+            // placed before it is shaped into events. A principal that gave
+            // time away keeps the grid's reading whole: the residual was
+            // measured for the span before the graces took from it.
             if !note.graceNotes.isEmpty {
                 let placement = placeGraceNotes(
                     note.graceNotes,
@@ -370,6 +394,7 @@ extension Realization {
                 out.append(contentsOf: placement.notes)
                 onset = placement.principalOnset
                 duration = placement.principalDuration
+                shortening = 0
             }
 
             if let ornament = note.ornaments.first {
@@ -422,6 +447,7 @@ extension Realization {
                     playbackMeasureIndex: entry.playbackMeasureIndex,
                     sourceMeasureIndex: entry.sourceMeasureIndex,
                     ordinal: ordinal,
+                    articulationShorteningMicroseconds: shortening,
                     legatoOverlapMicroseconds: shaped.legatoOverlapMicroseconds
                 )
             )
@@ -457,23 +483,31 @@ extension Realization {
     /// How long a note actually sounds: its shaped notated length, plus the
     /// overlap a slur carries it past the note it runs into.
     ///
-    /// Two values rather than one because they are two different kinds of
-    /// thing, and conflating them is what made the overlap depend on the
-    /// engraver. The length is notation, measured on the tick grid where the
-    /// score's own arithmetic is exact. The overlap is performance, measured in
-    /// microseconds where a gesture means the same thing on every score — the
-    /// same division `RealizedNote.breathShorteningMicroseconds` already makes
-    /// for the release side.
+    /// Three values rather than one because they are different kinds of thing,
+    /// and conflating them is what made first the overlap and then the
+    /// shortening depend on the engraver. The length is notation, measured on
+    /// the tick grid where the score's own arithmetic is exact. The residual
+    /// and the overlap are performance, measured in microseconds where a
+    /// gesture means the same thing on every score — the same division
+    /// `RealizedNote.breathShorteningMicroseconds` already makes for the
+    /// release side.
     struct ShapedLength {
         /// Sounding length on the tick grid, after the articulation and the
         /// slur have been read.
         let ticks: Int
 
+        /// How far `ticks` misses the articulation's reading, in microseconds
+        /// (`gridResidualMicroseconds`). Zero under a slur, where the note is
+        /// carried instead, and zero wherever the grid was exact.
+        let articulationShorteningMicroseconds: Int64
+
         /// How far past `ticks` the note is carried, in microseconds. Non-zero
         /// only under a slur.
         let legatoOverlapMicroseconds: Int64
 
-        static let silent = ShapedLength(ticks: 0, legatoOverlapMicroseconds: 0)
+        static let silent = ShapedLength(
+            ticks: 0, articulationShorteningMicroseconds: 0, legatoOverlapMicroseconds: 0
+        )
     }
 
     /// How long a note actually sounds.
@@ -494,8 +528,12 @@ extension Realization {
         if let percent = shortening {
             // An articulation that shortens wins over the slur: staccato
             // under a slur is portato, not legato.
+            let ticks = max(1, notated * percent / 100)
             return ShapedLength(
-                ticks: max(1, notated * percent / 100),
+                ticks: ticks,
+                articulationShorteningMicroseconds: gridResidualMicroseconds(
+                    onsetTicks: onsetTicks, notatedTicks: notated, gridTicks: ticks, percent: percent
+                ),
                 legatoOverlapMicroseconds: 0
             )
         }
@@ -505,15 +543,54 @@ extension Realization {
             let gap = max(1, max(notated, nextOnsetTicks - onsetTicks))
             return ShapedLength(
                 ticks: gap,
+                articulationShorteningMicroseconds: 0,
                 legatoOverlapMicroseconds: legatoOverlapMicroseconds(
                     onsetTicks: onsetTicks, soundingTicks: gap
                 )
             )
         }
+        let ticks = max(1, notated * PerformanceRealizer.detachedPercent / 100)
         return ShapedLength(
-            ticks: max(1, notated * PerformanceRealizer.detachedPercent / 100),
+            ticks: ticks,
+            articulationShorteningMicroseconds: gridResidualMicroseconds(
+                onsetTicks: onsetTicks,
+                notatedTicks: notated,
+                gridTicks: ticks,
+                percent: PerformanceRealizer.detachedPercent
+            ),
             legatoOverlapMicroseconds: 0
         )
+    }
+
+    /// How far the tick grid's reading of a shortened note misses the reading
+    /// itself, in microseconds: positive when the grid could not shorten enough
+    /// and the note must be released earlier, negative when it floored past the
+    /// mark and the note must be held a little longer.
+    ///
+    /// The reading is "`percent` of the notated value", through the tempo map,
+    /// so it means the same thing at every division setting. The grid's version,
+    /// `notated * percent / 100`, is exact only when the notated value divides
+    /// evenly: at one division to the quarter it floors to nothing for every
+    /// percentage, the guard that keeps a note audible hands it back its full
+    /// value, and détaché became tenuto — staccato too — on exactly the scores
+    /// that could not notate anything shorter (#80). Carrying the difference in
+    /// microseconds keeps the tick value where the grace-note and ornament
+    /// placement already read it, and makes the sound right regardless.
+    func gridResidualMicroseconds(
+        onsetTicks: Int, notatedTicks: Int, gridTicks: Int, percent: Int
+    ) -> Int64 {
+        guard percent < 100 else { return 0 }
+        let onset = score.tempoMap.microseconds(atPlaybackTicks: onsetTicks)
+        let notatedEnd = score.tempoMap.microseconds(
+            atPlaybackTicks: min(onsetTicks + notatedTicks, totalTicks)
+        )
+        let gridEnd = score.tempoMap.microseconds(
+            atPlaybackTicks: min(onsetTicks + gridTicks, totalTicks)
+        )
+        let notatedSounding = notatedEnd - onset
+        guard notatedSounding > 0 else { return 0 }
+        let intended = notatedSounding * Int64(max(0, percent)) / 100
+        return (gridEnd - onset) - intended
     }
 
     /// The slur overlap for a note of `soundingTicks` starting at `onsetTicks`.

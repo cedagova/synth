@@ -552,8 +552,10 @@ final class PerformanceRealizerTests: XCTestCase {
         )
         XCTAssertEqual(
             note.durationMicroseconds,
-            7_166_667,
-            "one hundred and seventy-two ticks at sixty to the quarter"
+            7_200_000,
+            "nine tenths of eight seconds: the grid's one hundred and seventy-two ticks "
+                + "at sixty to the quarter is 7 166 667 µs, and the residual carries the "
+                + "rest so the reading does not depend on the division setting (#80)"
         )
     }
 

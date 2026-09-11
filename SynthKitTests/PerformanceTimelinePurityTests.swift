@@ -53,7 +53,12 @@ final class PerformanceTimelinePurityTests: XCTestCase {
     ///   leading line above the accompaniment, which moves every row realized
     ///   with expression on whose texture names a leader.
     ///
-    /// Both were refrozen from two agreeing runs in separate processes. The claim
+    /// Moved a third time on #80: the articulation shortening gained a
+    /// microsecond residual on top of its tick-grid reading, so every plain or
+    /// articulated note's sounding length changed by whatever the grid had
+    /// floored — which reaches every row here, in every expression state.
+    ///
+    /// All were refrozen from two agreeing runs in separate processes. The claim
     /// that nothing *else* moved in the bypass state is a separate and stronger
     /// one, and `PerformanceExpressionTests` holds it two ways: the fugue
     /// fixture's bypass digests are still the ones recorded before EXP001
@@ -62,29 +67,29 @@ final class PerformanceTimelinePurityTests: XCTestCase {
     /// against digests taken on the collector base with the lengths left out.
     private static let frozenTimelineDigests: [String: String] = [
         "ornamentStudy/literal":
-            "85f8ca7d4f5683f0e9b3c30c8bef27471b5662c411d30f0b37ff419cbcb31d29",
+            "62ccbeb40e15ee00f1ceaff8da18b6664916e4e97dfc808d4eac294b776f58cf",
         "expressiveKeyboardPiece/literal":
-            "db894d3b4499133bb81898fe74b7c734ded0bf99c58cdfa96d684b2dae6db8d7",
+            "8e4f006110dc5e9da65f1066177c91abd8cb79ae36a474b7aa31fa2f5508f0e7",
         "expressiveKeyboardPiece/standard":
-            "c0de18f380cce798513a6e554692935db95700590a28a97fb41984ba2b146c24",
+            "023d8474d081606947a2f8306dc3a0b38140dd646c9792994d08d7f5c0996d40",
         "expressiveKeyboardPiece/intensity-100":
-            "7db183a6a665ef81eb00c0c5aabc9d9a2f0be181ea1a9acf5b5f25e16cc87416",
+            "c8fca2ef4e963775d20e07d95ed60d06c340029b1cf7fca0000e556f56234fa2",
         "stringQuartetMovement/standard":
-            "e26d01c2ce88976849bab6efe6bb779bd8ac71aa4c0f23981b2a080dc60c606c",
+            "bfe168ac4e4da513bd241d1c7399a09c5dae1cb79860b22d60deaef9bff90fad",
         "fastOrnamentsAndGraceNotes/intensity-100":
-            "bcfa84f69f4c6d1e3820e42fe2702709a3d9701ba77397a73a7b10df671caee9",
+            "1747489fce171bccab874e99f29014494dffae64df07e2d842dca144982786de",
         "expressiveKeyboardPiece/expression-off":
-            "500e3de196a927e9dfdac8200b15648b8bb48967fbd1d63a734a8570472ff0fc",
+            "63d0a8add80f7dda672d1546b9eef8a5687aa29489d299fe8188f440e0436cf9",
         "expressiveKeyboardPiece/expression-100":
-            "6972fe0bd1434637026c6580dc990f4d510d0127972f58033581a164049c1172",
+            "ca769b06961ca99aa5381532fb56529d230cf42d053bc58f5dac3e182a50616b",
         "stringQuartetMovement/expression-only":
-            "a220b2f1af69f22e9d612e81306c6bcb7f18260e2f56ec810f280dd52605d2d4",
+            "3c83f5abbd172bf888903362aefabcff1bc037657c95b4a75852e6b493bc5557",
         "keyboardFugueExposition/expression-100":
-            "b9d0cd67068f87b6aa2cdca3cbb2eefa54f3999b78fe900e4e323ea971d4f2ce",
-        "articulationAndSlurStudy/literal": "9892001882eaed6f8f42cb43c0ac097c824b9575ad2280b430609170a85a4151",
-        "articulationAndSlurStudy/expression-100": "2c93bee833576b25efa2d028f79487af92e4aa52931a9bd984b1be3e7de4ae81",
-        "melodyOverAccompaniment/expression-off": "c216e6e05cf4429ae9edd6b17cbe31e3d8daa6d2ebd734a2f335134940d3f5c8",
-        "melodyOverAccompaniment/expression-100": "8899911065240758f6d9f61abfe9c0c73aea2b1160c8d357e68c29f5b9870bf4"
+            "414895aed5fcef0de372bc075e7691345e15a3fa75cc0ebec16514244894c5fb",
+        "articulationAndSlurStudy/literal": "0041dce40dd09bab681fac72c4ea65a73c4919d209fcf09435e25064a96c7806",
+        "articulationAndSlurStudy/expression-100": "055a0fd9df7a74b8107e2307fc343fe598657d14b19d45380a0af15d2dc0d27e",
+        "melodyOverAccompaniment/expression-off": "29e38ba4e33b957b640002fa5358e9795649e4da62c1b36bf3a1ddd93e919f95",
+        "melodyOverAccompaniment/expression-100": "154268f4c5e2bfa08c417c62ff906a31f897f2dc1f1a6b78899fb89050ac42b3"
     ]
 
     private static let frozenCases: [(name: String, data: Data, settings: RealizationSettings)] = [

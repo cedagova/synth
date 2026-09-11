@@ -78,26 +78,36 @@ final class PerformanceExpressionTests: XCTestCase {
     /// six fixtures against digests taken on `e6c1697` over every event field
     /// except the lengths, so the claim "only sounding lengths changed" is
     /// measured rather than asserted.
+    ///
+    /// **Moved once more on #80, all six rows.** The articulation shortening —
+    /// staccato, marcato, and every plain note's détaché — stopped being read
+    /// on the tick grid alone and gained a microsecond residual
+    /// (`RealizedNote.articulationShorteningMicroseconds`), so every fixture's
+    /// unmarked notes changed length by the fraction the grid had floored.
+    /// Articulation is written notation and always on, so the bypass bytes
+    /// move with it; `preFeatureShapeDigests` below did not move, which is the
+    /// measured claim that nothing but sounding lengths changed. Refrozen from
+    /// two agreeing runs in separate processes.
     private static let bypassEventDigests: [String: (Data, RealizationSettings)] = [
-        // Unchanged since before the expression setting existed — no slurs.
-        "0c9046485c9f33a95560be4a96117d3f3a3490518d2eba063a4c8cb0aa26b1c3": (
+        // Recorded before the expression setting existed; moved on #80 only.
+        "d6c62e6bd0d33a034ae5ffb9d5b9b3c0d28cce6089e39cf2ea95ed8887a47340": (
             MusicXMLScoreFixtures.keyboardFugueExposition(measureCount: 4), .literal
         ),
-        "05e6061c1b8024af8cf1d94c8c84fb53625608874b0e98b6317d10d1d74f167b": (
+        "ed9c2af27e0d363e23f6c388fbd6d26b323bae835d65ca7713ad04a49c814e7f": (
             MusicXMLScoreFixtures.keyboardFugueExposition(measureCount: 4),
             .humanizedWithoutExpression
         ),
-        // Moved once on EXP002, for the legato overlap. Slurred fixtures.
-        "0340c87ca747a45f783907f13beef0286db95562e506058d2685843c86b8a8bd": (
+        // Moved on EXP002 for the legato overlap, and on #80. Slurred fixtures.
+        "b48e638818c90f7e45b8e9af8f7b764b2f1f6cd62c2b13f804956438233a8253": (
             MusicXMLScoreFixtures.expressiveKeyboardPiece(), .literal
         ),
-        "d6c211dd6a1ce2da40d0bf278222caac06eab49f23321d245434fc89a38d3aac": (
+        "f82c77c1065e5c0a1fa4c0a7451b64382747675be08e235a87fa907f5b4f3483": (
             MusicXMLScoreFixtures.expressiveKeyboardPiece(), .humanizedWithoutExpression
         ),
-        "61f1e793ebf3af20970c4aad99d9c0315afc01983770207ef6df8eafaed54891": (
+        "7a0c4dc5da1e34e6e18ebdda9358ca4c7fc70ac0b1e1659cb08b0fa32540751d": (
             MusicXMLScoreFixtures.stringQuartetMovement(), .literal
         ),
-        "509f9c470ed2d0d99adb95db4a1729aa07db26cced9c281f9b0195b8de67240f": (
+        "a69623798a9c51980d08e0289dca860c20bc7391461a8e3ccb8dc0d96ae62492": (
             MusicXMLScoreFixtures.stringQuartetMovement(), .humanizedWithoutExpression
         )
     ]

@@ -379,6 +379,34 @@ final class MasterStageRenderTests: XCTestCase {
         )
     }
 
+    /// The bus refuses a figure it could not survive.
+    ///
+    /// `synth_clampf` passes a NaN straight through, and a NaN multiplied into
+    /// the bus is silence for the rest of the piece — the one outcome every
+    /// failure path in this leaf exists to avoid. Nothing in `MasterCalibration`
+    /// can produce one; this is the bound that means nothing else can either.
+    func testTheBusRefusesANonFiniteCalibration() throws {
+        let piece = try song()
+        let engine = PlaybackEngine()
+        try engine.setRenderMode(.offline(sampleRate: Self.sampleRate))
+        try engine.load(timeline: piece)
+        let program = try XCTUnwrap(engine.loadedProgram)
+
+        synth_engine_set_master_calibration(program.engine, .nan, .nan)
+        XCTAssertEqual(synth_engine_master_calibration_gain(program.engine), 1)
+        XCTAssertEqual(synth_engine_master_cohesion_threshold(program.engine), 0)
+
+        synth_engine_set_master_calibration(program.engine, 400, -3)
+        XCTAssertEqual(
+            synth_engine_master_calibration_gain(program.engine), 8,
+            "an absurd gain was not clamped"
+        )
+        XCTAssertEqual(
+            synth_engine_master_cohesion_threshold(program.engine), 0,
+            "a negative threshold should disable cohesion rather than arm it"
+        )
+    }
+
     // MARK: The bounded analysis (P65-5)
 
     /// The analysis never measures more program than the cap allows, however

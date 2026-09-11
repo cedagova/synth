@@ -1122,11 +1122,13 @@ void synth_engine_set_master_calibration(SynthRenderEngine *engine,
                                          float gain,
                                          float cohesionThreshold) {
     if (engine == NULL) { return; }
-    /* Clamped at the same 0…8 the owner's master gain is: the analysis that
-       produces this already bounds it, and a second bound here means a future
-       caller cannot hand the render thread an absurd number. */
-    atomic_store_explicit(&engine->calibrationGain,
-                          synth_clampf(gain, 0.0f, 8.0f), memory_order_relaxed);
+    /* Clamped at the same 0…8 the owner's master gain is, and both values are
+       checked for NaN rather than only clamped: the analysis that produces them
+       already bounds them, but `synth_clampf` passes a NaN straight through —
+       and a NaN multiplied into the bus is silence for the rest of the piece.
+       A second bound here means a future caller cannot do that. */
+    const float bounded = (gain == gain) ? synth_clampf(gain, 0.0f, 8.0f) : 1.0f;
+    atomic_store_explicit(&engine->calibrationGain, bounded, memory_order_relaxed);
     const float threshold = (cohesionThreshold > 0.0f && cohesionThreshold == cohesionThreshold)
         ? cohesionThreshold : 0.0f;
     atomic_store_explicit(&engine->cohesionThreshold, threshold, memory_order_relaxed);

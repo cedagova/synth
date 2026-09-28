@@ -2,7 +2,7 @@
 
 - Planning issue: https://github.com/cedagova/synth/issues/86
 - Planning PR: https://github.com/cedagova/synth/pull/103
-- Status: Review
+- Status: Ready for implementation
 - Root classification: EFFORT
 - Delivery topology: DIRECT
 - Planner: Claude (implementation-planning-lead)
@@ -372,6 +372,11 @@ Not applicable — implementation work remains in all six leaves.
 
 ## Publication verification
 
-Pending publication: the six child bodies and the root body gain their
-planning metadata and leaf contracts after content approval; the native
-tree already matches the manifest.
+- Published 2026-09-28 under `Planning root: #86` / `Planning plan: #103`:
+  root #86 carries `Planning kind: GROUP` and `Implementation delivery:
+  DIRECT`; #95, #96, #97, #98, #99, #100 carry `Planning kind: LEAF` and
+  the leaf contracts above, appended below their original text.
+- No new issues; no `Pending` URLs. Native sub-issue tree (#86 → #95–#100)
+  and the empty blocked-by set verified with `plan verify-graph`;
+  deterministic validation on the final head. Exact-head independent
+  approval remains in the native PR review.

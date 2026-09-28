@@ -178,6 +178,45 @@ final class LibraryBackupTests: XCTestCase {
         }
     }
 
+    /// Backups dated in the future (a clock that once ran ahead) must never
+    /// cause the backup just written to be pruned: the store is about to be
+    /// migrated and that copy is its only way back.
+    func testTheJustWrittenBackupSurvivesFutureDatedBackups() throws {
+        try container.prepare()
+        let database = try SQLiteDatabase.open(at: container.databaseURL)
+        defer { database.close() }
+        try SchemaMigrator.migrate(database, appVersion: "test")
+
+        let backups = container.backupsURL
+        try FileManager.default.createDirectory(at: backups, withIntermediateDirectories: true)
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        var future: [String] = []
+        for day in 1...LibraryBackup.retainedCount {
+            let name = LibraryBackup.fileName(
+                schemaVersion: 1, date: now.addingTimeInterval(Double(day) * 86_400)
+            )
+            try Data("future".utf8).write(to: backups.appending(path: name))
+            future.append(name)
+        }
+
+        let outcome = try SchemaMigrator.migrate(
+            database,
+            appVersion: "test",
+            migrations: SchemaMigrator.migrations + [Self.rewritingMigration(version: SchemaMigrator.latestVersion + 1)],
+            backupsDirectory: backups,
+            now: now
+        )
+
+        let written = try XCTUnwrap(outcome.backup).backupURL.lastPathComponent
+        let kept = try LibraryBackup.backups(in: backups).map(\.lastPathComponent)
+        XCTAssertEqual(kept.count, LibraryBackup.retainedCount)
+        XCTAssertTrue(kept.contains(written), "The pre-migration backup must survive pruning")
+        XCTAssertEqual(
+            Set(kept), Set([written] + future.suffix(LibraryBackup.retainedCount - 1)),
+            "The rest are the newest others; the oldest future-dated one is pruned"
+        )
+    }
+
     func testAPruningFailureDoesNotBlockTheMigrationAndIsReported() throws {
         try container.prepare()
         let database = try SQLiteDatabase.open(at: container.databaseURL)

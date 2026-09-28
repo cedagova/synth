@@ -66,6 +66,10 @@ public enum LibraryBackup {
 
         do {
             try database.execute("VACUUM INTO ?;", [.text(partialURL.path(percentEncoded: false))])
+            // VACUUM INTO does not guarantee its output is on disk. Flush it
+            // before it takes a backup name, so a power cut can never leave a
+            // backup-named file that is incomplete.
+            try flushToDisk(partialURL)
             try fileManager.moveItem(at: partialURL, to: backupURL)
         } catch {
             removeBestEffort(partialURL, fileManager: fileManager)
@@ -76,7 +80,7 @@ public enum LibraryBackup {
 
         var pruningFailure: String?
         do {
-            try prune(directoryURL, keeping: retainedCount, fileManager: fileManager)
+            try prune(directoryURL, keeping: retainedCount, protecting: backupURL, fileManager: fileManager)
         } catch {
             let reason = (error as NSError).localizedDescription
             NSLog("Synth: could not prune old library backups in %@: %@",
@@ -103,11 +107,35 @@ public enum LibraryBackup {
         .map(\.url)
     }
 
-    /// Deletes all but the newest `count` backups. Touches only files whose
-    /// names match the backup pattern.
-    static func prune(_ directoryURL: URL, keeping count: Int, fileManager: FileManager) throws {
-        for url in try backups(in: directoryURL, fileManager: fileManager).dropFirst(count) {
+    /// Deletes all but `count` backups: `protected` (the one just written) and
+    /// the newest `count - 1` others. Touches only files whose names match the
+    /// backup pattern.
+    ///
+    /// The just-written backup is never a candidate, whatever its timestamp:
+    /// if the clock once ran ahead and left future-dated backups, ordering by
+    /// name alone would prune the only copy of the store about to be migrated.
+    static func prune(
+        _ directoryURL: URL,
+        keeping count: Int,
+        protecting protected: URL,
+        fileManager: FileManager
+    ) throws {
+        let others = try backups(in: directoryURL, fileManager: fileManager)
+            .filter { $0.lastPathComponent != protected.lastPathComponent }
+        for url in others.dropFirst(max(count - 1, 0)) {
             try fileManager.removeItem(at: url)
+        }
+    }
+
+    /// Forces `url`'s contents to permanent storage (`F_FULLFSYNC`, which on
+    /// Apple platforms also flushes the drive's cache; plain `fsync` does not).
+    private static func flushToDisk(_ url: URL) throws {
+        let handle = try FileHandle(forUpdating: url)
+        defer { try? handle.close() }
+        if fcntl(handle.fileDescriptor, F_FULLFSYNC) == -1 {
+            // Some file systems do not support F_FULLFSYNC; fsync is the
+            // strongest remaining guarantee, and its failure is a real one.
+            try handle.synchronize()
         }
     }
 

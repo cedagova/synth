@@ -28,6 +28,11 @@ public enum StoreError: Error, Equatable, Sendable {
     /// error is raised, so the store is left exactly as it was.
     case migrationFailed(version: Int, name: String, reason: String)
 
+    /// The pre-migration backup of an existing library could not be written,
+    /// so no migration ran: the store is left exactly as it was, at its old
+    /// schema. `path` is the backup file that was being written.
+    case migrationBackupFailed(path: String, reason: String)
+
     /// The `schema_version` table exists but holds no readable current row.
     case schemaVersionUnreadable
 
@@ -98,6 +103,11 @@ extension StoreError: LocalizedError {
                 """
         case .migrationFailed(let version, let name, let reason):
             return "Synth could not upgrade its library to schema \(version) (\(name)). \(reason)"
+        case .migrationBackupFailed(let path, let reason):
+            return """
+                Synth needs to upgrade your library, but could not first save a backup of it \
+                to \(Self.display(path)), so it did not upgrade. \(reason)
+                """
         case .schemaVersionUnreadable:
             return "Synth's library database has no readable schema version."
         case .pieceRowUnreadable(let id):
@@ -130,6 +140,8 @@ extension StoreError: LocalizedError {
             return "Update Synth to the newest version you have used with this library."
         case .migrationFailed:
             return "Your library was left unchanged. Check disk space, then reopen Synth."
+        case .migrationBackupFailed:
+            return "Your library was left unchanged. Check disk space and folder permissions, then reopen Synth."
         case .schemaVersionUnreadable:
             return "The library database may be damaged. Restore it from a backup."
         case .pieceRowUnreadable:

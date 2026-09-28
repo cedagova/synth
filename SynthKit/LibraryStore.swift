@@ -135,6 +135,26 @@ public final class LibraryStore: @unchecked Sendable {
         dependentStores: [@Sendable (SQLiteDatabase) -> PieceDependentStore] = [],
         soundDependentStores: [@Sendable (SQLiteDatabase) -> SoundDependentStore] = []
     ) throws -> LibraryStore {
+        try open(
+            container: container,
+            appVersion: appVersion,
+            fileManager: fileManager,
+            dependentStores: dependentStores,
+            soundDependentStores: soundDependentStores,
+            migrations: SchemaMigrator.migrations
+        )
+    }
+
+    /// `open`, with the migration chain injectable so tests can migrate a
+    /// store one version past the shipped chain.
+    static func open(
+        container: AppContainer?,
+        appVersion: String,
+        fileManager: FileManager,
+        dependentStores: [@Sendable (SQLiteDatabase) -> PieceDependentStore],
+        soundDependentStores: [@Sendable (SQLiteDatabase) -> SoundDependentStore],
+        migrations: [Migration]
+    ) throws -> LibraryStore {
         let resolved: AppContainer
         if let container {
             resolved = container
@@ -153,7 +173,15 @@ public final class LibraryStore: @unchecked Sendable {
             try database.executeScript("PRAGMA synchronous = FULL;")
             try database.executeScript("PRAGMA foreign_keys = ON;")
 
-            let outcome = try SchemaMigrator.migrate(database, appVersion: appVersion)
+            // An existing library is backed up before it is upgraded; if the
+            // backup cannot be written the open fails and nothing is migrated.
+            let outcome = try SchemaMigrator.migrate(
+                database,
+                appVersion: appVersion,
+                migrations: migrations,
+                backupsDirectory: resolved.backupsURL,
+                fileManager: fileManager
+            )
             let version = try SchemaMigrator.currentVersion(of: database)
 
             return LibraryStore(

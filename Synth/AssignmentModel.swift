@@ -119,22 +119,12 @@ final class AssignmentModel {
     /// or nothing — never whichever preset happens to be active by then.
     private var renamingPresetID: String?
 
-    /// Hands a loaded preset's whole-piece humanization to the transport,
-    /// which owns re-realization. Installed by `PlaybackModel`.
-    var onHumanizationLoaded: ((HumanizationSettings) -> Void)?
-
-    /// The same for the preset's whole-piece phrase expression.
-    var onExpressionLoaded: ((ExpressionSettings) -> Void)?
-
-    /// The active preset's produced master, as loaded (MST001, D65-3).
-    var onProducedMasterLoaded: ((ProducedMasterSettings) -> Void)?
-
-    /// The active preset's temperament and reference pitch, as loaded (TUN001,
-    /// REQ-006).
-    var onTuningLoaded: ((TuningSettings) -> Void)?
-
-    /// The same for the preset's whole-piece tempo.
-    var onTempoLoaded: ((Int) -> Void)?
+    /// Hands a loaded preset's performance settings — humanization, expression,
+    /// produced master, tuning and tempo — to the transport, which owns
+    /// realization and adopts them as one unit (#96). Installed by
+    /// `PlaybackModel`. One signal rather than five, so the transport sees a
+    /// preset arrive once and can apply it in one order with one realization.
+    var onPresetLoaded: ((PresetContent) -> Void)?
 
     init(store: LibraryStore, engine: PlaybackEngine) {
         self.store = store
@@ -238,11 +228,7 @@ final class AssignmentModel {
             dropRenameDraftUnlessOn(preset)
             lines = performance.lines
             keepSelectionValid()
-            onHumanizationLoaded?(preset.content.humanization)
-            onExpressionLoaded?(preset.content.expression)
-            onProducedMasterLoaded?(preset.content.producedMaster)
-            onTuningLoaded?(preset.content.tuning)
-            onTempoLoaded?(preset.content.tempoPercent)
+            onPresetLoaded?(preset.content)
 
             if applyingToEngine { applyToEngine(performance) }
             if let verb {
@@ -1113,11 +1099,7 @@ final class AssignmentModel {
             dropRenameDraftUnlessOn(preset)
             lines = performance.lines
             keepSelectionValid()
-            onHumanizationLoaded?(preset.content.humanization)
-            onExpressionLoaded?(preset.content.expression)
-            onProducedMasterLoaded?(preset.content.producedMaster)
-            onTuningLoaded?(preset.content.tuning)
-            onTempoLoaded?(preset.content.tempoPercent)
+            onPresetLoaded?(preset.content)
             applyToEngine(performance)
         } catch {
             alert = AssignmentAlert(title: "Could not re-read this piece's presets", error)

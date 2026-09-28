@@ -103,23 +103,19 @@ final class UndoWiringTests: XCTestCase {
         try XCTUnwrap(assignment.engineStrip(for: lineID)).gain
     }
 
-    /// Waits until the transport has adopted the active preset's settings, so a
-    /// switch is asserted after adoption completes rather than racing it (#96).
-    private func waitForAdoption(timeout: TimeInterval = 10) async throws {
+    /// Settles the transport's pending preset adoption (#96), then checks it
+    /// adopted the active preset's settings, so a switch is asserted after
+    /// adoption completes rather than racing it.
+    private func waitForAdoption() async throws {
         let playback = try XCTUnwrap(model.playback)
-        let deadline = Date().addingTimeInterval(timeout)
-        func adopted() -> Bool {
-            guard let content = playback.assignment.activePreset?.content else { return false }
-            return playback.tempoPercent == content.tempoPercent
-                && playback.humanization == content.humanization
-                && playback.expression == content.expression
-                && playback.producedMaster == content.producedMaster
-                && playback.tuning == content.tuning
-        }
-        while !adopted(), Date() < deadline {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
-        XCTAssertTrue(adopted(), "the transport never adopted the active preset's settings")
+        await playback.settlePresetAdoption()
+        let content = try XCTUnwrap(playback.assignment.activePreset?.content)
+        let adopted = playback.tempoPercent == content.tempoPercent
+            && playback.humanization == content.humanization
+            && playback.expression == content.expression
+            && playback.producedMaster == content.producedMaster
+            && playback.tuning == content.tuning
+        XCTAssertTrue(adopted, "the transport never adopted the active preset's settings")
     }
 
     /// A second preset that differs from the first in tempo, so switching

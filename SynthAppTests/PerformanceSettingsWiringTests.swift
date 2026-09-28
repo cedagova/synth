@@ -293,7 +293,7 @@ final class PerformanceSettingsWiringTests: XCTestCase {
 
     // MARK: Switching presets
 
-    /// The `onExpressionLoaded` closure, which nothing else would notice the
+    /// The `onPresetLoaded` closure, which nothing else would notice the
     /// loss of: an arriving preset's setting is played, and not written back
     /// over the preset that is arriving.
     func testSwitchingPresetsAdoptsTheArrivingSettingWithoutWritingItBack() async throws {
@@ -308,7 +308,9 @@ final class PerformanceSettingsWiringTests: XCTestCase {
         let store = try XCTUnwrap(model.store)
         try store.presets.setExpression(wanted, in: second)
         playback.assignment.refreshFromStore()
-        try await waitForExpression(wanted, on: playback)
+        // The settings land at once; the realization behind them is the
+        // pending adoption, so that is what is awaited.
+        await playback.settlePresetAdoption()
 
         XCTAssertEqual(playback.expression, wanted, "the arriving preset's setting was not adopted")
         XCTAssertEqual(playback.expressionAmountDraft, 85, "and the slider did not follow it")
@@ -323,6 +325,251 @@ final class PerformanceSettingsWiringTests: XCTestCase {
             reread.content.expression, wanted,
             "adopting a preset's own value must not write it back over the preset"
         )
+    }
+
+    // MARK: Adopting a preset as one unit (#96)
+
+    /// Everything in `second` differs from `first`, and `first` differs from
+    /// the standard preset the piece opens with, so no assertion below can pass
+    /// because a setting never moved.
+    private static let first = PresetPerformanceFixture(
+        humanization: HumanizationSettings(isEnabled: true, intensity: 20),
+        expression: ExpressionSettings(isEnabled: true, amount: 30),
+        producedMaster: ProducedMasterSettings(isEnabled: true),
+        tuning: TuningSettings(temperament: .werckmeisterIII, referencePitch: .a440),
+        tempoPercent: 80
+    )
+    private static let second = PresetPerformanceFixture(
+        humanization: HumanizationSettings(isEnabled: false, intensity: 70),
+        expression: ExpressionSettings(isEnabled: false, amount: 90),
+        producedMaster: ProducedMasterSettings(isEnabled: false),
+        tuning: TuningSettings(temperament: .equal, referencePitch: .a415),
+        tempoPercent: 50
+    )
+
+    /// Two more presets beside the one the piece opened with, stored with the
+    /// fixtures' settings and listed, but not yet switched to.
+    private func makePresets(
+        on playback: PlaybackModel
+    ) throws -> (original: Preset, first: Preset, second: Preset) {
+        let store = try XCTUnwrap(model.store)
+        let original = try XCTUnwrap(playback.assignment.activePreset)
+        let first = try Self.first.store(
+            in: store.presets.duplicate(original, makeActive: false), store: store
+        )
+        let second = try Self.second.store(
+            in: store.presets.duplicate(original, makeActive: false), store: store
+        )
+        // Lists them; the active preset is unchanged, so this adopts nothing.
+        playback.assignment.refreshFromStore()
+        XCTAssertEqual(playback.assignment.presets.count, 3, "both presets should be listed")
+        return (original, first, second)
+    }
+
+    private func assertPlaying(
+        _ fixture: PresetPerformanceFixture, on playback: PlaybackModel,
+        file: StaticString = #filePath, line: UInt = #line
+    ) throws {
+        XCTAssertEqual(playback.humanization, fixture.humanization, file: file, line: line)
+        XCTAssertEqual(playback.expression, fixture.expression, file: file, line: line)
+        XCTAssertEqual(playback.producedMaster, fixture.producedMaster, file: file, line: line)
+        XCTAssertEqual(playback.tuning, fixture.tuning, file: file, line: line)
+        XCTAssertEqual(playback.tempoPercent, fixture.tempoPercent, file: file, line: line)
+        XCTAssertEqual(playback.intensityDraft, Double(fixture.humanization.intensity), file: file, line: line)
+        XCTAssertEqual(playback.expressionAmountDraft, Double(fixture.expression.amount), file: file, line: line)
+        XCTAssertEqual(playback.tempoDraft, Double(fixture.tempoPercent), file: file, line: line)
+        // What is actually playing, not only what the model says.
+        let timeline = try XCTUnwrap(playback.timeline, file: file, line: line)
+        XCTAssertEqual(
+            timeline.settings.humanization, fixture.humanization,
+            "the loaded timeline was not realized under this humanization", file: file, line: line
+        )
+        XCTAssertEqual(
+            timeline.settings.expression, fixture.expression,
+            "the loaded timeline was not realized under this expression", file: file, line: line
+        )
+        XCTAssertEqual(
+            playback.loadedProgramTuning, fixture.tuning,
+            "the loaded program was not built at this tuning", file: file, line: line
+        )
+    }
+
+    /// The issue's acceptance test: two switches in quick succession end with
+    /// every setting equal to the second preset, realized once — the first
+    /// switch's pending adoption is cancelled and applies nothing.
+    func testTwoQuickSwitchesEndOnTheSecondPresetWithOneRealization() async throws {
+        let playback = try await openPreparedPiece()
+        let presets = try makePresets(on: playback)
+        let atStandardTempo = try XCTUnwrap(playback.timeline).totalMicroseconds
+        let realizationsBefore = playback.realizationCount
+
+        // Back to back, with no suspension between them: the first adoption is
+        // still pending when the second load arrives.
+        playback.assignment.activate(presetID: presets.first.id)
+        playback.assignment.activate(presetID: presets.second.id)
+        await playback.settlePresetAdoption()
+
+        XCTAssertEqual(playback.assignment.activePreset?.id, presets.second.id)
+        try assertPlaying(Self.second, on: playback)
+        XCTAssertEqual(
+            playback.realizationCount - realizationsBefore, 1,
+            "one adoption realizes once — not once per setting, and not once per switch"
+        )
+        // At 50% the realized notes span about twice the time; at the first
+        // preset's 80% they would span 1.25 times.
+        let ratio = Double(try XCTUnwrap(playback.timeline).totalMicroseconds)
+            / Double(atStandardTempo)
+        XCTAssertGreaterThan(ratio, 1.8, "the timeline was not realized at the second preset's tempo")
+    }
+
+    /// A cancelled adoption applies nothing further: a switch undone before it
+    /// lands leaves the piece exactly as it was, with no realization and no
+    /// rebuild.
+    func testASwitchUndoneBeforeItLandsAppliesNothing() async throws {
+        let playback = try await openPreparedPiece()
+        let presets = try makePresets(on: playback)
+        let timelineBefore = try XCTUnwrap(playback.timeline)
+        let tuningBefore = playback.loadedProgramTuning
+        let realizationsBefore = playback.realizationCount
+
+        playback.assignment.activate(presetID: presets.first.id)
+        playback.assignment.activate(presetID: presets.original.id)
+        await playback.settlePresetAdoption()
+
+        XCTAssertEqual(playback.realizationCount, realizationsBefore, "the cancelled adoption realized")
+        XCTAssertEqual(try XCTUnwrap(playback.timeline), timelineBefore, "the timeline was replaced")
+        XCTAssertEqual(playback.loadedProgramTuning, tuningBefore, "the program was rebuilt at another tuning")
+        XCTAssertEqual(playback.humanization, presets.original.content.humanization)
+        XCTAssertEqual(playback.tempoPercent, presets.original.content.tempoPercent)
+    }
+
+    /// An owner edit made while an adoption is still pending — before its
+    /// realization has even started — survives it, and so does the rest of the
+    /// arriving preset.
+    func testAnOwnerEditBeforeThePendingAdoptionRunsIsNotUndone() async throws {
+        let playback = try await openPreparedPiece()
+        let presets = try makePresets(on: playback)
+        let owners = HumanizationSettings(
+            isEnabled: !Self.second.humanization.isEnabled,
+            intensity: Self.second.humanization.intensity
+        )
+
+        playback.assignment.activate(presetID: presets.second.id)
+        await playback.setHumanizationEnabled(owners.isEnabled)
+        await playback.settlePresetAdoption()
+
+        try assertOwnerEditSurvived(owners, arriving: presets.second, on: playback)
+    }
+
+    /// The same, with the owner's edit arriving while the adoption's own
+    /// realization is already running, and — held there by the test seam —
+    /// finishing only after the owner's has loaded. That is the order in which a
+    /// stale realization would land over the owner's edit; it is overtaken, and
+    /// dropped.
+    func testAnOwnerEditDuringTheAdoptionsRealizationIsNotUndone() async throws {
+        let playback = try await openPreparedPiece()
+        let presets = try makePresets(on: playback)
+        let owners = HumanizationSettings(
+            isEnabled: !Self.second.humanization.isEnabled,
+            intensity: Self.second.humanization.intensity
+        )
+        let gate = RealizationGate()
+        playback.realizationDidFinish = { await gate.holdFirst() }
+
+        playback.assignment.activate(presetID: presets.second.id)
+        try await gate.waitUntilHolding()
+        await playback.setHumanizationEnabled(owners.isEnabled)
+        XCTAssertEqual(
+            try XCTUnwrap(playback.timeline).settings.humanization, owners,
+            "the owner's realization should have loaded while the adoption's is held"
+        )
+        gate.release()
+        await playback.settlePresetAdoption()
+
+        try assertOwnerEditSurvived(owners, arriving: presets.second, on: playback)
+    }
+
+    /// The reverse order (review of #110): an owner edit is still being
+    /// realized when a preset arrives whose settings equal what the engine is
+    /// already playing. The loaded timeline matches the preset, but it is about
+    /// to be replaced by the owner's — so the adoption must realize anyway and
+    /// overtake it, or the engine ends up on the owner's value while the model
+    /// shows the preset's.
+    func testALoadBackToThePlayingSettingsOvertakesAnInFlightHumanizationEdit() async throws {
+        let playback = try await openPreparedPiece()
+        let twin = try makeTwinOfTheActivePreset(on: playback)
+        let playing = playback.humanization
+        let gate = RealizationGate()
+        playback.realizationDidFinish = { await gate.holdFirst() }
+
+        let edit = Task { await playback.setHumanizationEnabled(!playing.isEnabled) }
+        try await gate.waitUntilHolding()
+        playback.assignment.activate(presetID: twin.id)
+        await playback.settlePresetAdoption()
+        gate.release()
+        await edit.value
+
+        XCTAssertEqual(playback.humanization, playing)
+        XCTAssertEqual(
+            try XCTUnwrap(playback.timeline).settings.humanization, playing,
+            "the owner's held realization loaded over the preset the model shows"
+        )
+    }
+
+    /// The same for tempo, whose realization also moves the clock.
+    func testALoadBackToThePlayingTempoOvertakesAnInFlightTempoEdit() async throws {
+        let playback = try await openPreparedPiece()
+        let twin = try makeTwinOfTheActivePreset(on: playback)
+        let playingTempo = playback.tempoPercent
+        let span = try XCTUnwrap(playback.timeline).totalMicroseconds
+        let gate = RealizationGate()
+        playback.realizationDidFinish = { await gate.holdFirst() }
+
+        let edit = Task { await playback.setTempoPercent(70) }
+        try await gate.waitUntilHolding()
+        playback.assignment.activate(presetID: twin.id)
+        await playback.settlePresetAdoption()
+        gate.release()
+        await edit.value
+
+        XCTAssertEqual(playback.tempoPercent, playingTempo)
+        XCTAssertEqual(
+            try XCTUnwrap(playback.timeline).totalMicroseconds, span,
+            "the owner's held 70% realization loaded over the preset's tempo"
+        )
+    }
+
+    /// A second preset identical to the active one, listed but not active.
+    private func makeTwinOfTheActivePreset(on playback: PlaybackModel) throws -> Preset {
+        let store = try XCTUnwrap(model.store)
+        let original = try XCTUnwrap(playback.assignment.activePreset)
+        let twin = try store.presets.duplicate(original, makeActive: false)
+        playback.assignment.refreshFromStore()
+        XCTAssertTrue(playback.assignment.presets.contains { $0.id == twin.id })
+        return twin
+    }
+
+    private func assertOwnerEditSurvived(
+        _ owners: HumanizationSettings, arriving preset: Preset, on playback: PlaybackModel,
+        file: StaticString = #filePath, line: UInt = #line
+    ) throws {
+        XCTAssertEqual(playback.humanization, owners, "the adoption undid the owner's edit", file: file, line: line)
+        let timeline = try XCTUnwrap(playback.timeline, file: file, line: line)
+        XCTAssertEqual(
+            timeline.settings.humanization, owners,
+            "a stale realization was loaded over the owner's edit", file: file, line: line
+        )
+        // The rest of the arriving preset still landed.
+        XCTAssertEqual(timeline.settings.expression, Self.second.expression, file: file, line: line)
+        XCTAssertEqual(playback.tempoPercent, Self.second.tempoPercent, file: file, line: line)
+        XCTAssertEqual(playback.loadedProgramTuning, Self.second.tuning, file: file, line: line)
+        // And the owner's edit was saved to the preset it was made on.
+        let store = try XCTUnwrap(model.store, file: file, line: line)
+        let reread = try XCTUnwrap(
+            store.presets.presets(forPieceID: playback.piece.id).first { $0.id == preset.id },
+            file: file, line: line
+        )
+        XCTAssertEqual(reread.content.humanization, owners, file: file, line: line)
     }
 
     // MARK: The produced master (REQ-005, MST001)
@@ -570,15 +817,49 @@ final class PerformanceSettingsWiringTests: XCTestCase {
             "the owner is not told which temperament could not be read: “\(status)”"
         )
     }
+}
 
-    /// The adoption runs in a task off the closure, so it is awaited rather than
-    /// assumed.
-    private func waitForExpression(
-        _ wanted: ExpressionSettings, on playback: PlaybackModel, timeout: TimeInterval = 10
-    ) async throws {
+/// The five performance settings a preset carries, stored onto a preset in one
+/// place so the adoption tests can build two distinct presets.
+private struct PresetPerformanceFixture {
+    let humanization: HumanizationSettings
+    let expression: ExpressionSettings
+    let producedMaster: ProducedMasterSettings
+    let tuning: TuningSettings
+    let tempoPercent: Int
+
+    func store(in preset: Preset, store: LibraryStore) throws -> Preset {
+        var preset = try store.presets.setHumanization(humanization, in: preset)
+        preset = try store.presets.setExpression(expression, in: preset)
+        preset = try store.presets.setProducedMaster(producedMaster, in: preset)
+        preset = try store.presets.setTuning(tuning, in: preset)
+        return try store.presets.setTempoPercent(tempoPercent, in: preset)
+    }
+}
+
+/// Holds the first realization to finish until released; lets every later one
+/// through.
+@MainActor
+private final class RealizationGate {
+    private var held: CheckedContinuation<Void, Never>?
+    private var calls = 0
+
+    func holdFirst() async {
+        calls += 1
+        guard calls == 1 else { return }
+        await withCheckedContinuation { held = $0 }
+    }
+
+    func waitUntilHolding(timeout: TimeInterval = 10) async throws {
         let deadline = Date().addingTimeInterval(timeout)
-        while playback.expression != wanted, Date() < deadline {
-            try await Task.sleep(nanoseconds: 20_000_000)
+        while held == nil, Date() < deadline {
+            try await Task.sleep(nanoseconds: 5_000_000)
         }
+        XCTAssertNotNil(held, "the adoption's realization never finished")
+    }
+
+    func release() {
+        held?.resume()
+        held = nil
     }
 }

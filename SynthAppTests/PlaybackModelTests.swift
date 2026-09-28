@@ -381,6 +381,10 @@ final class PlaybackModelTests: XCTestCase {
         await playback.settlePresetAdoption()
         XCTAssertEqual(playback.tempoPercent, 70)
         let saved = try XCTUnwrap(library.store.presets.activePreset(forPieceID: piece.id))
+        // A deletion left waiting for confirmation would, if confirmed after the
+        // preset became unreadable, create a fresh preset and delete this one.
+        playback.assignment.requestPresetDeletion()
+        XCTAssertNotNil(playback.assignment.pendingPresetDeletion)
 
         try library.corruptDocument(inTable: PresetCatalog.tableName, id: saved.id)
         let damaged = try library.storedPresetRows(forPieceID: piece.id)
@@ -390,6 +394,8 @@ final class PlaybackModelTests: XCTestCase {
         XCTAssertEqual(playback.tempoPercent, TempoMap.defaultTempoPercent)
         XCTAssertNotNil(playback.assignment.unreadablePreset)
         XCTAssertNil(playback.assignment.alert)
+        XCTAssertNil(playback.assignment.inventory, "Nothing left to act on the old preset")
+        XCTAssertNil(playback.assignment.pendingPresetDeletion)
         XCTAssertEqual(try library.storedPresetRows(forPieceID: piece.id), damaged)
     }
 

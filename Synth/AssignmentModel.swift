@@ -258,10 +258,25 @@ final class AssignmentModel {
     /// (#96's `onPresetLoaded`). On a first open those are already in force and
     /// nothing moves; on a later re-read they replace a preset that has since
     /// become unreadable, so what plays is what the banner says is playing.
+    ///
+    /// **Everything that could still act on the old preset is dropped too** —
+    /// the inventory `confirmPresetDeletion` needs, a deletion waiting for its
+    /// confirmation (which would otherwise create a fresh preset and delete the
+    /// unreadable one), and any rename in progress.
+    ///
+    /// **The engine's sounds and mix are left as they were**, deliberately. The
+    /// standard *performance* settings are what the transport adopts; there is
+    /// no "standard" sound per line short of the auto-mapping, which is exactly
+    /// the preset write this path refuses, and swapping every line onto the one
+    /// base voice mid-piece would be a louder surprise than the banner.
     private func showUnreadablePreset() {
         presets = []
         activePreset = nil
+        inventory = nil
         lines = []
+        pendingPresetDeletion = nil
+        isRenamingPreset = false
+        renamingLineID = nil
         keepSelectionValid()
         onPresetLoaded?(PresetContent(lines: []))
     }

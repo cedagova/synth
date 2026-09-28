@@ -358,8 +358,12 @@ final class AppModel {
         // the catalog and said no to it should be back where they were, not
         // left looking at the thing they just turned down. Accepting keeps it
         // open, because that is where the progress is.
-        catalog.onFirstRunOfferAnswered = { [weak self] didAccept in
-            guard let self, !didAccept else { return }
+        //
+        // …unless declining could not be recorded: that alert lives on the
+        // catalog screen, so closing it would hide the one thing the owner must
+        // be told — that the offer will be back next launch (#95).
+        catalog.onFirstRunOfferAnswered = { [weak self, weak catalog] didAccept in
+            guard let self, !didAccept, catalog?.alert == nil else { return }
             self.isInstrumentCatalogShowing = false
         }
         isInstrumentCatalogShowing = true

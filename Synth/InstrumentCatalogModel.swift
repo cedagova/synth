@@ -46,8 +46,24 @@ final class InstrumentCatalogModel {
     /// True while the first-run offer is showing.
     private(set) var isShowingFirstRunOffer = false
 
+    /// A store failure, with a headline that says what was being attempted.
+    struct Alert: Equatable {
+        let title: String
+        let failure: StoreFailure
+    }
+
     /// A store failure the whole screen has to report.
-    var alert: StoreFailure?
+    var alert: Alert?
+
+    static let libraryReadFailureTitle = "Synth could not read your instrument library"
+    static let offerReadFailureTitle =
+        "Synth could not check whether it has already offered the instruments"
+    static let offerWriteFailureTitle =
+        "Synth could not record your answer — the offer will appear again next time"
+
+    private func report(_ error: Error, as title: String) {
+        alert = Alert(title: title, failure: StoreFailure(error))
+    }
 
     private let store: LibraryStore
     private let manager: InstrumentDownloadManager
@@ -78,7 +94,7 @@ final class InstrumentCatalogModel {
                 )
             }
         } catch {
-            alert = StoreFailure(error)
+            report(error, as: Self.libraryReadFailureTitle)
         }
     }
 
@@ -92,7 +108,7 @@ final class InstrumentCatalogModel {
         do {
             try store.instruments.reconcileWithDisk()
         } catch {
-            alert = StoreFailure(error)
+            report(error, as: Self.libraryReadFailureTitle)
         }
         reload()
 
@@ -104,7 +120,7 @@ final class InstrumentCatalogModel {
         do {
             previousAnswer = try store.preferences.string(forKey: Self.firstRunOfferSeenKey)
         } catch {
-            alert = StoreFailure(error)
+            report(error, as: Self.offerReadFailureTitle)
             isShowingFirstRunOffer = false
             return
         }
@@ -131,7 +147,7 @@ final class InstrumentCatalogModel {
                 downloadNow ? "accepted" : "declined", forKey: Self.firstRunOfferSeenKey
             )
         } catch {
-            alert = StoreFailure(error)
+            report(error, as: Self.offerWriteFailureTitle)
         }
         if downloadNow {
             downloadEverythingNotYetInstalled()

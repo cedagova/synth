@@ -53,6 +53,11 @@ final class TemporaryLibrary {
 
     /// Makes every `write` to `table` fail until `allowWrites` is called.
     func failWrites(_ write: Write, on table: String) throws {
+        try Self.failWrites(write, on: table, in: store)
+    }
+
+    /// The same, on a store this fixture did not open — `AppModel`'s own.
+    static func failWrites(_ write: Write, on table: String, in store: LibraryStore) throws {
         try store.database.executeScript("""
             CREATE TEMP TRIGGER IF NOT EXISTS \(Self.triggerName(write, table))
             BEFORE \(write.rawValue) ON main.\(table)

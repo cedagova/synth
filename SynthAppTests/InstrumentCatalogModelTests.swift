@@ -55,7 +55,7 @@ final class InstrumentCatalogModelTests: XCTestCase {
         catalog.prepareForFirstRun()
 
         XCTAssertFalse(catalog.isShowingFirstRunOffer)
-        XCTAssertNotNil(catalog.alert)
+        XCTAssertEqual(catalog.alert?.title, InstrumentCatalogModel.offerReadFailureTitle)
     }
 
     /// The owner's answer stands for this session, and they are told it could
@@ -69,7 +69,52 @@ final class InstrumentCatalogModelTests: XCTestCase {
 
         XCTAssertFalse(catalog.isShowingFirstRunOffer)
         let alert = try XCTUnwrap(catalog.alert)
-        XCTAssertTrue(alert.summary.contains(TemporaryLibrary.injectedFailure), alert.summary)
+        XCTAssertEqual(alert.title, InstrumentCatalogModel.offerWriteFailureTitle)
+        XCTAssertTrue(
+            alert.failure.summary.contains(TemporaryLibrary.injectedFailure), alert.failure.summary
+        )
         XCTAssertNil(try storedAnswer)
+    }
+
+    // MARK: Through the shell
+
+    /// The launch path end to end: the offer comes up over a fresh library,
+    /// the owner declines, and declining cannot be recorded. The shell would
+    /// ordinarily put the catalog away; here it must keep it up, because the
+    /// catalog screen is the only place its alert is shown.
+    func testADeclineThatCannotBeRecordedKeepsTheCatalogUpToShowWhy() async throws {
+        let directory = URL(filePath: NSTemporaryDirectory())
+            .appending(path: "SynthAppTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let app = AppModel(container: AppContainer(rootURL: directory))
+        await app.bootstrap()
+        let store = try XCTUnwrap(app.store)
+        let shellCatalog = try XCTUnwrap(app.instrumentCatalog)
+        XCTAssertTrue(app.isInstrumentCatalogShowing, "A fresh library raises the offer")
+        XCTAssertTrue(shellCatalog.isShowingFirstRunOffer)
+
+        try TemporaryLibrary.failWrites(.insert, on: PreferenceStore.tableName, in: store)
+        shellCatalog.answerFirstRunOffer(downloadNow: false)
+
+        XCTAssertEqual(shellCatalog.alert?.title, InstrumentCatalogModel.offerWriteFailureTitle)
+        XCTAssertTrue(app.isInstrumentCatalogShowing, "The alert's screen stays up")
+    }
+
+    /// And the ordinary decline still puts the catalog away.
+    func testARecordedDeclinePutsTheCatalogAway() async throws {
+        let directory = URL(filePath: NSTemporaryDirectory())
+            .appending(path: "SynthAppTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let app = AppModel(container: AppContainer(rootURL: directory))
+        await app.bootstrap()
+        XCTAssertNotNil(app.store)
+        let shellCatalog = try XCTUnwrap(app.instrumentCatalog)
+
+        shellCatalog.answerFirstRunOffer(downloadNow: false)
+
+        XCTAssertNil(shellCatalog.alert)
+        XCTAssertFalse(app.isInstrumentCatalogShowing)
     }
 }

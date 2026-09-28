@@ -60,13 +60,17 @@ struct InstrumentCatalogScreen: View {
             )
         }
         .alert(
-            "Synth could not read your instrument library",
+            model.alert?.title ?? "",
             isPresented: alertBinding,
             presenting: model.alert
         ) { _ in
             Button("OK") { model.alert = nil }
-        } message: { failure in
-            Text([failure.summary, failure.recovery].compactMap { $0 }.joined(separator: "\n\n"))
+        } message: { alert in
+            Text(
+                [alert.failure.summary, alert.failure.recovery]
+                    .compactMap { $0 }
+                    .joined(separator: "\n\n")
+            )
         }
         .task { model.prepareForFirstRun() }
     }

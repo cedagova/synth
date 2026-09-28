@@ -140,17 +140,22 @@ is already baked into that timeline, the published playback rate is `1.0`
 while playing and `0` otherwise (see P84-1). Closing the piece clears the
 info and the published playback state.
 
-**FND001 — Open from Finder.** Declare imported type identifiers for
-uncompressed and compressed MusicXML through the generated Info.plist
-build settings, with the app as a Viewer at Alternate rank, using the
+**FND001 — Open from Finder.** Declare imported type identifiers and
+document types for uncompressed and compressed MusicXML in a source
+Info.plist for the app target, merged with the keys Xcode already generates
+(the generated-Info.plist build settings have no key for document or
+imported types), with the app as a Viewer at Alternate rank, using the
 identifiers, extensions and conformances published by the MusicXML
 specification (P84-3). Receive opened URLs at the scene/app level and queue
 them in `AppModel` until the library is ready; then deliver each batch
-through `LibraryModel.importPieces(from:)`, serialized behind any import in
-progress so no opened file is dropped by the `isWorking` guard. Selection,
+through `LibraryModel.importPieces(from:)`, serialized behind any library
+operation in progress (import or piece removal — both hold `isWorking`) so
+no opened file is dropped by that guard. Selection,
 de-duplication, named failure alerts and the unchanged-library guarantee all
-come from the existing path. Opening a file must not spawn a second window
-(P84-4).
+come from the existing path. Because the library's status line and alert
+exist only on the library screen, the result of an open is also surfaced at
+the app level over whichever screen is showing (P84-4). Opening a file must
+not spawn a second window.
 
 **UND001 — Undo and redo.** Register undo steps on the key window's undo
 manager from `AssignmentModel`, at the points where a change is actually
@@ -162,7 +167,10 @@ before/after values, and applies through the same model setters so the live
 engine, the row, and the auto-saved preset stay consistent. Action names
 follow the existing `describedAs:` vocabulary ("Undo Volume Change"). Undo
 history is in-memory, scoped to the open piece, and discarded when the piece
-closes. Preset deletion keeps its existing confirmation and is not undoable
+closes. Mixer/preset Undo and Redo are offered only while the playback screen
+is the visible content; while Sound Studio or the instrument catalog covers
+the piece, they are not offered and ⌘Z does not touch the mix (P84-7).
+Preset deletion keeps its existing confirmation and is not undoable
 (P84-2).
 
 ## Architecture decisions
@@ -193,23 +201,41 @@ Planner decisions (ordinary, reversible, recorded for the reviewer):
   uncompressed, zip-archive/data for `.mxl`) and records the source it used.
   Declaring them as *imported* (not exported) keeps Synth from claiming
   ownership of a public format.
-- **P84-4 Finder open stays in the one existing window and never
-  interrupts.** An open received while the playback screen, Sound Studio or
-  instrument catalog is showing imports and sets the library selection, and
-  the status line says what happened; it does not navigate away, stop
-  playback, cancel an export, or discard unsaved sound edits. The selected
-  piece is visible on return to the library. A cold-launch open lands in the
+- **P84-4 Finder open stays in the one existing window, never
+  interrupts, and always shows its result.** An open received while the
+  playback screen, Sound Studio or instrument catalog is showing imports and
+  sets the library selection; it does not navigate away, stop playback,
+  cancel an export, or discard unsaved sound edits. The library's status
+  line and alert live only on the library screen, so when another screen is
+  showing the result is surfaced at the app level over that screen: a
+  success is a short notice naming the imported (or already-present) piece
+  and that it is selected in the library, and a failure is the same
+  named-file alert the import picker shows, with "Your library is
+  unchanged." When the library is showing, its own status line and alert
+  are used, exactly as for the picker. A cold-launch open lands in the
   library, which is the first screen after bootstrap.
-- **P84-5 Remote commands only drive the live transport.** They never
-  start, cancel or reconfigure an export, and they are ignored while the
-  owner is auditioning through Sound Studio's play-through suspension the
-  same way the transport's own controls are.
+- **P84-5 Remote commands only drive the live transport, exactly like its
+  own controls.** They never start, cancel or reconfigure an export. During
+  Sound Studio's play-through the transport's own controls stay active (the
+  piece keeps playing while a sound is designed, and no transport action
+  checks play-through), so remote commands stay active too; no new
+  play-through state or guard is added.
 - **P84-6 Undo target discipline.** A step always applies to the preset
   and line it recorded. Because preset switch is itself a step, ordinary
   LIFO unwinding re-activates the right preset before any older mixer step
   is applied. If a step's preset no longer exists or the store write fails,
   the step reports the failure through the existing alert path and the
   history is cleared rather than applied to the wrong target.
+- **P84-7 Undo is tied to the visible playback screen.** Sound Studio and
+  the instrument catalog cover an open piece while its `AssignmentModel`
+  stays alive, and Sound Studio's own edits are not undoable. So mix/preset
+  Undo and Redo are offered only while the playback screen is the visible
+  content; elsewhere they are not offered and ⌘Z never changes a mix the
+  owner cannot see. History survives a trip into Sound Studio and back.
+  If an undo or redo lands while play-through is suspending the strips
+  (`writeStrip` does nothing then), it updates the row and the stored
+  preset and becomes audible when play-through ends, the same as a manual
+  fader move in that state today.
 
 ## Execution graph and waves
 
@@ -275,7 +301,8 @@ All in `cedagova/synth`; one repository, one owner.
 - No stored data changes shape in any leaf; no schema migration.
 - NPL001 and UND001 are pure app-layer behavior; rollback is reverting the
   PR.
-- FND001 adds Info.plist type declarations. Rolling back removes them;
+- FND001 adds type declarations in a source Info.plist merged with the
+  generated keys. Rolling back removes them;
   LaunchServices drops Synth from Open With after re-registration. Imported
   pieces remain ordinary library entries either way.
 - Undo history is in-memory only; nothing to migrate or clean up.
@@ -284,7 +311,11 @@ All in `cedagova/synth`; one repository, one owner.
 
 These are the refined bodies published to each existing issue. Each keeps
 the issue's original Problem, Proposal and Acceptance text verbatim at the
-top and adds the planning metadata and the sections below.
+top and adds the planning metadata and the sections below. Where a planner
+decision supersedes a preserved proposal line, a one-line note is placed
+directly under that line pointing to the decision: in #87, under "playback
+rate (tempo %)", the note reads that the published rate is `1.0` while
+playing and `0` otherwise, per P84-1.
 
 ### NPL001 — #87 Now Playing and media-key control of playback
 
@@ -303,7 +334,8 @@ top and adds the planning metadata and the sections below.
   not-ready piece → `.noActionableNowPlayingItem`; info updated on
   transport/seek/loop/tempo/open/close events, not per tick; rate `1.0`
   playing, `0` otherwise (P84-1); remote commands never touch an export
-  (P84-5).
+  and stay active during Sound Studio play-through, exactly like the
+  transport's own controls (P84-5).
 - **Failure and edge behavior:** seek beyond duration clamps as the existing
   seek does; a tempo change mid-play republishes duration and elapsed;
   closing the piece while playing clears Now Playing; reopening another piece
@@ -331,18 +363,23 @@ top and adds the planning metadata and the sections below.
   produces the same named-file failure as the import picker and the library
   is unchanged.
 - **Constraints:** one import path (`LibraryModel.importPieces(from:)`),
-  no fork of validation; no second window (P84-4); an open during another
-  import is queued, not dropped; never interrupts playback, export or Sound
-  Studio (P84-4).
+  no fork of validation; no second window; an open during another
+  library operation (import or piece removal) is queued, not dropped; never
+  interrupts playback, export or Sound Studio (P84-4).
 - **Failure and edge behavior:** several files opened at once import as one
   batch with one report; an open while bootstrap failed is delivered after a
-  successful Try Again or reported as not imported — never silently lost.
+  successful Try Again or reported as not imported — never silently lost;
+  with the library not on screen, success shows the app-level notice and a
+  rejected file shows the same named-file alert over the visible screen
+  (P84-4).
 - **Validation:** unit tests in `SynthAppTests` for the pending-open queue
-  (before ready, during an import, duplicate content, invalid file) against
-  a temporary library; manual smoke with the built `.app`: Open With listing,
-  double-click with the app running and quit, duplicate, and a damaged file.
-- **Migration and rollback:** Info.plist keys only; revert the PR and
-  re-register with LaunchServices.
+  (before ready, during an import, during a piece removal, duplicate
+  content, invalid file) and for where the result is surfaced, against a
+  temporary library; manual smoke with the built `.app`: Open With listing,
+  double-click with the app running and quit, duplicate, a damaged file, and
+  a good file and a damaged file opened while a piece is playing.
+- **Migration and rollback:** a source Info.plist merged with the generated
+  keys; revert the PR and re-register with LaunchServices.
 
 ### UND001 — #89 Undo and redo for mixer and preset changes
 
@@ -350,7 +387,8 @@ top and adds the planning metadata and the sections below.
   and in the saved preset; ⇧⌘Z puts it back.
 - **In scope:** undo/redo for per-line volume, pan, mute, solo, room send,
   depth; preset rename; preset switch; action names; Edit menu Undo/Redo via
-  the window's undo manager.
+  the window's undo manager, offered only while the playback screen is the
+  visible content (P84-7).
 - **Out of scope:** undo for preset or piece deletion (keep confirmation,
   P84-2), preset creation, sound assignment, tempo, expression, tuning,
   humanization, line rename, substitutions, Sound Studio; persisting undo
@@ -362,15 +400,22 @@ top and adds the planning metadata and the sections below.
   existing preview/commit split); undo applies through the model setters so
   engine, row and auto-save stay in sync; target discipline and clearing
   rules (P84-2, P84-6); history scoped to the open piece and discarded on
-  close.
+  close; not offered while Sound Studio or the catalog covers the piece
+  (P84-7).
 - **Failure and edge behavior:** a failed undo write shows the existing
   "Could not save" alert, leaves the strip at the persisted value, and
-  clears history; undo in a focused text field undoes text, not the mix.
+  clears history; undo in a focused text field undoes text, not the mix;
+  ⌘Z in Sound Studio or the catalog never changes the mix; an undo during
+  play-through updates the row and stored preset and is heard when
+  play-through ends (P84-7).
 - **Validation:** `SynthAppTests` cover undo and redo of volume (including a
   multi-value drag as one step), mute, preset switch and rename, and the
-  clear-on-create/delete rule, asserting both the model's lines/engine strip
-  and the stored preset; manual smoke: drag a fader during playback, ⌘Z,
-  hear it, reopen the piece and see the restored value.
+  clear-on-create/delete rule, the not-offered-outside-playback rule, and
+  an undo during play-through (row and store updated, strip applied when
+  play-through ends), asserting both the model's lines/engine strip and the
+  stored preset; manual smoke: drag a fader during playback, ⌘Z, hear it,
+  reopen the piece and see the restored value; open Sound Studio and check
+  that ⌘Z leaves the mix alone.
 - **Migration and rollback:** none; revert the PR.
 
 ## Issue publication manifest
@@ -413,7 +458,7 @@ No orphan or overlapping outcome: each condition maps to exactly one leaf.
 ## Assumptions and open questions
 
 None. The one choice left to scoping (#89 deletion undo) is decided as
-P84-2; the other planner decisions P84-1, P84-3 to P84-6 are ordinary and
+P84-2; the other planner decisions P84-1, P84-3 to P84-7 are ordinary and
 reversible. Assumption: the system-provided sandbox extension for files
 opened through Finder is sufficient to read them (standard macOS behavior;
 FND001's cold-launch smoke test proves it).

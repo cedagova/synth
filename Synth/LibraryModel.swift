@@ -122,6 +122,12 @@ final class LibraryModel {
         didSet { if searchText != oldValue { pruneSelection() } }
     }
 
+    /// The one composer the list is narrowed to, or nil for every composer.
+    /// Session state only; it combines with `searchText`.
+    var composerFilter: ComposerFilter? {
+        didSet { if composerFilter != oldValue { pruneSelection() } }
+    }
+
     var sort: LibrarySort = .byTitle {
         didSet { if sort != oldValue { pruneSelection() } }
     }
@@ -167,16 +173,29 @@ final class LibraryModel {
 
     // MARK: - Derived state
 
-    /// The rows the list shows: filtered by `searchText`, ordered by `sort`.
+    /// The rows the list shows: filtered by `searchText` and `composerFilter`,
+    /// ordered by `sort`.
     var visiblePieces: [PieceRecord] {
-        LibraryQuery.arrange(pieces, searchText: searchText, sort: sort)
+        LibraryQuery.arrange(pieces, searchText: searchText, composer: composerFilter, sort: sort)
+    }
+
+    /// The composer filter's choices, with counts, over the whole library.
+    var composerFacet: [ComposerFacetEntry] {
+        LibraryQuery.composerFacet(pieces)
+    }
+
+    /// The chosen composer's display name, or nil when not filtering.
+    var composerFilterName: String? {
+        guard let composerFilter else { return nil }
+        return composerFacet.first { $0.filter == composerFilter }?.name
     }
 
     /// True when the library itself holds nothing — the first-run state, which
     /// is not the same as a search that found nothing.
     var isLibraryEmpty: Bool { pieces.isEmpty }
 
-    /// True when the library has pieces but the current search matches none.
+    /// True when the library has pieces but the current search and composer
+    /// filter match none.
     var isSearchEmpty: Bool { !pieces.isEmpty && visiblePieces.isEmpty }
 
     /// The currently selected piece, if the selection still exists.
@@ -197,6 +216,8 @@ final class LibraryModel {
     func reload() async {
         do {
             pieces = try await readPieces()
+            // A composer whose last piece was removed is no longer a choice.
+            composerFilter = LibraryQuery.resolvedComposerFilter(composerFilter, in: pieces)
             pruneSelection()
         } catch {
             alert = .libraryUnreadable(error)
@@ -364,6 +385,10 @@ final class LibraryModel {
 
     func clearSearch() {
         searchText = ""
+    }
+
+    func clearComposerFilter() {
+        composerFilter = nil
     }
 
     /// Picks a field, keeping the direction that field last had — except that

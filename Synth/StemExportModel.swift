@@ -141,7 +141,13 @@ final class StemExportModel {
 
     /// Render every stem into `folder`, asking first if that would replace
     /// files already there.
-    func start(in folder: URL, replacingExisting: Bool = false) {
+    ///
+    /// `confirmed` is the set of names the owner agreed to replace. The stems
+    /// are rebuilt on every call, so if they now collide with any file outside
+    /// that set — the mix changed, or a file appeared — the owner is asked
+    /// again about the full list, and SynthKit refuses anything unconfirmed at
+    /// publish too.
+    func start(in folder: URL, confirmed: Set<String> = []) {
         guard !isExporting else { return }
         guard let request = makeRequest(settings) else {
             phase = .failed(ExportFailure(AudioExportError.nothingToRender))
@@ -151,16 +157,16 @@ final class StemExportModel {
             phase = .failed(ExportFailure(AudioExportError.nothingAudible))
             return
         }
-        if !replacingExisting {
-            let existing = request.existingFileNames(in: folder)
-            if !existing.isEmpty {
-                confirmReplacing(existing, folder) { [weak self] confirmed in
-                    guard confirmed else { return }
-                    self?.start(in: folder, replacingExisting: true)
-                }
-                return
+        let existing = request.existingFileNames(in: folder)
+        if !Set(existing).isSubset(of: confirmed) {
+            confirmReplacing(existing, folder) { [weak self] agreed in
+                guard agreed else { return }
+                self?.start(in: folder, confirmed: Set(existing))
             }
+            return
         }
+        // Only what is actually there and was agreed to; never a wider set.
+        let replacing = Set(existing)
 
         let cancellation = AudioExportCancellation()
         self.cancellation = cancellation
@@ -177,7 +183,7 @@ final class StemExportModel {
                     return .success(
                         try AudioStemExporter(request: request).run(
                             into: folder,
-                            replacingExisting: replacingExisting,
+                            confirmedReplacements: replacing,
                             progress: onProgress,
                             cancellation: cancellation
                         )

@@ -30,14 +30,16 @@ public struct AudioStemExporter: Sendable {
     ///
     /// - Parameters:
     ///   - folder: an existing directory.
-    ///   - replacingExisting: true only when the owner confirmed replacing the
-    ///     files `request.existingFileNames(in:)` reported. False refuses, with
-    ///     `.wouldReplaceExistingFiles`, before anything is rendered — and again
-    ///     at publish, if a file appeared in the meantime.
+    ///   - confirmedReplacements: the file names the owner confirmed may be
+    ///     replaced — exactly the names `request.existingFileNames(in:)`
+    ///     reported when they were asked. Any other existing stem name is
+    ///     refused with `.wouldReplaceExistingFiles`: before anything is
+    ///     rendered, and again at publish, so a file that appears during the
+    ///     render is never replaced on the strength of an earlier answer.
     @discardableResult
     public func run(
         into folder: URL,
-        replacingExisting: Bool = false,
+        confirmedReplacements: Set<String> = [],
         progress: (@Sendable (AudioStemExportProgress) -> Void)? = nil,
         cancellation: AudioExportCancellation = AudioExportCancellation(),
         opener: StagingFileOpening = FileSystemStagingFileOpener(),
@@ -51,14 +53,7 @@ public struct AudioStemExporter: Sendable {
             folder: folder, fileNames: stems.map(\.fileName), fileManager: fileManager
         )
         do {
-            if !replacingExisting {
-                let existing = staging.existingFileNames()
-                if !existing.isEmpty {
-                    throw AudioExportError.wouldReplaceExistingFiles(
-                        folder: staging.folder.path(percentEncoded: false), names: existing
-                    )
-                }
-            }
+            try staging.refuseUnconfirmed(confirmedReplacements)
 
             var rendered: [(RenderedExport, AudioExportRequest)] = []
             for (index, stem) in stems.enumerated() {
@@ -80,7 +75,7 @@ public struct AudioStemExporter: Sendable {
             // Every stem is staged; the last point a cancel still leaves the
             // folder exactly as it was.
             if cancellation.isCancelled { throw AudioExportError.cancelled }
-            try staging.publish(replacingExisting: replacingExisting)
+            try staging.publish(confirmedReplacements: confirmedReplacements)
 
             return AudioStemExportResult(
                 folder: staging.folder,
@@ -294,6 +289,11 @@ extension AudioExportNaming {
 /// has rendered. A batch cannot be one rename, so the publish undoes itself if
 /// any move fails: files it added are removed and files it replaced are put
 /// back from where it had moved them.
+///
+/// **An original is never deleted unless the batch succeeded.** Replaced files
+/// wait in `backupDirectory` until every stem is in place; if putting one back
+/// fails, the backups are kept — cleanup skips them — and the error names
+/// where they are.
 struct AudioStemStaging {
     let folder: URL
     let destinations: [URL]
@@ -346,18 +346,30 @@ struct AudioStemStaging {
             .map(\.lastPathComponent)
     }
 
-    /// Move every staged stem into the folder, or leave it as it was.
-    func publish(replacingExisting: Bool) throws {
-        defer { removeReplacementDirectory() }
+    /// Where replaced originals wait until the batch has succeeded.
+    var backupDirectory: URL { replacementDirectory.appending(path: "Replaced") }
 
-        let existing = existingFileNames()
-        if !existing.isEmpty, !replacingExisting {
+    /// Refuses when a stem name exists in the folder that the owner did not
+    /// confirm replacing.
+    func refuseUnconfirmed(_ confirmed: Set<String>) throws {
+        let unconfirmed = existingFileNames().filter { !confirmed.contains($0) }
+        if !unconfirmed.isEmpty {
             throw AudioExportError.wouldReplaceExistingFiles(
-                folder: folder.path(percentEncoded: false), names: existing
+                folder: folder.path(percentEncoded: false), names: unconfirmed
             )
         }
+    }
 
-        let backups = replacementDirectory.appending(path: "Replaced")
+    /// Move every staged stem into the folder, or leave it as it was.
+    ///
+    /// Replaces only files named in `confirmedReplacements`; any other file
+    /// at a stem's name — one that appeared since the owner was asked — fails
+    /// the batch before anything moves.
+    func publish(confirmedReplacements: Set<String>) throws {
+        try refuseUnconfirmed(confirmedReplacements)
+
+        let existing = existingFileNames()
+        let backups = backupDirectory
         var movedAside: [(original: URL, backup: URL)] = []
         var added: [URL] = []
         var current = folder
@@ -382,19 +394,47 @@ struct AudioStemStaging {
             }
         } catch {
             for url in added.reversed() { try? fileManager.removeItem(at: url) }
+            var unrestored: [String] = []
             for entry in movedAside.reversed() {
-                try? fileManager.moveItem(at: entry.backup, to: entry.original)
+                do {
+                    try fileManager.moveItem(at: entry.backup, to: entry.original)
+                } catch {
+                    unrestored.append(entry.original.lastPathComponent)
+                }
             }
+            if !unrestored.isEmpty {
+                // Kept, not cleaned up: this folder now holds the only copy.
+                discard()
+                throw AudioExportError.publishFailedOriginalsKept(
+                    path: current.path(percentEncoded: false),
+                    reason: (error as NSError).localizedDescription,
+                    names: unrestored.reversed(),
+                    backupFolder: backups.path(percentEncoded: false)
+                )
+            }
+            discard()
             throw AudioExportError.publishFailed(
                 path: current.path(percentEncoded: false),
                 reason: (error as NSError).localizedDescription
             )
         }
+        // Every stem is in place: the replaced originals were confirmed and
+        // can go.
+        removeReplacementDirectory()
     }
 
-    /// Throw every staged stem away. Never touches the folder.
+    /// Throw every staged stem away. Never touches the folder, and never
+    /// deletes a replaced original that could not be put back: if
+    /// `backupDirectory` holds anything, only the staged stems are removed.
     func discard() {
-        removeReplacementDirectory()
+        let backups = backupDirectory.path(percentEncoded: false)
+        let kept = (try? fileManager.contentsOfDirectory(atPath: backups)) ?? []
+        guard !kept.isEmpty else { return removeReplacementDirectory() }
+        for url in stagedURLs where fileManager.fileExists(atPath: url.path(percentEncoded: false)) {
+            try? fileManager.removeItem(at: url)
+        }
+        NSLog("Synth: kept %d replaced file(s) that could not be put back, in %@",
+              kept.count, backups)
     }
 
     private func removeReplacementDirectory() {

@@ -210,6 +210,36 @@ final class StemExportWiringTests: XCTestCase {
         XCTAssertEqual(try files().count, 2)
     }
 
+    /// Agreeing to replace one file is not agreement to replace another: if
+    /// a second stem name exists by the time the export starts, the owner is
+    /// asked again about the full list, and declining writes nothing.
+    func testAFileThatAppearsAfterConfirmingIsAskedAboutAgain() async throws {
+        let playback = try await openPreparedPiece()
+        playback.stemExport.present()
+        let names = playback.stemExport.plannedStems.map(\.fileName)
+        let first = exports.appending(path: names[0])
+        let second = exports.appending(path: names[1])
+        try Data("one".utf8).write(to: first)
+
+        var asked: [[String]] = []
+        playback.stemExport.confirmReplacing = { [second] listed, _, done in
+            asked.append(listed)
+            if asked.count == 1 {
+                // Arrives between the owner's answer and the export starting.
+                try? Data("two".utf8).write(to: second)
+                done(true)
+            } else {
+                done(false)
+            }
+        }
+        playback.stemExport.chooseFolderAndStart()
+
+        XCTAssertEqual(asked, [[names[0]], names])
+        XCTAssertEqual(playback.stemExport.phase, .ready, "An export started without the second answer.")
+        XCTAssertEqual(try Data(contentsOf: first), Data("one".utf8))
+        XCTAssertEqual(try Data(contentsOf: second), Data("two".utf8))
+    }
+
     /// Cancel from the main actor stops a running batch and leaves no stems.
     func testCancellingARunningBatchLeavesNoStems() async throws {
         let playback = try await openPreparedPiece(measureCount: 40)

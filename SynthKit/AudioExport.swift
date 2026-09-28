@@ -530,6 +530,13 @@ public enum AudioExportError: Error, Equatable {
     /// The finished file could not be moved into place.
     case publishFailed(path: String, reason: String)
 
+    /// A stem batch failed to publish, and some files it had set aside to
+    /// replace could not be put back. They are kept, untouched, in
+    /// `backupFolder`.
+    case publishFailedOriginalsKept(
+        path: String, reason: String, names: [String], backupFolder: String
+    )
+
     /// The graph stopped producing frames before the program's own length.
     case renderStopped(atFrame: Int64, expectedFrames: Int64)
 
@@ -568,6 +575,9 @@ extension AudioExportError: LocalizedError {
             return "Synth could not finish writing the export at \(Self.display(path)). \(reason)"
         case .publishFailed(let path, let reason):
             return "Synth could not save the finished export to \(Self.display(path)). \(reason)"
+        case .publishFailedOriginalsKept(let path, let reason, let names, _):
+            return "Synth could not save the stems to \(Self.display(path)), and could not "
+                + "put back \(names.count == 1 ? names[0] : "\(names.count) files it was replacing"). \(reason)"
         case .renderStopped(let frame, let expected):
             return "The render stopped after \(frame) of \(expected) frames."
         case .tooLongForContainer(let format, let minutes, _, _):
@@ -599,6 +609,10 @@ extension AudioExportError: LocalizedError {
                 """
         case .publishFailed:
             return "Check that the folder still exists and export again. Nothing was written."
+        case .publishFailedOriginalsKept(_, _, let names, let backupFolder):
+            return "Nothing was deleted. The original \(names.count == 1 ? "file is" : "files are") "
+                + "in \(backupFolder) — move \(names.count == 1 ? "it" : "them") back into the "
+                + "folder before exporting again."
         case .renderStopped, .engineCrossedThreads:
             return "Try the export again. Nothing was written."
         case .tooLongForContainer:

@@ -334,7 +334,9 @@ final class AudioStemExportTests: XCTestCase {
         XCTAssertEqual(try contents(of: out), [request.stems[1].fileName])
 
         // Confirmed: every stem is written, the old file replaced.
-        let result = try AudioStemExporter(request: request).run(into: out, replacingExisting: true)
+        let result = try AudioStemExporter(request: request).run(
+            into: out, confirmedReplacements: [request.stems[1].fileName]
+        )
         XCTAssertEqual(try contents(of: out), request.stems.map(\.fileName).sorted())
         XCTAssertNotEqual(try Data(contentsOf: kept), Data("keep me".utf8))
         XCTAssertEqual(result.files.map { $0.url.lastPathComponent }, request.stems.map(\.fileName))
@@ -351,7 +353,7 @@ final class AudioStemExportTests: XCTestCase {
         try Data("new A".utf8).write(to: staging.file(at: 0).url)
         // B is never staged, so its move fails after A's has succeeded.
 
-        XCTAssertThrowsError(try staging.publish(replacingExisting: true)) { error in
+        XCTAssertThrowsError(try staging.publish(confirmedReplacements: ["A.wav"])) { error in
             guard case .publishFailed = error as? AudioExportError else {
                 return XCTFail("Expected a publish failure, got \(error)")
             }
@@ -359,6 +361,80 @@ final class AudioStemExportTests: XCTestCase {
         XCTAssertEqual(try contents(of: out), ["A.wav"])
         XCTAssertEqual(try Data(contentsOf: out.appending(path: "A.wav")), Data("original A".utf8))
         XCTAssertFalse(FileManager.default.fileExists(atPath: staging.replacementDirectory.path(percentEncoded: false)))
+    }
+
+    /// Confirming one name does not license replacing another: a file that
+    /// appears at a stem's name while the batch renders is refused at publish,
+    /// and neither it nor the confirmed file is touched.
+    func testAFileThatAppearsAfterConfirmationIsNotReplaced() throws {
+        let out = try folder("newcomer")
+        let request = AudioStemExportRequest(mix: mixRequest(try twoLines()), pieceTitle: "Two")
+        let confirmed = out.appending(path: request.stems[0].fileName)
+        let newcomer = out.appending(path: request.stems[1].fileName)
+        try Data("confirmed".utf8).write(to: confirmed)
+
+        let once = Counter()
+        XCTAssertThrowsError(try AudioStemExporter(request: request).run(
+            into: out,
+            confirmedReplacements: [request.stems[0].fileName],
+            progress: { _ in
+                if once.increment() == 1 { try? Data("newcomer".utf8).write(to: newcomer) }
+            }
+        )) { error in
+            XCTAssertEqual(
+                error as? AudioExportError,
+                .wouldReplaceExistingFiles(
+                    folder: out.standardizedFileURL.path(percentEncoded: false),
+                    names: [request.stems[1].fileName]
+                )
+            )
+        }
+        XCTAssertGreaterThan(once.value, 0, "The newcomer should have arrived mid-render.")
+        XCTAssertEqual(try Data(contentsOf: confirmed), Data("confirmed".utf8))
+        XCTAssertEqual(try Data(contentsOf: newcomer), Data("newcomer".utf8))
+        XCTAssertEqual(try contents(of: out), request.stems.map(\.fileName).sorted())
+
+        // An unconfirmed existing name is also refused before any render.
+        XCTAssertThrowsError(try AudioStemExporter(request: request).run(
+            into: out, confirmedReplacements: [request.stems[0].fileName]
+        )) { guard case .wouldReplaceExistingFiles = $0 as? AudioExportError else {
+            return XCTFail("Expected a refusal, got \($0)")
+        } }
+    }
+
+    /// If a replaced original cannot be put back, it is kept — never deleted
+    /// with the temporary folder — and the error says where it is.
+    func testAnOriginalThatCannotBePutBackIsKeptAndNamed() throws {
+        let out = try folder("unrestorable")
+        try Data("original A".utf8).write(to: out.appending(path: "A.wav"))
+        let fileManager = RestoreRefusingFileManager()
+
+        let staging = try AudioStemStaging(folder: out, fileNames: ["A.wav", "B.wav"], fileManager: fileManager)
+        try Data("new A".utf8).write(to: staging.file(at: 0).url)
+        // B is never staged, so the batch fails after A is replaced, and the
+        // file manager then refuses to put the original A back.
+
+        var backupFolder: String?
+        XCTAssertThrowsError(try staging.publish(confirmedReplacements: ["A.wav"])) { error in
+            guard case .publishFailedOriginalsKept(_, _, let names, let folder) = error as? AudioExportError else {
+                return XCTFail("Expected the originals-kept failure, got \(error)")
+            }
+            XCTAssertEqual(names, ["A.wav"])
+            backupFolder = folder
+            XCTAssertTrue(
+                (error as? LocalizedError)?.recoverySuggestion?.contains(folder) ?? false,
+                "The error does not say where the original is."
+            )
+        }
+        let kept = URL(filePath: try XCTUnwrap(backupFolder)).appending(path: "A.wav")
+        XCTAssertEqual(try Data(contentsOf: kept), Data("original A".utf8), "The original was lost.")
+        XCTAssertEqual(try contents(of: out), [], "The new stem was left in the folder.")
+
+        // The exporter's own cleanup after a failure must not delete it either.
+        staging.discard()
+        XCTAssertEqual(try Data(contentsOf: kept), Data("original A".utf8))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staging.file(at: 0).url.path(percentEncoded: false)))
+        try? FileManager.default.removeItem(at: staging.replacementDirectory)
     }
 
     func testAMissingFolderFailsClearly() throws {
@@ -462,6 +538,20 @@ final class AudioStemExportTests: XCTestCase {
 }
 
 // MARK: - Test doubles
+
+/// Refuses to move anything out of the staging's `Replaced` folder, which is
+/// what a restore does — the one move a failed publish must not lose.
+private final class RestoreRefusingFileManager: FileManager, @unchecked Sendable {
+    override func moveItem(at srcURL: URL, to dstURL: URL) throws {
+        if srcURL.deletingLastPathComponent().lastPathComponent == "Replaced" {
+            throw NSError(
+                domain: NSCocoaErrorDomain, code: NSFileWriteFileExistsError,
+                userInfo: [NSLocalizedDescriptionKey: "A file with that name already exists."]
+            )
+        }
+        try super.moveItem(at: srcURL, to: dstURL)
+    }
+}
 
 /// Opens the first staged file normally and fails the second the way a full
 /// disk does.

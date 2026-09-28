@@ -501,6 +501,81 @@ public final class PlaybackEngine: @unchecked Sendable {
 
     public var loadedProgram: RenderProgram? { program }
 
+    // MARK: A faded switch mid-piece (#92)
+
+    /// The longest a switch waits for the fade-out before rebuilding anyway.
+    /// The fade is `SYNTH_DECLICK_SECONDS` (4 ms) plus at most one buffer; this
+    /// only matters when the render thread is not running at all.
+    static let switchFadeTimeoutSeconds = 0.05
+
+    /// Replace what is playing — timeline, tuning, sounds, mix — mid-piece,
+    /// with the seek fade on both sides of the rebuild.
+    ///
+    /// **No new mechanism: the seek's own declick, used twice.** A rebuild on
+    /// its own stops the graph wherever the current buffer ends, so the old
+    /// program is cut off mid-waveform; the fresh one already fades in. This
+    /// pauses first — a pause is a transport discontinuity, so the render
+    /// thread fades out exactly as it does for a seek — then runs `rebuild`
+    /// while nothing is sounding, and resumes at `microseconds`, which fades in.
+    /// However many rebuilds `rebuild` makes, sound resumes only once, in the
+    /// state they all arrive at.
+    ///
+    /// The produced master is held off across `rebuild` and set to
+    /// `producedMaster` once at the end, so a switch that rebuilds three times
+    /// pays for one loudness calibration, of the program that will actually
+    /// play, rather than three.
+    ///
+    /// Returns the fade-out as rendered when the engine is offline, so a test
+    /// can splice it between the stretches either side and measure the join;
+    /// nil in real time, where the render thread has already played it.
+    @discardableResult
+    public func switchFaded(
+        resumingAtMicroseconds microseconds: Int64,
+        producedMaster: ProducedMasterSettings,
+        _ rebuild: () throws -> Void
+    ) throws -> RenderedAudio? {
+        let wasPlaying = transportState == .playing
+        let fade = wasPlaying ? try fadeOutForSwitch() : nil
+
+        producedMasterSetting = .off
+        do {
+            try rebuild()
+        } catch {
+            self.producedMaster = producedMaster
+            throw error
+        }
+        self.producedMaster = producedMaster
+
+        seek(toMicroseconds: microseconds)
+        if wasPlaying {
+            if case .realtime = mode { try start() }
+            play()
+        }
+        return fade
+    }
+
+    /// Pause, and wait for the render thread's fade-out to land.
+    private func fadeOutForSwitch() throws -> RenderedAudio? {
+        pause()
+        switch mode {
+        case .realtime:
+            guard avEngine.isRunning else { return nil }
+            let deadline = Date().addingTimeInterval(Self.switchFadeTimeoutSeconds)
+            while transportState == .playing, Date() < deadline { usleep(500) }
+            return nil
+        case .offline(let rate):
+            var left = [Float]()
+            var right = [Float]()
+            let limit = Int(rate * Self.switchFadeTimeoutSeconds)
+            while transportState == .playing, left.count < limit {
+                let block = try renderOffline(frameCount: 64)
+                left += block.left
+                right += block.right
+            }
+            return RenderedAudio(sampleRate: rate, left: left, right: right)
+        }
+    }
+
     // MARK: Per-line mixer (REQ-008 basis)
 
     /// Per-line gain, pan, mute and solo, addressed by the compiled score's own

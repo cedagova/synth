@@ -200,6 +200,12 @@ private struct PresetBar: View {
                 }
             }
 
+            // #92: a reference preset, chosen for this session only, and a
+            // latched Compare that plays it in place of the active one.
+            if model.presets.count > 1 {
+                CompareRow(model: model)
+            }
+
             // REQ-024's auto-save indication. There is no Save button because
             // there is nothing to save: every change is one committed
             // transaction, and the revision is the proof it happened.
@@ -250,6 +256,55 @@ private struct PresetBar: View {
         Binding(
             get: { model.pendingPresetDeletion != nil },
             set: { if !$0 { model.cancelPresetDeletion() } }
+        )
+    }
+}
+
+// MARK: - Compare (#92)
+
+private struct CompareRow: View {
+    @Bindable var model: AssignmentModel
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Picker("Compare with", selection: referenceSelection) {
+                Text("No reference").tag("")
+                ForEach(model.presets) { preset in
+                    Text(preset.name).tag(preset.id)
+                }
+            }
+            .frame(minWidth: 80)
+            .layoutPriority(-1)
+            .accessibilityHint(
+                "The preset Compare plays in place of the active one. Not saved."
+            )
+
+            Toggle(isOn: comparing) {
+                Label("Compare", systemImage: "arrow.left.arrow.right")
+            }
+            .toggleStyle(.button)
+            .fixedSize()
+            .disabled(!model.canCompare && !model.isComparing)
+            .accessibilityLabel("Compare with the reference preset")
+            .accessibilityValue(model.isComparing ? "On" : "Off")
+            .accessibilityHint(
+                "Plays the reference in place of the active preset at the same place in the "
+                + "music; nothing is changed or saved. Also on the Mix menu as Control Command C."
+            )
+        }
+    }
+
+    private var referenceSelection: Binding<String> {
+        Binding(
+            get: { model.referencePresetID ?? "" },
+            set: { model.chooseReference(presetID: $0.isEmpty ? nil : $0) }
+        )
+    }
+
+    private var comparing: Binding<Bool> {
+        Binding(
+            get: { model.isComparing },
+            set: { if $0 != model.isComparing { model.toggleCompare() } }
         )
     }
 }

@@ -100,6 +100,11 @@ final class ExportModel {
     /// increment-004 review found exactly this kind of closure proved nowhere.
     var makeRequest: @MainActor (AudioExportSettings) -> AudioExportRequest? = { _ in nil }
 
+    /// Called before the sheet opens and again before a render starts, so the
+    /// piece is back on its active preset first: an export always renders the
+    /// active preset, never a reference being compared (#92, D5).
+    var willExport: @MainActor () -> Void = {}
+
     /// The active preset's name, for the suggested file name.
     var presetName: @MainActor () -> String? = { nil }
 
@@ -187,6 +192,7 @@ final class ExportModel {
     /// Show the sheet, forgetting the previous run's outcome.
     func present() {
         guard !isExporting else { return }
+        willExport()
         phase = .ready
         isPresented = true
     }
@@ -208,6 +214,7 @@ final class ExportModel {
     /// Render the open piece to `destination` on a background thread.
     func start(to destination: URL) {
         guard !isExporting else { return }
+        willExport()
         guard let request = makeRequest(settings) else {
             phase = .failed(ExportFailure(AudioExportError.nothingToRender))
             return

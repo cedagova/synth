@@ -75,6 +75,17 @@ final class AppModel {
         keyboard.install()
     }
 
+    /// The media keys, headphone controls and Control Center's Now Playing,
+    /// driving whichever piece is open (#87). Installed once by `SynthApp`;
+    /// tests build their own over a fake pair of centers.
+    @ObservationIgnored private(set) lazy var nowPlaying = NowPlayingControl(
+        centers: SystemNowPlayingCenters()
+    ) { [weak self] in self?.playback }
+
+    func installNowPlaying() {
+        nowPlaying.install()
+    }
+
     /// The instrument catalog, once it has been opened.
     ///
     /// Kept after the screen closes, deliberately: a 2.6 GB download must not

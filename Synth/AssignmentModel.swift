@@ -111,6 +111,14 @@ final class AssignmentModel {
     @ObservationIgnored private weak var undoManager: UndoManager?
     @ObservationIgnored private var isApplyingHistory = false
 
+    /// True while one of the transport's own text fields (measure, time, loop)
+    /// has focus. Set by `PlaybackScreen`, which owns that focus.
+    @ObservationIgnored private var isTransportFieldFocused = false
+
+    /// The preset a rename draft was begun on. A commit renames this preset
+    /// or nothing — never whichever preset happens to be active by then.
+    private var renamingPresetID: String?
+
     /// Hands a loaded preset's whole-piece humanization to the transport,
     /// which owns re-realization. Installed by `PlaybackModel`.
     var onHumanizationLoaded: ((HumanizationSettings) -> Void)?
@@ -227,6 +235,7 @@ final class AssignmentModel {
 
             presets = try store.presets.presets(forPieceID: score.pieceID)
             activePreset = preset
+            dropRenameDraftUnlessOn(preset)
             lines = performance.lines
             keepSelectionValid()
             onHumanizationLoaded?(preset.content.humanization)
@@ -472,6 +481,14 @@ final class AssignmentModel {
         }
     }
 
+    /// A rename draft belongs to the preset it was begun on; once another
+    /// preset is active — a switch, an undo, a delete — the draft is dropped
+    /// rather than committed onto the wrong one.
+    private func dropRenameDraftUnlessOn(_ preset: Preset) {
+        guard isRenamingPreset, renamingPresetID != preset.id else { return }
+        cancelPresetRename()
+    }
+
     private func keepSelectionValid() {
         if let selectedLineID, lines.contains(where: { $0.lineID == selectedLineID }) { return }
         selectedLineID = lines.first?.lineID
@@ -501,6 +518,7 @@ final class AssignmentModel {
         selectedLineID = lineID
         renamingLineID = lineID
         lineNameDraft = entry.name
+        resyncUndoManager()
     }
 
     func beginRenameOfSelectedLine() {
@@ -511,6 +529,7 @@ final class AssignmentModel {
     func cancelLineRename() {
         renamingLineID = nil
         lineNameDraft = ""
+        resyncUndoManager()
     }
 
     func commitLineRename() {
@@ -948,18 +967,23 @@ final class AssignmentModel {
     func beginPresetRename() {
         guard let preset = activePreset else { return }
         isRenamingPreset = true
+        renamingPresetID = preset.id
         presetNameDraft = preset.name
+        resyncUndoManager()
     }
 
     func cancelPresetRename() {
         isRenamingPreset = false
+        renamingPresetID = nil
         presetNameDraft = ""
+        resyncUndoManager()
     }
 
     func commitPresetRename() {
-        guard let preset = activePreset else { return }
+        let beganOn = renamingPresetID
         let requested = presetNameDraft
         cancelPresetRename()
+        guard let preset = activePreset, preset.id == beganOn else { return }
         guard requested.trimmingCharacters(in: .whitespacesAndNewlines) != preset.name else { return }
         renamePreset(preset, to: requested)
     }
@@ -1086,6 +1110,7 @@ final class AssignmentModel {
             )
             presets = try store.presets.presets(forPieceID: score.pieceID)
             activePreset = preset
+            dropRenameDraftUnlessOn(preset)
             lines = performance.lines
             keepSelectionValid()
             onHumanizationLoaded?(preset.content.humanization)
@@ -1148,10 +1173,45 @@ private struct UndoTargetGone: LocalizedError {
 }
 
 extension AssignmentModel {
-    var canUndoMix: Bool { !undoSteps.isEmpty }
-    var canRedoMix: Bool { !redoSteps.isEmpty }
-    var undoActionName: String? { undoSteps.last?.actionName }
-    var redoActionName: String? { redoSteps.last?.actionName }
+    /// A text field on the playback screen has focus, or has let it go.
+    func setTransportFieldFocused(_ isFocused: Bool) {
+        guard isFocused != isTransportFieldFocused else { return }
+        isTransportFieldFocused = isFocused
+        resyncUndoManager()
+    }
+
+    /// True while any playback-screen text field is being edited: a preset or
+    /// line rename, or a transport field.
+    ///
+    /// **While it is, the window's manager holds none of the mix.** The field
+    /// editor records typing on that same manager, so once the owner has
+    /// undone their typing the next ⌘Z would otherwise fall through to the mix
+    /// — "undo in a focused text field undoes text, not the mix" (#89).
+    private var isEditingText: Bool {
+        isTransportFieldFocused || isRenamingPreset || renamingLineID != nil
+    }
+
+    /// The manager the mix steps are on right now: the window's, unless text
+    /// is being edited.
+    private var offeredManager: UndoManager? { isEditingText ? nil : undoManager }
+
+    /// Makes the window's manager hold exactly the model's record, or nothing
+    /// while text is being edited. From inside the manager's own undo, where
+    /// removing actions does not take, this waits until that undo returns.
+    private func resyncUndoManager() {
+        guard let manager = undoManager else { return }
+        guard !manager.isUndoing, !manager.isRedoing else {
+            DispatchQueue.main.async { [weak self, weak manager] in
+                MainActor.assumeIsolated {
+                    guard let self, let manager, manager === self.undoManager else { return }
+                    self.resyncUndoManager()
+                }
+            }
+            return
+        }
+        manager.removeAllActions(withTarget: self)
+        if !isEditingText { mirrorHistory(onto: manager) }
+    }
 
     /// The playback screen is now what the window shows: put this piece's
     /// history on the window's undo manager, so the Edit menu's Undo and Redo
@@ -1165,7 +1225,7 @@ extension AssignmentModel {
         detachUndoManager()
         guard let manager else { return }
         undoManager = manager
-        mirrorHistory(onto: manager)
+        resyncUndoManager()
     }
 
     /// The playback screen is no longer showing — the studio or the catalog
@@ -1182,20 +1242,7 @@ extension AssignmentModel {
     func clearUndoHistory() {
         undoSteps.removeAll()
         redoSteps.removeAll()
-        guard let manager = undoManager else { return }
-        guard manager.isUndoing || manager.isRedoing else {
-            return manager.removeAllActions(withTarget: self)
-        }
-        // A refused undo clears from inside the manager's own undo, where
-        // removing actions does not take. Resynchronize once it has returned,
-        // from the model's record, so a step made in between is not lost.
-        DispatchQueue.main.async { [weak self, weak manager] in
-            MainActor.assumeIsolated {
-                guard let self, let manager, manager === self.undoManager else { return }
-                manager.removeAllActions(withTarget: self)
-                self.mirrorHistory(onto: manager)
-            }
-        }
+        resyncUndoManager()
     }
 
     private func recordUndo(_ change: UndoStep.Change, named name: String) {
@@ -1203,23 +1250,26 @@ extension AssignmentModel {
         let step = UndoStep(change: change, actionName: name)
         undoSteps.append(step)
         redoSteps.removeAll()
-        if let undoManager { register(step, on: undoManager) { $0.performUndo(step) } }
+        if let manager = offeredManager { register(step, on: manager) { $0.performUndo(step) } }
     }
 
     private func performUndo(_ step: UndoStep) {
+        // Defensive: the manager holds no mix step while text is edited.
+        guard !isEditingText else { return resyncUndoManager() }
         guard undoSteps.last == step else { return clearUndoHistory() }
         undoSteps.removeLast()
         guard apply(step.change, undoing: true) else { return clearUndoHistory() }
         redoSteps.append(step)
-        if let undoManager { register(step, on: undoManager) { $0.performRedo(step) } }
+        if let manager = offeredManager { register(step, on: manager) { $0.performRedo(step) } }
     }
 
     private func performRedo(_ step: UndoStep) {
+        guard !isEditingText else { return resyncUndoManager() }
         guard redoSteps.last == step else { return clearUndoHistory() }
         redoSteps.removeLast()
         guard apply(step.change, undoing: false) else { return clearUndoHistory() }
         undoSteps.append(step)
-        if let undoManager { register(step, on: undoManager) { $0.performUndo(step) } }
+        if let manager = offeredManager { register(step, on: manager) { $0.performUndo(step) } }
     }
 
     /// **Through the same setters the controls use** — engine first, store

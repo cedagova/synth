@@ -247,10 +247,13 @@ final class UndoWiringTests: XCTestCase {
         undo.undo()
         XCTAssertNotNil(assignment.alert)
         XCTAssertEqual(assignment.activePreset?.id, second)
-        XCTAssertFalse(assignment.canUndoMix)
-        XCTAssertFalse(assignment.canRedoMix)
         // The manager is resynchronized once its own undo has returned.
         try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertFalse(undo.canUndo)
+        XCTAssertFalse(undo.canRedo)
+        // And the model's own record is gone too: a rebuild restores nothing.
+        assignment.detachUndoManager()
+        assignment.attachUndoManager(undo)
         XCTAssertFalse(undo.canUndo)
         XCTAssertFalse(undo.canRedo)
     }
@@ -290,7 +293,6 @@ final class UndoWiringTests: XCTestCase {
         assignment.createPreset()
         assignment.cancelPresetRename()
         XCTAssertFalse(undo.canUndo)
-        XCTAssertFalse(assignment.canUndoMix)
         try await waitForAdoption()
 
         assignment.setVolume(0.6, forLine: line)
@@ -303,8 +305,93 @@ final class UndoWiringTests: XCTestCase {
         XCTAssertNotEqual(assignment.activePreset?.id, doomed.id)
         XCTAssertFalse(undo.canUndo)
         XCTAssertFalse(undo.canRedo)
-        XCTAssertFalse(assignment.canUndoMix)
-        XCTAssertFalse(assignment.canRedoMix)
+        assignment.detachUndoManager()
+        assignment.attachUndoManager(undo)
+        XCTAssertFalse(undo.canUndo, "the model's record was cleared, not just the manager")
+        XCTAssertFalse(undo.canRedo)
+    }
+
+    // MARK: Undo in a focused text field undoes text, not the mix (#89)
+
+    /// The review's case: switch A→B, begin renaming B, press ⌘Z, commit.
+    /// The switch must not be undone under the open field, and whatever is
+    /// committed lands on B — never on A.
+    func testUndoDuringAPresetRenameCannotRenameTheOtherPreset() async throws {
+        let assignment = try await openPiece()
+        let (first, second) = try await twoPresets(assignment)
+        assignment.activate(presetID: first)
+        try await waitForAdoption()
+        assignment.activate(presetID: second)
+        try await waitForAdoption()
+        let firstName = try storedPreset(first).name
+        XCTAssertEqual(undo.undoActionName, "Preset Switch")
+
+        assignment.beginPresetRename()
+        XCTAssertFalse(undo.canUndo, "the open rename field keeps ⌘Z for its own text")
+        if undo.canUndo { undo.undo() }
+        XCTAssertEqual(assignment.activePreset?.id, second)
+
+        assignment.presetNameDraft = "Renamed"
+        assignment.commitPresetRename()
+        XCTAssertEqual(try storedPreset(second).name, "Renamed")
+        XCTAssertEqual(try storedPreset(first).name, firstName, "the other preset is untouched")
+
+        // The rename is now the newest step, above the switch.
+        XCTAssertEqual(undo.undoActionName, "Preset Rename")
+        undo.undo()
+        XCTAssertEqual(undo.undoActionName, "Preset Switch")
+    }
+
+    /// A draft begun on one preset is dropped, not committed, once another is
+    /// active — here by a switch made while the field is open.
+    func testARenameDraftIsDroppedWhenTheActivePresetChanges() async throws {
+        let assignment = try await openPiece()
+        let (first, second) = try await twoPresets(assignment)
+        let firstName = try storedPreset(first).name
+        let secondName = try storedPreset(second).name
+
+        assignment.beginPresetRename()
+        assignment.presetNameDraft = "Stray"
+        assignment.activate(presetID: first)
+        try await waitForAdoption()
+        XCTAssertFalse(assignment.isRenamingPreset)
+
+        assignment.presetNameDraft = "Stray"
+        assignment.commitPresetRename()
+        XCTAssertEqual(try storedPreset(first).name, firstName)
+        XCTAssertEqual(try storedPreset(second).name, secondName)
+    }
+
+    /// With a transport field or a line rename focused, the field's typing is
+    /// the only thing ⌘Z reaches; once that is undone there is nothing left,
+    /// rather than the mix. Leaving the field offers the mix again.
+    func testAFocusedTextFieldKeepsUndoForItsText() async throws {
+        let assignment = try await openPiece()
+        let line = try firstLine(assignment)
+        let before = try row(line, assignment).volume
+        assignment.setVolume(0.4, forLine: line)
+
+        assignment.setTransportFieldFocused(true)
+        XCTAssertFalse(undo.canUndo)
+        // What the field editor does with typing: an action on the same manager.
+        let fieldEditor = NSObject()
+        undo.registerUndo(withTarget: fieldEditor) { _ in }
+        undo.setActionName("Typing")
+        XCTAssertEqual(undo.undoActionName, "Typing")
+        undo.undo()
+        XCTAssertFalse(undo.canUndo, "after the typing, ⌘Z must not fall through to the mix")
+        XCTAssertEqual(try row(line, assignment).volume, 0.4)
+        undo.removeAllActions(withTarget: fieldEditor)
+
+        assignment.setTransportFieldFocused(false)
+        XCTAssertEqual(undo.undoActionName, "Volume Change")
+
+        assignment.beginLineRename(line)
+        XCTAssertFalse(undo.canUndo, "a line rename field is a text field too")
+        assignment.cancelLineRename()
+
+        undo.undo()
+        XCTAssertEqual(try row(line, assignment).volume, before)
     }
 
     // MARK: Only while the playback screen shows (P84-7)
@@ -325,8 +412,6 @@ final class UndoWiringTests: XCTestCase {
         assignment.detachUndoManager()   // the studio takes the window
         XCTAssertFalse(undo.canUndo, "⌘Z in the studio must not reach the mix")
         XCTAssertFalse(undo.canRedo)
-        XCTAssertTrue(assignment.canUndoMix, "the history is kept for the way back")
-        XCTAssertTrue(assignment.canRedoMix)
         XCTAssertEqual(try row(line, assignment).volume, 0.5)
 
         assignment.attachUndoManager(undo)   // back on the playback screen

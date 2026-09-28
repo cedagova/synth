@@ -105,7 +105,12 @@ struct PlaybackScreen: View {
         // and survives the trip.
         .onAppear { model.assignment.attachUndoManager(undoManager) }
         .onChange(of: undoManager) { _, manager in model.assignment.attachUndoManager(manager) }
-        .onDisappear { model.assignment.detachUndoManager() }
+        // A focused measure, time or loop field keeps ⌘Z for its own text.
+        .onChange(of: focus) { _, field in model.assignment.setTransportFieldFocused(field != nil) }
+        .onDisappear {
+            model.assignment.setTransportFieldFocused(false)
+            model.assignment.detachUndoManager()
+        }
         // **No `.onDisappear { model.close() }`.**
         //
         // There is now a second reason this screen can disappear: the sound

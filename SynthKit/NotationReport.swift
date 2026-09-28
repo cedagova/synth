@@ -92,7 +92,7 @@ public struct NotationReportEntry: Equatable, Sendable, Codable {
         self.detail = detail
     }
 
-    /// One sentence for the piece report UI (PLY004).
+    /// One readable sentence, for diagnostics output.
     public var displayText: String {
         let where_ = firstLocation.displayText
         let times = occurrenceCount == 1 ? "" : " (\(occurrenceCount) occurrences, first at"
@@ -102,11 +102,13 @@ public struct NotationReportEntry: Equatable, Sendable, Codable {
     }
 }
 
-/// Everything one compilation met and did not honour (REQ-014's data).
+/// Everything one compilation met and did not honour.
 ///
-/// The UI that shows this is PLY004; this leaf owns the data and its ordering.
-/// Ordering is canonical — category, then kind, then first location — so the
-/// same file always produces the same report bytes.
+/// **An internal diagnostic, not a feature.** The app deliberately shows no
+/// notation report (definition D10, which withdrew REQ-014). This exists so
+/// tests and `PieceDiagnosticHarness` can see what the importer skipped when a
+/// piece sounds wrong. Ordering is canonical — category, then kind, then first
+/// location — so the same file always produces the same report bytes.
 public struct NotationReport: Equatable, Sendable, Codable {
     public let entries: [NotationReportEntry]
 

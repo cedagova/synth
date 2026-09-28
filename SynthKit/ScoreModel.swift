@@ -385,7 +385,8 @@ public struct CompiledScore: Equatable, Sendable, Codable {
     public let expressionEvents: [ScoreExpressionEvent]
 
     /// Everything the compiler met and did not honour, plus every structural
-    /// fallback it had to apply.
+    /// fallback it had to apply. An internal diagnostic, never shown in the app
+    /// (definition D10).
     public let report: NotationReport
 
     public init(

@@ -1452,8 +1452,8 @@ private struct Compilation {
     /// into the bass staff for two bars arrives as two lines the owner will be
     /// asked to assign separately. Splitting is the safer reading — merging
     /// would guess that two staves' voice 1 are one player — but it is a
-    /// decision, and a decision the owner cannot see is exactly what REQ-014
-    /// exists to prevent.
+    /// decision, and a decision nobody can see is exactly what the notation
+    /// diagnostic exists to prevent.
     private mutating func reportVoicesSplitAcrossStaves(_ lines: [ScoreLine]) {
         var stavesByVoice: [String: Set<Int>] = [:]
         for line in lines {

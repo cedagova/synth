@@ -16,7 +16,8 @@ import SynthAudioCore
 /// instrument whose files were deleted or corrupted since INS001 installed them
 /// is reported by name with a reason and a suggestion, and the rest of the
 /// library still plays — the failure behaviour issue #23 asks for, and the same
-/// honesty principle REQ-014 applies to notation.
+/// nothing-silently-dropped principle the compiler's notation diagnostic
+/// applies to scores.
 public final class SampledInstrumentLibrary: @unchecked Sendable {
     private let store: InstrumentAssetStore
     private let lock = NSLock()

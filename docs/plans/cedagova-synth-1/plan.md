@@ -101,8 +101,8 @@ System-level HOW; files, classes, and algorithms belong to implementation.
    → expressive realization (dynamics, articulations, slurs, pedal, grace
    notes, ornaments) → humanization (seeded micro-timing and phrase-shaped
    dynamics). Identical inputs always yield the identical timeline (REQ-012);
-   anything not honored is emitted into the per-piece report (REQ-014), never
-   silently dropped. Voice-level line identity (D1) is established here and
+   anything not honored is recorded in an internal compiler diagnostic, never
+   silently dropped (REQ-014's user-facing report was withdrawn, D10). Voice-level line identity (D1) is established here and
    reused by assignment, mixing, presets, and export.
 4. **Local persistence under one Application Support container**: an SQLite
    database for library metadata, sounds, presets, and catalog state;
@@ -165,7 +165,7 @@ between siblings; cross-increment order lives only on the increment issues.
 Every increment ends with the app in a working, owner-verifiable state:
 
 - after 001: import, browse, search, remove pieces durably;
-- after 002: pieces play faithfully with the default voice; transport, report,
+- after 002: pieces play faithfully with the default voice; transport and
   device handling work;
 - after 003: sounds can be designed, organized, auditioned; shipped collection
   present;
@@ -200,9 +200,9 @@ stable once delivered — are:
 ## Risks and rabbit holes
 
 - **MusicXML interpretive breadth is unbounded.** The contract is bounded by
-  REQ-010/011's named concepts plus the REQ-014 report as the honest safety
-  valve. Do not chase exhaustive notation support; the owner's reference set
-  drives priority. Unknown markings go to the report, never block playback.
+  REQ-010/011's named concepts plus the compiler's internal diagnostic of
+  skipped notation as the honest safety valve. Do not chase exhaustive notation support; the owner's reference set
+  drives priority. Unknown markings go to that diagnostic, never block playback.
 - **Real-time safety.** The audio thread must be allocation- and lock-free;
   Swift on the audio thread requires discipline or a small C core. PLY003
   owns this decision; the golden rule is the dropout-free guardrail on
@@ -327,8 +327,8 @@ keyswitches, no CC crossfades unless VPO is adopted.
 | REQ-011 expressive notation honored | PLY002 |
 | REQ-012 deterministic humanization, on by default | PLY002 |
 | REQ-013 gapless, dropout-free | PLY003 |
-| REQ-014 per-piece unhonored-notation report | PLY001 (data), PLY004 (UI) |
-| REQ-015 output device selection + graceful changes | PLY003 |
+| REQ-014 per-piece unhonored-notation report | Withdrawn 2026-09-28 (definition D10); PLY001's data remains as an internal diagnostic |
+| REQ-015 follow the system output + graceful changes | PLY003 (in-app selection removed 2026-09-28, definition D11) |
 | REQ-016 synth architecture, all parameters editable | SYN001 |
 | REQ-017 create/duplicate/modify, shipped read-only as copies | SYN002, SYN003 |
 | REQ-018 audition + live editing during playback | SYN003 (in-increment play-through audition binding; assigned-line form re-verified at increment 004 completion) |

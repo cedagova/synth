@@ -18,11 +18,10 @@ import SynthKit
 /// **Every shortcut here avoids one already spoken for.** The Sounds menu is
 /// the last one in the bar, so it loses every collision silently: the item
 /// stays in the menu, looks enabled, and its key simply never arrives. Driving
-/// the running app found four of these — ⇧⌘R behind Playback's Show Notation
-/// Report, ⌘T behind Go to Time, ⇧⌘Z behind Redo (SwiftUI dropped the key
-/// entirely rather than register it), and ⇧⌘↑/⇧⌘↓ behind the Library's ⌘↑/⌘↓
-/// Select Previous/Next Piece — the same loose Shift matching AppKit applies to
-/// non-character key equivalents. One of them
+/// the running app found three of these — ⌘T behind Go to Time, ⇧⌘Z behind
+/// Redo (SwiftUI dropped the key entirely rather than register it), and
+/// ⇧⌘↑/⇧⌘↓ behind the Library's ⌘↑/⌘↓ Select Previous/Next Piece — the same
+/// loose Shift matching AppKit applies to non-character key equivalents. One of them
 /// was worse than dead: ⇧⌘⌫ was consumed by Edit's ⌘⌫ Remove Selected Piece, so
 /// pressing it in the studio armed a *piece* removal that would surface the
 /// next time the owner went back to the library.

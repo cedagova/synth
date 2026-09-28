@@ -1,9 +1,9 @@
 import XCTest
 @testable import SynthKit
 
-/// REQ-014's data: everything the compiler met and did not honour, named and
-/// located, aggregated so the list stays readable, and ordered so the same
-/// file always produces the same report.
+/// The compiler's internal notation diagnostic (definition D10): everything it
+/// met and did not honour, named and located, aggregated so the list stays
+/// readable, and ordered so the same file always produces the same report.
 final class NotationReportTests: XCTestCase {
     private let compiler = ScoreCompiler()
 
@@ -37,7 +37,7 @@ final class NotationReportTests: XCTestCase {
         }
     }
 
-    /// The other half of REQ-014's honesty, and the half that is easy to
+    /// The other half of the diagnostic's honesty, and the half that is easy to
     /// break: once PLY002 sounds a marking, the report must stop naming it.
     /// A report that lists notation the app *does* honour teaches the owner to
     /// distrust it, which is worse than no report.

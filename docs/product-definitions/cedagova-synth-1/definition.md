@@ -69,7 +69,6 @@ The owner (a solo user) wants to hear classical instrumental works from MusicXML
 
 - Transport: play, pause, stop, seek by measure/beat or time, optional loop over a measure range.
 - Playback honors the score per D4 (structure + expressive notation + realized ornaments) with subtle humanization on by default, globally adjustable and disableable.
-- A per-piece report lists any notation the app did not honor, so quality gaps are visible instead of silent.
 
 ### Design and customize sounds
 
@@ -90,7 +89,7 @@ The owner (a solo user) wants to hear classical instrumental works from MusicXML
 
 - **Empty library:** clear guidance to import a first piece; no dead ends.
 - **Invalid or unreadable MusicXML:** import fails with a message naming the file and the reason; the library is unchanged.
-- **Partially supported score content:** the piece still plays; unhonored notation is listed in the per-piece report rather than silently dropped.
+- **Partially supported score content:** the piece still plays; unhonored notation is skipped without blocking playback (no user-facing report; D10).
 - **Instrument assets not yet downloaded / download interrupted:** affected instruments are visibly unavailable; downloads can be resumed; synth sounds remain fully usable offline. A line assigned to a missing instrument is flagged and audibly substituted only with explicit user awareness.
 - **Audio device changes (e.g. Bluetooth connect/disconnect) during playback:** playback continues or pauses gracefully on the new/remaining device; no crash, no corrupted audio.
 - **Long or complex pieces:** loading shows progress; playback start is prompt and dropout-free on target hardware.
@@ -120,11 +119,11 @@ The owner (a solo user) wants to hear classical instrumental works from MusicXML
 - **REQ-011** Expressive notation is honored: dynamics including crescendo/diminuendo, articulations (staccato, legato, accents), slurs, pedal, grace notes, and realized ornaments (trills, mordents, turns) (D4). *Acceptance: a notated trill is audibly realized as alternating notes, not a single held note.*
 - **REQ-012** Subtle humanization (micro-timing and phrase-shaped dynamics) is on by default, with a global enable/disable and intensity control (D4). Rendering is deterministic: for a given piece, preset, and humanization setting, every playback produces the same interpretation until the user changes something. *Acceptance: toggling humanization off produces a strictly literal rendering; playing the same configuration twice sounds identical.*
 - **REQ-013** Playback is gapless and dropout-free on target hardware.
-- **REQ-014** A per-piece report lists score notation that was not honored. *Acceptance: a file containing an unsupported marking shows it in the report.*
+- **REQ-014** *Withdrawn (D10).* No per-piece report of unhonored notation is planned.
 
 ### Audio output
 
-- **REQ-015** Audio plays through the system default output; the user can choose any available output device in-app; device connects/disconnects during playback are handled gracefully.
+- **REQ-015** Audio plays through the system default output and follows it when it changes (D11); device connects/disconnects during playback are handled gracefully. There is no in-app device choice.
 
 ### Synthesizer
 
@@ -211,6 +210,8 @@ Non-goals:
 | D7 | 2026-08-22 | Instrument customization means: tone/EQ, dynamics response, envelope shaping within realistic bounds, vibrato depth/rate, tuning offset, and per-line volume/pan/room send — **as far as the downloaded assets feasibly support**; unsupported controls are disabled visibly rather than faked. | Concrete, useful control set without drifting into sampler-editor territory; honest about asset limits. | Instrument requirements, sound library curation |
 | D8 | 2026-08-22 | **Direct distribution, Apple Silicon only, recent macOS.** The owner is the only user for now; publishing later would be nice but is explicitly out of scope. | Solo use; App Store ceremony and Intel support buy nothing today. | Constraints, non-goals |
 | D9 | 2026-08-22 | The app **ships no music**. The user imports their own MusicXML files; on import a piece is stored **permanently in the app library, independent of the original file** (which may be deleted without effect). | User owns the content; the library must be durable and self-contained. | Library behavior, storage, privacy |
+| D10 | 2026-09-28 | **No per-piece notation report.** REQ-014 is withdrawn; the app shows no list of unhonored notation. The compiler still records what it skipped, as an internal diagnostic for developing the importer only. | Owner: not planned. The report was never surfaced and adds UI for a listening-first product. | REQ-014, failure behavior |
+| D11 | 2026-09-28 | **The system chooses the output device.** Playback follows the macOS default output (e.g. Bluetooth speakers connecting); there is no in-app device picker and no pinned device. | Owner: the device, not the app, should control where audio goes. | REQ-015 |
 
 ## Remaining uncertainty
 

@@ -8,12 +8,12 @@ General MusicXML/MIDI players render classical scores mechanically. The owner wa
 
 - Import MusicXML files into a permanent personal library (independent of the original files) and browse/search by title and composer.
 - Open a piece to see every independent musical line the score encodes (down to individual fugue voices); assign each line either a fully customizable synthesized sound or a reasonably customizable sampled instrument — mutually exclusive per line — with per-line volume, pan, mute, and solo. No score notation is displayed.
-- Play with full transport (play/pause/stop/seek/loop). Playback honors all notated structure and expressive notation — dynamics, articulations, slurs, pedal, grace notes, realized ornaments, repeats, fermatas — plus subtle, user-controllable humanization (on by default). Unhonored notation is reported, never silently dropped.
+- Play with full transport (play/pause/stop/seek/loop). Playback honors all notated structure and expressive notation — dynamics, articulations, slurs, pedal, grace notes, realized ornaments, repeats, fermatas — plus subtle, user-controllable humanization (on by default). Unhonored notation is reported, never silently dropped. *(Withdrawn 2026-09-28, definition D10: no user-facing report.)*
 - Design synth sounds from scratch or modify existing ones with a fixed-but-rich synthesizer (multi-type oscillators, filters, envelopes, LFOs, modulation matrix, per-sound effects); audition live during playback; keep an organized personal sound library.
 - Download curated free, legal, high-quality instrument sample libraries on demand; customize instruments (tone, dynamics response, envelope, vibrato, tuning, space) as far as each asset supports.
 - Save multiple named per-piece presets capturing complete assignment, customization, and mixer state; auto-saved, instantly switchable, persistent forever.
 - Export any configured piece to WAV/AIFF, faithful to live playback.
-- Audio to any system output device (speakers, Bluetooth) with graceful device switching.
+- Audio to any system output device (speakers, Bluetooth) with graceful device switching. *(Refined 2026-09-28, definition D11: the app follows the system output; no in-app picker.)*
 
 ## Scope and non-goals
 

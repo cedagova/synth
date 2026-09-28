@@ -162,7 +162,7 @@ final class ScoreCompilerTests: XCTestCase {
         XCTAssertEqual(Set(score.lines.map(\.id)).count, 4)
     }
 
-    // MARK: Acceptance — the honoured-notation report
+    // MARK: The notation diagnostic
 
     func testAnUnsupportedMarkingIsReportedByNameAndLocation() throws {
         let score = try compile(MusicXMLScoreFixtures.unsupportedMarking())

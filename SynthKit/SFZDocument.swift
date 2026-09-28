@@ -7,8 +7,8 @@ import Foundation
 /// installed libraries was enumerated before this was written; the ones that
 /// affect what a note sounds like are implemented, and the ones that do not are
 /// recorded by name so INS003 can show the owner exactly what was ignored. That
-/// is the REQ-014 honesty principle applied to instruments: nothing is silently
-/// dropped, and an unrecognised opcode is never fatal.
+/// is the notation diagnostic's principle applied to instruments: nothing is
+/// silently dropped, and an unrecognised opcode is never fatal.
 ///
 /// Parsing is pure. It takes text and returns regions and a report; it opens no
 /// files, so a malformed instrument fails at the point where its own text is

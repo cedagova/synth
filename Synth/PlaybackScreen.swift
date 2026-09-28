@@ -2,7 +2,7 @@ import SwiftUI
 import SynthKit
 
 /// The transport: everything the owner does to a piece that is playing
-/// (REQ-009, REQ-012, REQ-014, REQ-027).
+/// (REQ-009, REQ-012, REQ-027).
 ///
 /// **No score and no timeline is drawn**, per D2. That is not a gap to be
 /// apologised for in the layout; it is the reason the position readout is the

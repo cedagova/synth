@@ -7,9 +7,9 @@ import SynthKit
 /// what the owner is told when a piece cannot be prepared or a setting cannot
 /// be saved (issue #99).
 ///
-/// **Out of scope here, deliberately:** reading the active preset during
-/// `prepare()` and adopting a switched preset's settings. Those are #95 and
-/// #96, which test them alongside the changes they make.
+/// Reading the active preset during `prepare()` is covered for the case #95
+/// is about — a saved preset that exists but cannot be read. Adopting a
+/// switched preset's settings is #96's, tested alongside that change.
 ///
 /// **No audio output.** Nothing here presses Play: every transport assertion is
 /// about where the model put the playhead and what it said, which is what the
@@ -315,6 +315,96 @@ final class PlaybackModelTests: XCTestCase {
         XCTAssertEqual(stored.producedMaster, .off)
         XCTAssertEqual(stored.tuning.temperament, .werckmeisterIII)
         XCTAssertNil(playback.assignment.alert)
+    }
+
+    // MARK: An unreadable saved preset (#95)
+
+    /// Opens the fixture once so it has a saved preset, then damages that row
+    /// and returns what it now holds.
+    private func damageTheSavedPreset() async throws -> [String] {
+        _ = try await prepared()
+        let saved = try XCTUnwrap(library.store.presets.activePreset(forPieceID: piece.id))
+        playback.close()
+        try library.corruptDocument(inTable: PresetCatalog.tableName, id: saved.id)
+        XCTAssertThrowsError(
+            try library.store.presets.activePreset(forPieceID: piece.id),
+            "The fixture has to be a preset the store cannot read"
+        )
+        playback = PlaybackModel(piece: piece, store: library.store)
+        return try library.storedPresetRows(forPieceID: piece.id)
+    }
+
+    /// The issue's acceptance test: the piece plays under the standard
+    /// settings, the owner is told which piece and why — in the banner, not a
+    /// modal — and the stored row is not written, even when the owner changes a
+    /// setting that would ordinarily be auto-saved.
+    func testAnUnreadableSavedPresetPlaysUnderStandardSettingsAndIsReportedNotOverwritten()
+        async throws
+    {
+        let damaged = try await damageTheSavedPreset()
+
+        let playback = try await prepared()
+        await playback.settlePresetAdoption()
+
+        XCTAssertEqual(playback.humanization, .standard)
+        XCTAssertEqual(playback.expression, .standard)
+        XCTAssertEqual(playback.producedMaster, .standard)
+        XCTAssertEqual(playback.tuning, .standard)
+        XCTAssertEqual(playback.tempoPercent, TempoMap.defaultTempoPercent)
+
+        let unreadable = try XCTUnwrap(playback.assignment.unreadablePreset)
+        XCTAssertTrue(unreadable.banner.contains("“Four Bars”"), unreadable.banner)
+        XCTAssertTrue(unreadable.banner.contains("standard settings"), unreadable.banner)
+        XCTAssertTrue(
+            unreadable.banner.contains("could not read the preset"),
+            "The banner carries the store's own reason: \(unreadable.banner)"
+        )
+        XCTAssertNil(playback.assignment.alert, "One message, not a banner and an alert")
+        XCTAssertNil(playback.assignment.activePreset)
+
+        // Coming back from the studio re-reads the store; an owner edit would
+        // ordinarily auto-save. Neither may touch the damaged row.
+        await playback.prepare()
+        await playback.setTempoPercent(70)
+        await playback.setHumanizationEnabled(false)
+        XCTAssertEqual(try library.storedPresetRows(forPieceID: piece.id), damaged)
+        XCTAssertEqual(try library.store.presets.presetCount(forPieceID: piece.id), 1)
+    }
+
+    /// A preset that becomes unreadable while the piece is open is re-read on
+    /// the way back from the studio, and the standard settings replace the ones
+    /// it had — through the same adoption path any preset's settings take, so
+    /// what plays is what the banner says.
+    func testAPresetThatBecomesUnreadableIsReplacedByStandardSettingsOnReRead() async throws {
+        let playback = try await prepared()
+        await playback.setTempoPercent(70)
+        await playback.settlePresetAdoption()
+        XCTAssertEqual(playback.tempoPercent, 70)
+        let saved = try XCTUnwrap(library.store.presets.activePreset(forPieceID: piece.id))
+
+        try library.corruptDocument(inTable: PresetCatalog.tableName, id: saved.id)
+        let damaged = try library.storedPresetRows(forPieceID: piece.id)
+        await playback.prepare()
+        await playback.settlePresetAdoption()
+
+        XCTAssertEqual(playback.tempoPercent, TempoMap.defaultTempoPercent)
+        XCTAssertNotNil(playback.assignment.unreadablePreset)
+        XCTAssertNil(playback.assignment.alert)
+        XCTAssertEqual(try library.storedPresetRows(forPieceID: piece.id), damaged)
+    }
+
+    /// "No preset yet" is the ordinary first open: standard settings, and
+    /// nothing to report.
+    func testAPieceWithNoPresetYetOpensSilentlyUnderStandardSettings() async throws {
+        XCTAssertNil(try library.store.presets.activePreset(forPieceID: piece.id))
+
+        let playback = try await prepared()
+
+        XCTAssertEqual(playback.tempoPercent, TempoMap.defaultTempoPercent)
+        XCTAssertEqual(playback.humanization, .standard)
+        XCTAssertNil(playback.assignment.unreadablePreset)
+        XCTAssertNil(playback.assignment.alert)
+        XCTAssertNotNil(playback.assignment.activePreset, "The first preset is created")
     }
 
     func testFocusRequestsAreCounted() async throws {

@@ -96,7 +96,18 @@ final class InstrumentCatalogModel {
         }
         reload()
 
-        let previousAnswer = (try? store.preferences.string(forKey: Self.firstRunOfferSeenKey)) ?? nil
+        // A failed read is not "never asked" (#95). Not knowing, the offer stays
+        // down — it is a one-time courtesy, still in the Instruments menu, and
+        // asking again an owner who already declined is the nag it must not be
+        // — and the failure is reported rather than read as either answer.
+        let previousAnswer: String?
+        do {
+            previousAnswer = try store.preferences.string(forKey: Self.firstRunOfferSeenKey)
+        } catch {
+            alert = StoreFailure(error)
+            isShowingFirstRunOffer = false
+            return
+        }
         let nothingInstalled = rows.allSatisfy { !$0.state.isInstalled }
         isShowingFirstRunOffer = previousAnswer == nil && nothingInstalled
     }
@@ -113,9 +124,15 @@ final class InstrumentCatalogModel {
     func answerFirstRunOffer(downloadNow: Bool) {
         guard isShowingFirstRunOffer else { return }
         isShowingFirstRunOffer = false
-        try? store.preferences.setString(
-            downloadNow ? "accepted" : "declined", forKey: Self.firstRunOfferSeenKey
-        )
+        // The answer still stands for this session if it cannot be recorded;
+        // the owner is told, because the offer will be back next launch (#95).
+        do {
+            try store.preferences.setString(
+                downloadNow ? "accepted" : "declined", forKey: Self.firstRunOfferSeenKey
+            )
+        } catch {
+            alert = StoreFailure(error)
+        }
         if downloadNow {
             downloadEverythingNotYetInstalled()
         }

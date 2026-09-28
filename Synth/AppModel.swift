@@ -345,6 +345,13 @@ final class AppModel {
         let catalog = instrumentCatalog ?? InstrumentCatalogModel(store: store)
         instrumentCatalog = catalog
         catalog.prepareForFirstRun()
+        // A failure the check itself ran into lives in the catalog's alert, which
+        // only shows with the screen: put it up rather than leave the report
+        // where the owner would never see it (#95).
+        if catalog.alert != nil, !catalog.isShowingFirstRunOffer {
+            isInstrumentCatalogShowing = true
+            return
+        }
         guard catalog.isShowingFirstRunOffer else { return }
 
         // Declining puts the screen away again. An owner who never asked to see

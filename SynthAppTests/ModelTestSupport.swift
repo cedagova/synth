@@ -70,6 +70,39 @@ final class TemporaryLibrary {
         "test_fail_\(write.rawValue.lowercased())_\(table)"
     }
 
+    // MARK: Damaged rows
+
+    /// Replaces a stored document with text no version of Synth can decode —
+    /// the way a damaged or foreign row reads back — without going through the
+    /// store, which would refuse to write it.
+    func corruptDocument(inTable table: String, id: String) throws {
+        try store.database.execute(
+            "UPDATE \(table) SET document = ? WHERE id = ?;",
+            [.text("{ this is not a preset"), .text(id)]
+        )
+    }
+
+    /// Every column of every preset row of a piece, exactly as stored, so a
+    /// test can prove a row was not written at all rather than only that it
+    /// still decodes to the same thing.
+    func storedPresetRows(forPieceID pieceID: String) throws -> [String] {
+        try store.database.query(
+            """
+            SELECT id, name, is_active, document_version, document, revision,
+                   created_at, updated_at
+            FROM \(PresetCatalog.tableName) WHERE piece_id = ? ORDER BY id;
+            """,
+            [.text(pieceID)]
+        ).map { row in
+            ["id", "name", "document", "created_at", "updated_at"]
+                .map { row.text($0) ?? "∅" }
+                .joined(separator: "|")
+                + "|" + ["is_active", "document_version", "revision"]
+                .map { row.integer($0).map(String.init) ?? "∅" }
+                .joined(separator: "|")
+        }
+    }
+
     // MARK: Pieces
 
     /// Writes `musicXML` to a file and returns its URL, without importing it.

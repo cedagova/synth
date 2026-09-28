@@ -137,7 +137,12 @@ final class LibraryModel {
 
     /// True while an import or removal is running, so the surface can disable
     /// the controls that would race it.
-    private(set) var isWorking = false
+    private(set) var isWorking = false {
+        didSet { if !isWorking { resumeIdleWaiters() } }
+    }
+
+    /// Callers parked in `waitUntilIdle()`, resumed when `isWorking` clears.
+    @ObservationIgnored private var idleWaiters: [CheckedContinuation<Void, Never>] = []
 
     /// The last thing that happened, in a sentence. Also what VoiceOver
     /// announces after an import or removal.
@@ -216,8 +221,14 @@ final class LibraryModel {
     /// a rejected file leaves the library untouched, so the honest result of
     /// dropping five files of which one is damaged is four imports and one
     /// named failure — not an abandoned batch.
-    func importPieces(from urls: [URL]) async {
-        guard !urls.isEmpty, !isWorking else { return }
+    ///
+    /// Returns what the run did, or nil when it did not run (nothing to import,
+    /// or another import or removal already holds the library). The picker and
+    /// the drop target ignore it; a Finder open reads it to report the result
+    /// over a screen that is not the library (#88).
+    @discardableResult
+    func importPieces(from urls: [URL]) async -> ImportSummary? {
+        guard !urls.isEmpty, !isWorking else { return nil }
         isWorking = true
         defer { isWorking = false }
 
@@ -241,6 +252,27 @@ final class LibraryModel {
             // the owner just dropped is the one already there.
             selection = first.id
         }
+        return summary
+    }
+
+    /// Returns once no import or removal is running.
+    ///
+    /// For a caller that must not be turned away by `importPieces`'s
+    /// `isWorking` guard — a file opened from Finder is queued behind the
+    /// operation in progress, not dropped (#88). Everything here is on the main
+    /// actor, so a caller that resumes and immediately calls `importPieces`
+    /// cannot be overtaken: `isWorking` is re-checked on every wake-up and set
+    /// again before `importPieces` first suspends.
+    func waitUntilIdle() async {
+        while isWorking {
+            await withCheckedContinuation { idleWaiters.append($0) }
+        }
+    }
+
+    private func resumeIdleWaiters() {
+        let waiters = idleWaiters
+        idleWaiters = []
+        waiters.forEach { $0.resume() }
     }
 
     // MARK: - Editing piece info

@@ -257,7 +257,7 @@ final class PlaybackModel {
         self.baseVoiceProvider = voiceProvider
         let engine = PlaybackEngine(voiceProvider: voiceProvider)
         self.engine = engine
-        self.assignment = AssignmentModel(store: store, engine: engine)
+        self.assignment = AssignmentModel(store: store, engine: engine, pieceTitle: piece.title)
         self.export = ExportModel(pieceTitle: piece.title)
         // The stored value lives on the piece's active preset and is adopted
         // in `prepare()`, before the first realization; this is only the value
@@ -403,7 +403,12 @@ final class PlaybackModel {
             // first preset will store — and a preset stored before the
             // expression field existed reads as on, which is where D65-3
             // actually reaches the owner's ear.
-            if let preset = try? store.presets.activePreset(forPieceID: source.pieceID) {
+            //
+            // A preset that exists but cannot be read is not "no preset yet"
+            // (#95): the piece still opens under the standard settings, but the
+            // assignment records why and its panel says so, and nothing is
+            // written over the stored row.
+            if let preset = assignment.readStoredActivePreset(forPieceID: source.pieceID) {
                 humanization = preset.content.humanization
                 intensityDraft = Double(preset.content.humanization.intensity)
                 expression = preset.content.expression

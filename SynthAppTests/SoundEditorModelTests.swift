@@ -254,4 +254,39 @@ final class SoundEditorModelTests: XCTestCase {
         editor.noteOn(60)
         XCTAssertTrue(editor.soundingNotes.isEmpty)
     }
+
+    // MARK: The based-on lookup (#95)
+
+    func testACopyNamesTheSoundItIsBasedOn() throws {
+        let shipped = try shippedSynthSound()
+        editor.load(shipped)
+        let copy = try XCTUnwrap(editor.duplicateForEditing())
+        editor.load(copy)
+
+        XCTAssertEqual(editor.basedOnName, shipped.name)
+        XCTAssertTrue(editor.subtitle.contains("based on “\(shipped.name)”"), editor.subtitle)
+        XCTAssertNil(editor.statusMessage)
+    }
+
+    /// The lookup failing is said in the editor's status line, not dropped: the
+    /// subtitle simply leaves the clause out.
+    func testABasedOnLookupTheLibraryCannotAnswerIsReported() throws {
+        let original = try userSound(named: "Original")
+        let copy = try userSound(named: "Copy")
+        try library.store.database.execute(
+            "UPDATE \(SoundCatalog.tableName) SET shipped_origin_id = ? WHERE id = ?;",
+            [.text(original.id), .text(copy.id)]
+        )
+        try library.corruptDocument(inTable: SoundCatalog.tableName, id: original.id)
+        let reread = try XCTUnwrap(sounds.sound(withID: copy.id))
+
+        editor.load(reread)
+
+        XCTAssertTrue(editor.isOpen, "The sound still opens")
+        XCTAssertNil(editor.basedOnName)
+        XCTAssertFalse(editor.subtitle.contains("based on"), editor.subtitle)
+        let status = try XCTUnwrap(editor.statusMessage)
+        XCTAssertTrue(status.contains("“Copy” is based on"), status)
+        XCTAssertTrue(status.contains(original.id), "It names the store's reason: \(status)")
+    }
 }

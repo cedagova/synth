@@ -129,11 +129,28 @@ final class SoundEditorModel {
             parts.append("your sound")
             parts.append("revision \(entry.revision)")
         }
-        if let origin = entry.shippedOriginID,
-           let based = try? library.sound(withID: origin) {
-            parts.append("based on “\(based.name)”")
+        if let basedOnName {
+            parts.append("based on “\(basedOnName)”")
         }
         return parts.joined(separator: " · ")
+    }
+
+    /// The name of the sound the open one was copied from, looked up once when
+    /// it loads. Nil when it was copied from nothing, the original is gone, or
+    /// the lookup failed — and the last of those is said in `statusMessage`
+    /// rather than dropped (#95).
+    private(set) var basedOnName: String?
+
+    private func lookUpBasedOn(_ entry: SoundEntry) {
+        basedOnName = nil
+        guard let origin = entry.shippedOriginID else { return }
+        do {
+            basedOnName = try library.sound(withID: origin)?.name
+        } catch {
+            let reason = (error as? LocalizedError)?.errorDescription
+                ?? (error as NSError).localizedDescription
+            statusMessage = "Could not look up the sound “\(entry.name)” is based on. \(reason)"
+        }
     }
 
     /// Shipped entries have no store row and therefore no timestamps —
@@ -183,6 +200,7 @@ final class SoundEditorModel {
         self.patch = patch
         self.savedPatch = patch
         self.statusMessage = nil
+        lookUpBasedOn(entry)
 
         auditionChannel.apply(patch)
         if isPlayingPieceThroughSound { playbackChannel.apply(patch) }
@@ -206,6 +224,7 @@ final class SoundEditorModel {
         restoreStoredPatch(of: entry)
         stopPlayingPieceThroughSound()
         entry = nil
+        basedOnName = nil
         statusMessage = nil
     }
 

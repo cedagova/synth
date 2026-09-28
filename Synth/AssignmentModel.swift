@@ -21,6 +21,32 @@ struct AssignmentAlert: Identifiable, Equatable {
     }
 }
 
+/// A piece whose saved preset exists but could not be read (#95).
+///
+/// Distinct from a piece with no preset yet, which is ordinary and says
+/// nothing: this one plays under the standard settings *instead of* what the
+/// owner saved, and they are told so — once, in the panel's banner, not in a
+/// modal alert that would stand between them and the music.
+struct UnreadablePreset: Equatable {
+    let pieceTitle: String
+    let reason: String
+    let recovery: String?
+
+    init(pieceTitle: String, _ error: Error) {
+        self.pieceTitle = pieceTitle
+        self.reason = (error as? LocalizedError)?.errorDescription
+            ?? (error as NSError).localizedDescription
+        self.recovery = (error as? LocalizedError)?.recoverySuggestion
+    }
+
+    /// The panel's banner: the piece, what is playing instead, the promise that
+    /// the stored preset is left alone, and the store's own account of why.
+    var banner: String {
+        "Synth could not read the saved preset for “\(pieceTitle)”, so it is playing under "
+            + "the standard settings and will not save anything over it. \(reason)"
+    }
+}
+
 /// The assignment, mixer and preset surface of the open piece (REQ-005,
 /// REQ-006, REQ-008, REQ-024, REQ-027).
 ///
@@ -71,6 +97,14 @@ final class AssignmentModel {
     private(set) var statusMessage: String?
 
     var alert: AssignmentAlert?
+
+    /// Set while this piece's active preset exists but cannot be read (#95).
+    ///
+    /// While it is set nothing is written for this piece: `activePreset` is nil,
+    /// so every setter's `guard let preset = activePreset` refuses, and `load`
+    /// never reaches `PresetLibrary.activePreset(for:palette:)`, whose create
+    /// and reconcile paths are the ones that could write over the stored row.
+    private(set) var unreadablePreset: UnreadablePreset?
 
     // MARK: What the owner is doing
 
@@ -126,9 +160,13 @@ final class AssignmentModel {
     /// preset arrive once and can apply it in one order with one realization.
     var onPresetLoaded: ((PresetContent) -> Void)?
 
-    init(store: LibraryStore, engine: PlaybackEngine) {
+    /// The piece's title, for the one message that has to name it.
+    private let pieceTitle: String
+
+    init(store: LibraryStore, engine: PlaybackEngine, pieceTitle: String) {
         self.store = store
         self.engine = engine
+        self.pieceTitle = pieceTitle
     }
 
     // MARK: Derived state
@@ -211,8 +249,63 @@ final class AssignmentModel {
         let key: String
     }
 
+    /// The piece's stored active preset, read without creating or repairing
+    /// anything — nil when it has none yet *or* when it could not be read.
+    ///
+    /// The two nils are told apart in `unreadablePreset`, which this sets or
+    /// clears on every call: "no preset yet" is the ordinary first open and says
+    /// nothing, while "could not read it" is the owner's saved settings being
+    /// ignored and is always said. The transport reads through here before its
+    /// first realization, and `load` does before anything that could write, so
+    /// the two agree about which case the piece is in.
+    func readStoredActivePreset(forPieceID pieceID: String) -> Preset? {
+        do {
+            let preset = try store.presets.activePreset(forPieceID: pieceID)
+            unreadablePreset = nil
+            return preset
+        } catch {
+            unreadablePreset = UnreadablePreset(pieceTitle: pieceTitle, error)
+            return nil
+        }
+    }
+
+    /// The saved preset cannot be read: forget whatever this panel last showed,
+    /// so no setter has a preset to write through, and hand the standard
+    /// settings to the transport by the one path every preset's settings take
+    /// (#96's `onPresetLoaded`). On a first open those are already in force and
+    /// nothing moves; on a later re-read they replace a preset that has since
+    /// become unreadable, so what plays is what the banner says is playing.
+    ///
+    /// **Everything that could still act on the old preset is dropped too** —
+    /// the inventory `confirmPresetDeletion` needs, a deletion waiting for its
+    /// confirmation (which would otherwise create a fresh preset and delete the
+    /// unreadable one), and any rename in progress.
+    ///
+    /// **The engine's sounds and mix are left as they were**, deliberately. The
+    /// standard *performance* settings are what the transport adopts; there is
+    /// no "standard" sound per line short of the auto-mapping, which is exactly
+    /// the preset write this path refuses, and swapping every line onto the one
+    /// base voice mid-piece would be a louder surprise than the banner.
+    private func showUnreadablePreset() {
+        presets = []
+        activePreset = nil
+        inventory = nil
+        lines = []
+        pendingPresetDeletion = nil
+        isRenamingPreset = false
+        renamingLineID = nil
+        keepSelectionValid()
+        onPresetLoaded?(PresetContent(lines: []))
+    }
+
     private func load(applyingToEngine: Bool, because verb: String?) {
         guard let score else { return }
+        // Before anything that could write: `activePreset(for:palette:)` creates
+        // a preset when it finds none, and would throw on this one anyway — but
+        // "would throw" is not a guarantee this file should lean on for the
+        // owner's saved settings.
+        _ = readStoredActivePreset(forPieceID: score.pieceID)
+        if unreadablePreset != nil { return showUnreadablePreset() }
         do {
             palette = try store.sounds.allSounds()
             let inventory = try store.lineInventory(for: score)

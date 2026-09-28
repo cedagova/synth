@@ -32,18 +32,18 @@ struct AssignmentPanel: View {
             PresetBar(model: model)
             Divider()
 
+            // A saved preset that could not be read is said here rather than in
+            // an alert (#95): the piece is already playing under the standard
+            // settings, and a modal would stand between the owner and it.
+            if let unreadable = model.unreadablePreset {
+                PanelBanner(text: unreadable.banner)
+                Divider()
+            }
+
             // A line that is silent because its instrument is missing must not
             // be something the owner only finds by scrolling to it (issue #24).
             if let banner = model.instrumentBanner {
-                Label(banner, systemImage: "exclamationmark.triangle.fill")
-                    .font(.callout)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(.orange.opacity(0.18))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityLabel(banner)
-                    .accessibilityAddTraits(.updatesFrequently)
+                PanelBanner(text: banner)
                 Divider()
             }
 
@@ -74,9 +74,15 @@ struct AssignmentPanel: View {
                 }
             } else {
                 ContentUnavailableView {
-                    Label("No lines yet", systemImage: "slider.horizontal.3")
+                    Label(
+                        model.unreadablePreset == nil ? "No lines yet" : "Preset unavailable",
+                        systemImage: "slider.horizontal.3"
+                    )
                 } description: {
-                    Text("The line list appears once the piece has been compiled.")
+                    Text(
+                        model.unreadablePreset?.recovery
+                            ?? "The line list appears once the piece has been compiled."
+                    )
                 }
                 .frame(maxHeight: .infinity)
             }
@@ -782,5 +788,23 @@ extension ResolvedSoundSource {
     var isLiveLibraryReference: Bool {
         if case .library = self { return true }
         return false
+    }
+}
+
+/// A warning strip across the top of the panel: something the owner must not
+/// have to go looking for, said without interrupting the music.
+private struct PanelBanner: View {
+    let text: String
+
+    var body: some View {
+        Label(text, systemImage: "exclamationmark.triangle.fill")
+            .font(.callout)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.orange.opacity(0.18))
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityLabel(text)
+            .accessibilityAddTraits(.updatesFrequently)
     }
 }

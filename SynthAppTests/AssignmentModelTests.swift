@@ -27,7 +27,7 @@ final class AssignmentModelTests: XCTestCase {
         score = try ScoreCompiler().compile(piece: piece, contentStore: library.store.pieceContent)
         engine = PlaybackEngine()
         try engine.load(timeline: PerformanceRealizer().realize(score, settings: .standard))
-        model = AssignmentModel(store: library.store, engine: engine)
+        model = AssignmentModel(store: library.store, engine: engine, pieceTitle: piece.title)
     }
 
     override func tearDown() async throws {

@@ -518,16 +518,18 @@ final class MasterStageRenderTests: XCTestCase {
     /// single build swings by several tenths of a second with contention, and
     /// the minimum is the estimate of the work itself, not of the neighbours.
     ///
-    /// **The one-second bound is held on the baseline machine, opted into like
-    /// every other real-time guardrail.** REQ-005 is set against the owner's
-    /// Mac, where this measures about half the bound. A GitHub macOS runner
-    /// measures the same build anywhere from 0.76 s to 1.18 s from run to run,
-    /// with a slow run slow throughout, so by default the test holds a
-    /// two-second backstop — still enough to catch a lost excerpt cap or an
-    /// extra analysis pass. Set `SYNTH_REALTIME_GUARDRAIL=1` (passed to
-    /// `xcodebuild test` as `TEST_RUNNER_SYNTH_REALTIME_GUARDRAIL=1`) to hold
-    /// the product bound. The cap itself, which is what keeps this cost from
-    /// growing with the piece, is checked exactly by
+    /// **The one-second bound is held everywhere except a GitHub-hosted
+    /// runner.** REQ-005 is set against the owner's Mac, where this measures
+    /// about half the bound. A GitHub macOS runner measures the same build
+    /// anywhere from 0.76 s to 1.18 s from run to run, with a slow run slow
+    /// throughout, so there the test holds a two-second backstop — still enough
+    /// to catch a lost excerpt cap or an extra analysis pass. The runner is
+    /// recognised by its `runner` account because `xcodebuild` passes the test
+    /// process none of the job's environment; set `SYNTH_REALTIME_GUARDRAIL=1`
+    /// (as `TEST_RUNNER_SYNTH_REALTIME_GUARDRAIL=1` on the `xcodebuild`
+    /// command line) to hold a runner to the product bound anyway. The cap
+    /// itself, which is what keeps this cost from growing with the piece, is
+    /// checked exactly by
     /// `testTheAnalysedTimeIsCappedIndependentlyOfTheLengthOfThePiece`.
     ///
     /// The recorded figure for the pinned reference piece is the env-gated
@@ -569,7 +571,8 @@ final class MasterStageRenderTests: XCTestCase {
               added:             \(String(format: "%.3f", added)) s
               gain:              \(String(format: "%+.2f", calibration.appliedDecibels)) dB
             """)
-        let productBound = ProcessInfo.processInfo.environment["SYNTH_REALTIME_GUARDRAIL"] == "1"
+        let productBound = NSUserName() != "runner"
+            || ProcessInfo.processInfo.environment["SYNTH_REALTIME_GUARDRAIL"] == "1"
         let bound = productBound ? 1.0 : 2.0
         print("  bound:             \(bound) s\(productBound ? " (REQ-005)" : " (backstop)")")
         XCTAssertLessThan(

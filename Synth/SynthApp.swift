@@ -9,6 +9,7 @@ struct SynthApp: App {
             RootView(model: model)
                 .task {
                     model.installKeyboardControl()
+                    model.installNowPlaying()
                     await model.bootstrap()
                 }
         }

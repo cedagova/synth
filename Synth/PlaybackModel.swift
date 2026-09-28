@@ -113,6 +113,11 @@ final class PlaybackModel {
     /// by ear.
     private(set) var loopPassCount = 0
 
+    /// Bumped whenever the playhead jumps rather than runs: a seek, a skip, a
+    /// stop's rewind, a loop wrap. Observers that extrapolate the position from
+    /// a rate — Now Playing does — republish on this instead of on every tick.
+    private(set) var playheadJumpCount = 0
+
     /// The last thing the transport has to say, including the honest reasons
     /// the engine paused itself.
     private(set) var statusMessage: String?
@@ -573,6 +578,7 @@ final class PlaybackModel {
         // honest when it is not.
         positionMicroseconds = 0
         loopPassCount = 0
+        playheadJumpCount += 1
         statusMessage = "Stopped."
         refreshTransport()
     }
@@ -614,6 +620,7 @@ final class PlaybackModel {
         let clamped = min(max(0, microseconds), max(0, totalMicroseconds))
         engine.seek(toMicroseconds: clamped)
         positionMicroseconds = clamped
+        playheadJumpCount += 1
     }
 
     /// Runs whatever the owner asked for while the piece was still loading.
@@ -1491,6 +1498,7 @@ final class PlaybackModel {
             engine.seek(toMicroseconds: target)
             positionMicroseconds = target
             loopPassCount += 1
+            playheadJumpCount += 1
         }
 
         guard transportState != previousState || pauseReason != previousReason else { return }

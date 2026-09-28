@@ -273,6 +273,7 @@ final class PlaybackModel {
         assignment.onPresetLoaded = { [weak self] content in
             self?.adoptPreset(content)
         }
+        wireCompare()
     }
 
     /// Connect the export surface to this piece.
@@ -286,6 +287,9 @@ final class PlaybackModel {
     /// `[weak self]` because the export's task outlives an individual render
     /// and must not keep a closed piece alive.
     private func wireExport() {
+        // Export always renders the active preset (D5): Compare ends first, so
+        // the timeline read below is the active preset's, not the reference's.
+        export.willExport = { [weak self] in self?.endCompare() }
         export.presetName = { [weak self] in self?.assignment.activePreset?.name }
         export.caveat = { [weak self] in self?.assignment.exportCaveat }
         export.makeRequest = { [weak self] settings in
@@ -441,6 +445,7 @@ final class PlaybackModel {
     func setPlayingThroughEditedSound(_ isPlayingThrough: Bool) {
         guard isReady else { return }
         if isPlayingThrough {
+            endCompare()
             assignment.setSuspendedByPlayThrough(true)
             do {
                 try engine.setVoices(.uniform(baseVoiceProvider))
@@ -455,6 +460,9 @@ final class PlaybackModel {
 
     /// Stops the audio and the ticker. Called when the screen goes away.
     func close() {
+        // The engine is about to stop; there is nothing to fade back to.
+        compareGeneration += 1
+        compareReturn = nil
         ticker?.cancel()
         ticker = nil
         // A render outlives the window unless something stops it, and one that
@@ -979,11 +987,13 @@ final class PlaybackModel {
     /// Turns humanization on or off and re-realizes the piece under the new
     /// setting, keeping the playhead and whether it was playing.
     func setHumanizationEnabled(_ isEnabled: Bool) async {
+        endCompare()
         await apply(HumanizationSettings(isEnabled: isEnabled, intensity: humanization.intensity))
     }
 
     /// Commits the slider. Called when the drag ends, not on every value.
     func commitIntensity() async {
+        endCompare()
         let intensity = Int(intensityDraft.rounded())
         guard intensity != humanization.intensity else { return }
         await apply(HumanizationSettings(isEnabled: humanization.isEnabled, intensity: intensity))
@@ -1010,11 +1020,13 @@ final class PlaybackModel {
     /// is the same kind of setting: preset-stored, whole-piece, and carried by
     /// the one timeline live playback and the export both read (AD-P6).
     func setExpressionEnabled(_ isEnabled: Bool) async {
+        endCompare()
         await apply(ExpressionSettings(isEnabled: isEnabled, amount: expression.amount))
     }
 
     /// Commits the slider. Called when the drag ends, not on every value.
     func commitExpressionAmount() async {
+        endCompare()
         let amount = Int(expressionAmountDraft.rounded())
         guard amount != expression.amount else { return }
         await apply(ExpressionSettings(isEnabled: expression.isEnabled, amount: amount))
@@ -1047,6 +1059,7 @@ final class PlaybackModel {
     /// Turning it on measures the program if this program has not been measured
     /// yet, which is bounded by `MasterStage.maximumAnalyzedSeconds`.
     func setProducedMasterEnabled(_ isEnabled: Bool) async {
+        endCompare()
         await apply(ProducedMasterSettings(isEnabled: isEnabled))
     }
 
@@ -1070,6 +1083,7 @@ final class PlaybackModel {
 
     /// Picks a temperament and plays the piece in it (REQ-006).
     func setTemperament(_ temperament: Temperament) async {
+        endCompare()
         // `unrecognizedTemperament` is deliberately dropped: the owner choosing a
         // temperament is the one moment replacing a name this build could not read
         // is exactly what they asked for.
@@ -1080,6 +1094,7 @@ final class PlaybackModel {
 
     /// Picks what A is tuned to and plays the piece at it (REQ-006).
     func setReferencePitch(_ referencePitch: ReferencePitch) async {
+        endCompare()
         await apply(
             TuningSettings(
                 temperament: tuning.temperament,
@@ -1223,6 +1238,7 @@ final class PlaybackModel {
     }
 
     func setTempoPercent(_ percent: Int) async {
+        endCompare()
         await applyTempo(PresetContent.clampedTempo(percent))
     }
 
@@ -1507,6 +1523,195 @@ final class PlaybackModel {
             return "Tuning: equal temperament at \(pitch) — standard."
         }
         return "Tuning: \(settings.temperament.displayName) at \(pitch)."
+    }
+
+    // MARK: Compare with a reference preset (#92)
+
+    /// The active preset's timing, kept while Compare plays the reference's.
+    ///
+    /// **Only the timing is swapped.** `humanization`, `expression`,
+    /// `producedMaster`, `tuning` and `tempoPercent` go on holding the active
+    /// preset's values throughout, because they are what the Performance
+    /// controls show and edit, and what an edit writes. What the engine plays
+    /// under Compare is the reference's; what the readout reads is
+    /// `compiledScore` and `navigator`, which do follow the reference's tempo so
+    /// the measure and beat shown are the ones being heard.
+    private struct ActiveTiming {
+        let score: CompiledScore
+        let navigator: PlaybackNavigator
+        let timeline: PerformanceTimeline
+        let timelineTempoPercent: Int
+        /// Whether the reference needed its own realization, so returning has
+        /// to reload the active one.
+        let reloadsTimeline: Bool
+    }
+
+    /// Non-nil exactly while Compare is on.
+    private var compareReturn: ActiveTiming?
+
+    /// Bumped by every end, so a Compare still realizing the reference when an
+    /// edit, activation or export arrives does not land after it.
+    private var compareGeneration = 0
+
+    var isComparing: Bool { compareReturn != nil }
+
+    private func wireCompare() {
+        assignment.onCompareMustEnd = { [weak self] in self?.endCompare() }
+        assignment.onToggleCompare = { [weak self] in
+            Task { await self?.toggleCompare() }
+        }
+    }
+
+    /// The latched toggle (plan decision 8): the menu command and the panel's
+    /// Compare button both land here.
+    func toggleCompare() async {
+        if isComparing {
+            endCompare()
+        } else {
+            await beginCompare()
+        }
+    }
+
+    /// Play the reference preset in place of the active one, at the same place
+    /// in the music.
+    ///
+    /// The reference's whole performance is applied — sounds, mix,
+    /// humanization, expression, produced master, tuning and tempo — through
+    /// one faded switch, so however many rebuilds that takes, sound resumes
+    /// once. Nothing is activated and nothing is written.
+    func beginCompare() async {
+        guard isReady, !isComparing else { return }
+        // A preset switch still being adopted, or an owner edit still being
+        // realized, is about to replace the loaded timeline. Compare starts from
+        // the settled state, never from one that is about to move under it.
+        compareGeneration += 1
+        let generation = compareGeneration
+        await settlePresetAdoption()
+        guard generation == compareGeneration, !isComparing else { return }
+        guard realizationsInFlight == 0 else {
+            statusMessage = "The piece is still being prepared — try Compare again in a moment."
+            return
+        }
+        guard let sourceScore, let compiledScore, let navigator, let timeline else { return }
+        guard let performance = assignment.referencePerformance() else {
+            if let reason = assignment.compareUnavailableReason { statusMessage = reason }
+            return
+        }
+        let content = performance.preset.content
+
+        let percent = PresetContent.clampedTempo(content.tempoPercent)
+        let reloadsTimeline = percent != tempoPercent
+            || content.humanization != humanization
+            || content.expression != expression
+        let score = percent == tempoPercent
+            ? compiledScore
+            : sourceScore.scalingTempo(toPercent: percent)
+        let realized: PerformanceTimeline
+        if reloadsTimeline {
+            realizationCount += 1
+            realized = await Self.realize(
+                score, humanization: content.humanization, expression: content.expression
+            )
+        } else {
+            realized = timeline
+        }
+
+        // Anything that ended Compare while the reference was realizing — an
+        // edit, a switch, an export, the piece closing — wins.
+        guard generation == compareGeneration, !isComparing else { return }
+
+        let back = ActiveTiming(
+            score: compiledScore, navigator: navigator, timeline: timeline,
+            timelineTempoPercent: timelineTempoPercent, reloadsTimeline: reloadsTimeline
+        )
+        compareReturn = back
+        do {
+            try switchPerformance(
+                score: score,
+                timeline: realized,
+                timelineTempoPercent: percent,
+                reloadsTimeline: reloadsTimeline,
+                producedMaster: content.producedMaster,
+                tuning: content.tuning
+            ) {
+                assignment.beginAudition(performance)
+            }
+            statusMessage = "Comparing: playing “\(performance.preset.name)” in place of "
+                + "“\(assignment.activePreset?.name ?? "the active preset")”. "
+                + "Nothing is changed or saved."
+        } catch {
+            endCompare()
+            statusMessage = "Could not compare with “\(performance.preset.name)”: \(error)"
+        }
+    }
+
+    /// Put the active preset back on the engine, at the same place in the
+    /// music. Does nothing when Compare is off, apart from cancelling one that
+    /// is still being prepared.
+    func endCompare() {
+        compareGeneration += 1
+        guard let back = compareReturn else { return }
+        compareReturn = nil
+        do {
+            try switchPerformance(
+                score: back.score,
+                timeline: back.timeline,
+                timelineTempoPercent: back.timelineTempoPercent,
+                reloadsTimeline: back.reloadsTimeline,
+                producedMaster: producedMaster,
+                tuning: tuning
+            ) {
+                assignment.endAudition()
+            }
+            statusMessage = "Back to “\(assignment.activePreset?.name ?? "the active preset")”."
+        } catch {
+            // Whatever the engine managed, the model is off Compare: the panel
+            // and the next rebuild both describe the active preset.
+            assignment.endAudition()
+            statusMessage = "Could not return to the active preset: \(error)"
+        }
+    }
+
+    /// The one switch both directions use: fade out, rebuild whatever differs,
+    /// resume at the same score position, fade in (`PlaybackEngine.switchFaded`).
+    ///
+    /// **Position is carried in score ticks, not microseconds**, the way the
+    /// tempo control carries it, so when the two presets' tempos differ the
+    /// playhead lands on the same measure and beat (plan decision 10).
+    private func switchPerformance(
+        score: CompiledScore,
+        timeline arriving: PerformanceTimeline,
+        timelineTempoPercent arrivingTempoPercent: Int,
+        reloadsTimeline: Bool,
+        producedMaster: ProducedMasterSettings,
+        tuning: TuningSettings,
+        voices: () -> Void
+    ) throws {
+        let ticks = playheadTicks()
+        let arrivingNavigator = PlaybackNavigator(score: score)
+        let resumeAt = min(
+            max(0, score.tempoMap.microseconds(atPlaybackTicks: ticks)),
+            max(0, arrivingNavigator.totalMicroseconds)
+        )
+
+        try engine.switchFaded(resumingAtMicroseconds: resumeAt, producedMaster: producedMaster) {
+            try engine.setTuning(tuning)
+            if reloadsTimeline { try engine.load(timeline: arriving) }
+            voices()
+        }
+
+        timeline = arriving
+        timelineTempoPercent = arrivingTempoPercent
+        compiledScore = score
+        navigator = arrivingNavigator
+        if let loop {
+            // A loop is a pair of measures; its seconds follow the tempo.
+            self.loop = arrivingNavigator.loopRange(
+                fromMeasureNumber: loop.startMeasureNumber, toMeasureNumber: loop.endMeasureNumber
+            )
+        }
+        positionMicroseconds = resumeAt
+        refreshTransport()
     }
 
     // MARK: The ticker

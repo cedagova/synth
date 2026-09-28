@@ -153,6 +153,17 @@ struct MixCommands: Commands {
 
             Button("Delete Preset…") { assignment?.requestPresetDeletion() }
                 .keyboardShortcut(.delete, modifiers: [.command, .control])
+
+            Divider()
+
+            // #92's latched toggle (plan decision 8): a menu shortcut cannot
+            // report key-up, so there is no hold gesture. Refuses, with a
+            // reason on the status line, when no usable reference is chosen.
+            Button("Compare with Reference Preset") {
+                guard let playback = model.playback else { return }
+                Task { await playback.toggleCompare() }
+            }
+            .keyboardShortcut("c", modifiers: [.command, .control])
         }
     }
 }

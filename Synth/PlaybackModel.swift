@@ -113,6 +113,11 @@ final class PlaybackModel {
     /// by ear.
     private(set) var loopPassCount = 0
 
+    /// Bumped whenever the playhead jumps rather than runs: a seek, a skip, a
+    /// stop's rewind, a loop wrap. Observers that extrapolate the position from
+    /// a rate — Now Playing does — republish on this instead of on every tick.
+    private(set) var playheadJumpCount = 0
+
     /// The last thing the transport has to say, including the honest reasons
     /// the engine paused itself.
     private(set) var statusMessage: String?
@@ -586,6 +591,7 @@ final class PlaybackModel {
         // honest when it is not.
         positionMicroseconds = 0
         loopPassCount = 0
+        playheadJumpCount += 1
         statusMessage = "Stopped."
         refreshTransport()
     }
@@ -627,6 +633,7 @@ final class PlaybackModel {
         let clamped = min(max(0, microseconds), max(0, totalMicroseconds))
         engine.seek(toMicroseconds: clamped)
         positionMicroseconds = clamped
+        playheadJumpCount += 1
     }
 
     /// Runs whatever the owner asked for while the piece was still loading.
@@ -886,6 +893,57 @@ final class PlaybackModel {
             loopFromField = measure
         }
         setLoopFromFields()
+    }
+
+    // MARK: Rehearsal marks (plan decisions 11–13)
+
+    /// The piece's rehearsal marks in score order, as menu and loop choices.
+    /// Empty before the piece is compiled and for a score that prints none,
+    /// which is what disables Go to Rehearsal Mark.
+    var rehearsalMarks: [RehearsalMarkTarget] { navigator?.rehearsalMarkTargets ?? [] }
+
+    /// Seeks to the mark's first performance, like Go to Measure.
+    func goToRehearsalMark(_ target: RehearsalMarkTarget) {
+        guard let microseconds = navigator?.microseconds(forRehearsalMark: target.mark) else { return }
+        seek(toMicroseconds: microseconds)
+    }
+
+    /// Starts the loop at the mark's measure. The loop fields carry printed
+    /// numbers, so the loop then resolves exactly as a typed one would.
+    func setLoopStart(atRehearsalMark target: RehearsalMarkTarget) {
+        loopFromField = target.measureNumber
+        if loopToField.trimmingCharacters(in: .whitespaces).isEmpty {
+            statusMessage = "Loop will start at \(target.menuTitle). Choose where it ends."
+        } else {
+            setLoopFromFields()
+        }
+    }
+
+    /// Ends the loop just before the mark, so "A to B" loops section A. With
+    /// no start chosen, the loop runs from the beginning of the piece.
+    func setLoopEnd(beforeRehearsalMark target: RehearsalMarkTarget) {
+        guard let before = target.measureNumberBefore else {
+            statusMessage = "\(target.text) is on the first measure; a loop cannot end before it."
+            return
+        }
+        loopToField = before
+        fillEmptyLoopStartWithFirstMeasure()
+        setLoopFromFields()
+    }
+
+    /// Ends the loop at the last measure of the piece: the final section's end.
+    func setLoopEndAtPieceEnd() {
+        guard let last = navigator?.lastMeasureNumber else { return }
+        loopToField = last
+        fillEmptyLoopStartWithFirstMeasure()
+        setLoopFromFields()
+    }
+
+    private func fillEmptyLoopStartWithFirstMeasure() {
+        if loopFromField.trimmingCharacters(in: .whitespaces).isEmpty,
+           let first = navigator?.firstMeasureNumber {
+            loopFromField = first
+        }
     }
 
     /// The printed number of the measure being played — or the last measure,
@@ -1504,6 +1562,7 @@ final class PlaybackModel {
             engine.seek(toMicroseconds: target)
             positionMicroseconds = target
             loopPassCount += 1
+            playheadJumpCount += 1
         }
 
         guard transportState != previousState || pauseReason != previousReason else { return }

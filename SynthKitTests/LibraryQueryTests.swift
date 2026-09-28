@@ -139,11 +139,13 @@ final class LibraryQueryTests: XCTestCase {
         )
     }
 
+    /// By surname (owner decision on #30): Bach before Dvořák, although
+    /// "Antonín" precedes "Johann" as a full string.
     func testSortsByComposer() {
         XCTAssertEqual(
             LibraryQuery.sorted(library, by: LibrarySort(field: .composer, direction: .ascending))
                 .map(\.id),
-            ["dvorak", "bach", "anon"]
+            ["bach", "dvorak", "anon"]
         )
     }
 
@@ -159,7 +161,7 @@ final class LibraryQueryTests: XCTestCase {
 
         XCTAssertEqual(ascending.last?.id, "anon")
         XCTAssertEqual(descending.last?.id, "anon")
-        XCTAssertEqual(descending.map(\.id), ["bach", "dvorak", "anon"])
+        XCTAssertEqual(descending.map(\.id), ["dvorak", "bach", "anon"])
     }
 
     func testSortsByImportDate() {
@@ -311,5 +313,155 @@ final class LibraryQueryTests: XCTestCase {
         XCTAssertEqual(LibrarySortDirection.ascending.label(for: .importedAt), "Oldest First")
         XCTAssertEqual(LibrarySortDirection.ascending.label(for: .composer), "A to Z")
         XCTAssertEqual(LibrarySort.byTitle.label, "Title, A to Z")
+    }
+
+    // MARK: - Composer surname ordering (#94, #30)
+
+    func testSurnameKeyUsesTheTextBeforeACommaWhenThereIsOne() {
+        XCTAssertEqual(LibraryQuery.surnameSortKey("Bach, Johann Sebastian"), "Bach")
+        XCTAssertEqual(LibraryQuery.surnameSortKey("  Vaughan Williams , Ralph "), "Vaughan Williams")
+    }
+
+    func testSurnameKeyIsTheLastWordOfAFirstLastName() {
+        XCTAssertEqual(LibraryQuery.surnameSortKey("Johann Sebastian Bach"), "Bach")
+        XCTAssertEqual(LibraryQuery.surnameSortKey("Antonín  Dvořák "), "Dvořák")
+    }
+
+    func testSurnameKeyOfASingleNameIsTheName() {
+        XCTAssertEqual(LibraryQuery.surnameSortKey("Palestrina"), "Palestrina")
+        XCTAssertEqual(LibraryQuery.surnameSortKey(", Anonymous"), "Anonymous",
+                       "an empty text before the comma falls back to the last word")
+    }
+
+    private var composers: [PieceRecord] {
+        [
+            piece(id: "js", title: "A", composer: "Johann Sebastian Bach"),
+            piece(id: "cpe", title: "B", composer: "Bach, Carl Philipp Emanuel"),
+            piece(id: "ravel", title: "C", composer: "Maurice Ravel"),
+            piece(id: "pal", title: "D", composer: "Palestrina"),
+            piece(id: "anon", title: "E", composer: nil),
+            piece(id: "dvorak", title: "F", composer: "Antonín Dvořák"),
+            piece(id: "clara", title: "G", composer: "Clara Schumann"),
+            piece(id: "robert", title: "H", composer: "Schumann, Robert")
+        ]
+    }
+
+    /// Comma form, "First Last" and single names file together by surname;
+    /// equal surnames break by the full name; unknown is last.
+    func testComposerSortOrdersBySurnameWithFullNameBreakingTies() {
+        XCTAssertEqual(
+            LibraryQuery.sorted(composers, by: LibrarySort(field: .composer, direction: .ascending))
+                .map(\.id),
+            ["cpe", "js", "dvorak", "pal", "ravel", "clara", "robert", "anon"]
+        )
+        XCTAssertEqual(
+            LibraryQuery.sorted(composers, by: LibrarySort(field: .composer, direction: .descending))
+                .map(\.id),
+            ["robert", "clara", "ravel", "pal", "dvorak", "js", "cpe", "anon"]
+        )
+    }
+
+    func testComposerFacetOrdersBySurnameWithUnknownLast() {
+        let facet = LibraryQuery.composerFacet(composers)
+        XCTAssertEqual(
+            facet.map(\.name),
+            [
+                "Bach, Carl Philipp Emanuel", "Johann Sebastian Bach", "Antonín Dvořák",
+                "Palestrina", "Maurice Ravel", "Clara Schumann", "Schumann, Robert",
+                "Unknown composer"
+            ]
+        )
+        XCTAssertEqual(facet.last?.filter, .unknown)
+    }
+
+    func testComposerFacetCountsAndGroupsCaseAndDiacriticInsensitively() {
+        let records = [
+            piece(id: "1", title: "A", composer: "Antonín Dvořák"),
+            piece(id: "2", title: "B", composer: "antonin dvorak"),
+            piece(id: "3", title: "C", composer: "Antonín Dvořák"),
+            piece(id: "4", title: "D", composer: "Ravel"),
+            piece(id: "5", title: "E", composer: nil),
+            piece(id: "6", title: "F", composer: "   ")
+        ]
+        let facet = LibraryQuery.composerFacet(records)
+        XCTAssertEqual(facet.map(\.name), ["Antonín Dvořák", "Ravel", "Unknown composer"],
+                       "variants share one entry under the spelling most pieces use")
+        XCTAssertEqual(facet.map(\.count), [3, 1, 2],
+                       "a blank composer counts as unknown")
+    }
+
+    func testComposerFacetIsEmptyForAnEmptyLibraryAndOmitsUnknownWhenNoneIsMissing() {
+        XCTAssertEqual(LibraryQuery.composerFacet([]), [])
+        let facet = LibraryQuery.composerFacet([piece(title: "A", composer: "Ravel")])
+        XCTAssertEqual(facet.map(\.filter), [ComposerFilter(piece(title: "A", composer: "RAVEL"))])
+    }
+
+    // MARK: - Composer filter
+
+    func testChoosingAComposerShowsOnlyTheirPiecesAndClearingRestoresAll() {
+        let dvorak = LibraryQuery.composerFacet(composers).first { $0.name == "Antonín Dvořák" }!.filter
+        let byTitle = LibrarySort.byTitle
+
+        XCTAssertEqual(
+            LibraryQuery.arrange(composers, searchText: "", composer: dvorak, sort: byTitle).map(\.id),
+            ["dvorak"]
+        )
+        XCTAssertEqual(
+            LibraryQuery.arrange(composers, searchText: "", composer: .unknown, sort: byTitle).map(\.id),
+            ["anon"]
+        )
+        XCTAssertEqual(
+            LibraryQuery.arrange(composers, searchText: "", composer: nil, sort: byTitle).count,
+            composers.count
+        )
+    }
+
+    func testTheComposerFilterMatchesVariantSpellings() {
+        let records = [
+            piece(id: "1", title: "A", composer: "Antonín Dvořák"),
+            piece(id: "2", title: "B", composer: "ANTONIN DVORAK"),
+            piece(id: "3", title: "C", composer: "Ravel")
+        ]
+        let filter = ComposerFilter(records[0])
+        XCTAssertEqual(
+            LibraryQuery.arrange(records, searchText: "", composer: filter, sort: .byTitle).map(\.id),
+            ["1", "2"]
+        )
+    }
+
+    func testTheComposerFilterCombinesWithTextSearch() {
+        let records = [
+            piece(id: "p1", title: "Prelude in C", composer: "Johann Sebastian Bach"),
+            piece(id: "f1", title: "Fugue in C", composer: "Johann Sebastian Bach"),
+            piece(id: "p2", title: "Prelude in D-flat", composer: "Frédéric Chopin")
+        ]
+        let bach = ComposerFilter(records[0])
+
+        XCTAssertEqual(
+            LibraryQuery.arrange(records, searchText: "prelude", composer: bach, sort: .byTitle).map(\.id),
+            ["p1"]
+        )
+        XCTAssertEqual(
+            LibraryQuery.arrange(records, searchText: "prelude", composer: nil, sort: .byTitle).map(\.id),
+            ["p1", "p2"],
+            "the search alone is unchanged"
+        )
+        XCTAssertEqual(
+            LibraryQuery.arrange(records, searchText: "chopin", composer: bach, sort: .byTitle),
+            [],
+            "both must match"
+        )
+    }
+
+    func testAFilterWhoseLastPieceIsGoneClearsItself() {
+        let ravel = ComposerFilter(piece(title: "X", composer: "Maurice Ravel"))
+        XCTAssertEqual(LibraryQuery.resolvedComposerFilter(ravel, in: composers), ravel)
+
+        let withoutRavel = composers.filter { $0.id != "ravel" }
+        XCTAssertNil(LibraryQuery.resolvedComposerFilter(ravel, in: withoutRavel))
+        XCTAssertNil(LibraryQuery.resolvedComposerFilter(
+            .unknown, in: withoutRavel.filter { $0.id != "anon" }
+        ))
+        XCTAssertNil(LibraryQuery.resolvedComposerFilter(nil, in: composers))
     }
 }

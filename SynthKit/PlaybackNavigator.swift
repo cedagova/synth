@@ -228,6 +228,40 @@ public struct PlaybackNavigator: Sendable {
         )
     }
 
+    // MARK: Rehearsal marks
+
+    /// The score's rehearsal marks as places to go (plan decisions 11–13), in
+    /// score order. A mark printed on a measure the performance never reaches
+    /// (skipped by a jump) is left out: there is nowhere to seek to.
+    public var rehearsalMarkTargets: [RehearsalMarkTarget] {
+        score.rehearsalMarks.enumerated().compactMap { offset, mark in
+            guard let playbackIndex = playbackMeasureIndex(forRehearsalMark: mark) else { return nil }
+            let previous = mark.sourceMeasureIndex - 1
+            return RehearsalMarkTarget(
+                id: offset,
+                mark: mark,
+                measureNumber: score.sourceMeasures[mark.sourceMeasureIndex].number,
+                playbackMeasureIndex: playbackIndex,
+                measureNumberBefore: score.sourceMeasures.indices.contains(previous)
+                    ? score.sourceMeasures[previous].number
+                    : nil
+            )
+        }
+    }
+
+    /// The first performance of the mark's measure — the same rule as Go to
+    /// Measure, so a mark inside a repeat lands on its first pass.
+    public func playbackMeasureIndex(forRehearsalMark mark: RehearsalMark) -> Int? {
+        score.playbackMeasures.first { $0.sourceMeasureIndex == mark.sourceMeasureIndex }?.index
+    }
+
+    /// Where the mark's first performance begins, in microseconds.
+    public func microseconds(forRehearsalMark mark: RehearsalMark) -> Int64? {
+        playbackMeasureIndex(forRehearsalMark: mark).flatMap {
+            microseconds(atPlaybackMeasureIndex: $0)
+        }
+    }
+
     // MARK: Helpers
 
     /// Ticks from the start of a measure for a 1-based, possibly fractional
@@ -259,4 +293,28 @@ public struct PlaybackNavigator: Sendable {
         }
         return microseconds
     }
+}
+
+/// A rehearsal mark resolved against one score's measures, ready for a menu.
+public struct RehearsalMarkTarget: Equatable, Identifiable, Sendable {
+    /// Position in `CompiledScore.rehearsalMarks`; stable for one compilation.
+    public let id: Int
+
+    public let mark: RehearsalMark
+
+    /// Printed number of the measure the mark is in.
+    public let measureNumber: String
+
+    /// The mark's first performance.
+    public let playbackMeasureIndex: Int
+
+    /// Printed number of the measure just before the mark, in score order: a
+    /// loop that ends "at B" plays up to here, so A to B loops section A. Nil
+    /// for a mark on the very first measure, which nothing can end before.
+    public let measureNumberBefore: String?
+
+    public var text: String { mark.text }
+
+    /// "B (measure 17)": the text alone is ambiguous when a score reuses it.
+    public var menuTitle: String { "\(mark.text) (measure \(measureNumber))" }
 }

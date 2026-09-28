@@ -24,6 +24,9 @@ struct PlaybackScreen: View {
     @FocusState private var focus: Field?
     @State private var tab: Tab = .loop
 
+    /// The window's undo manager — the one the Edit menu's Undo and Redo reach.
+    @Environment(\.undoManager) private var undoManager
+
     fileprivate enum Field: Hashable {
         case measure
         case beat
@@ -98,9 +101,24 @@ struct PlaybackScreen: View {
         )) {
             StemExportSheet(model: model.stemExport, subtitle: exportSubtitle)
         }
+        // What Playback ▸ Go to Rehearsal Mark lists (see `RehearsalMarkMenu`).
+        .focusedSceneValue(\.rehearsalMarks, model.rehearsalMarks)
         .onChange(of: model.measureFocusRequests) { _, _ in focus = .measure }
         .onChange(of: model.timeFocusRequests) { _, _ in focus = .timeMinutes }
         .task { await model.prepare() }
+        // Mix and preset undo is offered only while this screen is what the
+        // window shows (P84-7). The studio and the catalog replace this view
+        // rather than covering it, so appearing and disappearing are exactly
+        // "visible" and "not visible"; the history itself lives in the model
+        // and survives the trip.
+        .onAppear { model.assignment.attachUndoManager(undoManager) }
+        .onChange(of: undoManager) { _, manager in model.assignment.attachUndoManager(manager) }
+        // A focused measure, time or loop field keeps ⌘Z for its own text.
+        .onChange(of: focus) { _, field in model.assignment.setTransportFieldFocused(field != nil) }
+        .onDisappear {
+            model.assignment.setTransportFieldFocused(false)
+            model.assignment.detachUndoManager()
+        }
         // **No `.onDisappear { model.close() }`.**
         //
         // There is now a second reason this screen can disappear: the sound
@@ -651,6 +669,33 @@ private struct LoopControls: View {
                 .accessibilityLabel("Loop over that range of measures")
             }
             .textFieldStyle(.roundedBorder)
+
+            // Sections by rehearsal mark (plan decision 12). Text choices only
+            // (D2), and absent for a score that prints no marks.
+            let marks = model.rehearsalMarks
+            if !marks.isEmpty {
+                HStack(spacing: 8) {
+                    Menu("From Mark") {
+                        ForEach(marks) { target in
+                            Button(target.menuTitle) { model.setLoopStart(atRehearsalMark: target) }
+                        }
+                    }
+                    .fixedSize()
+                    .help("Start the loop at a rehearsal mark")
+                    .accessibilityLabel("Start the loop at a rehearsal mark")
+
+                    Menu("To Mark") {
+                        ForEach(marks.filter { $0.measureNumberBefore != nil }) { target in
+                            Button(target.menuTitle) { model.setLoopEnd(beforeRehearsalMark: target) }
+                        }
+                        Divider()
+                        Button("End of Piece") { model.setLoopEndAtPieceEnd() }
+                    }
+                    .fixedSize()
+                    .help("End the loop just before a rehearsal mark, or at the end of the piece")
+                    .accessibilityLabel("End the loop just before a rehearsal mark")
+                }
+            }
         }
     }
 }

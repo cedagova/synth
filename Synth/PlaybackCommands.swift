@@ -77,6 +77,8 @@ struct PlaybackCommands: Commands {
             }
             .keyboardShortcut("g", modifiers: .command)
 
+            RehearsalMarkMenu(model: model)
+
             // A different letter, not Shift-Command-G. Two menu items whose
             // shortcuts differ only by Shift are matched ambiguously: driving
             // the built app, Shift-Command-G either activated Go to Measure or
@@ -157,5 +159,49 @@ struct PlaybackCommands: Commands {
             .keyboardShortcut("e", modifiers: [.command, .shift, .option])
             .disabled(model.playback?.isReady != true)
         }
+    }
+}
+
+/// Playback ▸ Go to Rehearsal Mark (plan decisions 11–13).
+///
+/// **Fed by a focused scene value, not by reading the model.** Driving the
+/// built app showed why (see the type comment above): a view inside `Commands`
+/// that reads `AppModel` — directly, or through a value passed in from the
+/// `App` body — renders once at launch and never again, so the list stayed
+/// empty after a piece with marks opened. A focused value is SwiftUI's own
+/// channel from the active window to the menu bar, and the playback screen
+/// publishes its marks on it.
+///
+/// With no marks — or no piece open — the item is a plain disabled button:
+/// a disabled `Menu` was observed to stay enabled in the menu bar.
+struct RehearsalMarkMenu: View {
+    let model: AppModel
+    @FocusedValue(\.rehearsalMarks) private var marks
+
+    var body: some View {
+        if let marks, !marks.isEmpty {
+            Menu("Go to Rehearsal Mark") {
+                ForEach(marks) { target in
+                    Button(target.menuTitle) {
+                        model.playback?.goToRehearsalMark(target)
+                    }
+                }
+            }
+        } else {
+            Button("Go to Rehearsal Mark") {}
+                .disabled(true)
+        }
+    }
+}
+
+extension FocusedValues {
+    /// The open piece's rehearsal marks, published by `PlaybackScreen`.
+    var rehearsalMarks: [RehearsalMarkTarget]? {
+        get { self[RehearsalMarksKey.self] }
+        set { self[RehearsalMarksKey.self] = newValue }
+    }
+
+    private struct RehearsalMarksKey: FocusedValueKey {
+        typealias Value = [RehearsalMarkTarget]
     }
 }

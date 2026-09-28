@@ -46,6 +46,48 @@ struct RootView: View {
         // keep an old number is not a saving.
         .frame(minWidth: 1_040, minHeight: 560)
         .navigationTitle("Synth")
+        .modifier(FinderOpenResult(model: model.finderOpen))
+    }
+}
+
+/// The result of a Finder open over a screen that is not the library (P84-4):
+/// a short notice for a success, the library's own named-file alert for a
+/// failure. Neither navigates or interrupts what is showing.
+private struct FinderOpenResult: ViewModifier {
+    @Bindable var model: FinderOpenModel
+
+    func body(content: Content) -> some View {
+        content
+            .overlay(alignment: .top) {
+                if let notice = model.notice {
+                    Text(notice.message)
+                        .font(.callout)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(.regularMaterial, in: Capsule())
+                        .shadow(radius: 4)
+                        .padding(.top, 12)
+                        .onTapGesture { model.notice = nil }
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .task(id: notice.id) {
+                            try? await Task.sleep(for: .seconds(6))
+                            if model.notice?.id == notice.id { model.notice = nil }
+                        }
+                }
+            }
+            .animation(.easeInOut(duration: 0.2), value: model.notice)
+            .alert(
+                model.alert?.title ?? "",
+                isPresented: Binding(
+                    get: { model.alert != nil },
+                    set: { if !$0 { model.alert = nil } }
+                ),
+                presenting: model.alert
+            ) { _ in
+                Button("OK") { model.alert = nil }
+            } message: { alert in
+                Text([alert.message, alert.recovery].compactMap { $0 }.joined(separator: "\n\n"))
+            }
     }
 }
 

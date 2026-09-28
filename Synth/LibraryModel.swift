@@ -122,6 +122,12 @@ final class LibraryModel {
         didSet { if searchText != oldValue { pruneSelection() } }
     }
 
+    /// The one composer the list is narrowed to, or nil for every composer.
+    /// Session state only; it combines with `searchText`.
+    var composerFilter: ComposerFilter? {
+        didSet { if composerFilter != oldValue { pruneSelection() } }
+    }
+
     var sort: LibrarySort = .byTitle {
         didSet { if sort != oldValue { pruneSelection() } }
     }
@@ -137,7 +143,12 @@ final class LibraryModel {
 
     /// True while an import or removal is running, so the surface can disable
     /// the controls that would race it.
-    private(set) var isWorking = false
+    private(set) var isWorking = false {
+        didSet { if !isWorking { resumeIdleWaiters() } }
+    }
+
+    /// Callers parked in `waitUntilIdle()`, resumed when `isWorking` clears.
+    @ObservationIgnored private var idleWaiters: [CheckedContinuation<Void, Never>] = []
 
     /// The last thing that happened, in a sentence. Also what VoiceOver
     /// announces after an import or removal.
@@ -167,16 +178,29 @@ final class LibraryModel {
 
     // MARK: - Derived state
 
-    /// The rows the list shows: filtered by `searchText`, ordered by `sort`.
+    /// The rows the list shows: filtered by `searchText` and `composerFilter`,
+    /// ordered by `sort`.
     var visiblePieces: [PieceRecord] {
-        LibraryQuery.arrange(pieces, searchText: searchText, sort: sort)
+        LibraryQuery.arrange(pieces, searchText: searchText, composer: composerFilter, sort: sort)
+    }
+
+    /// The composer filter's choices, with counts, over the whole library.
+    var composerFacet: [ComposerFacetEntry] {
+        LibraryQuery.composerFacet(pieces)
+    }
+
+    /// The chosen composer's display name, or nil when not filtering.
+    var composerFilterName: String? {
+        guard let composerFilter else { return nil }
+        return composerFacet.first { $0.filter == composerFilter }?.name
     }
 
     /// True when the library itself holds nothing — the first-run state, which
     /// is not the same as a search that found nothing.
     var isLibraryEmpty: Bool { pieces.isEmpty }
 
-    /// True when the library has pieces but the current search matches none.
+    /// True when the library has pieces but the current search and composer
+    /// filter match none.
     var isSearchEmpty: Bool { !pieces.isEmpty && visiblePieces.isEmpty }
 
     /// The currently selected piece, if the selection still exists.
@@ -197,6 +221,8 @@ final class LibraryModel {
     func reload() async {
         do {
             pieces = try await readPieces()
+            // A composer whose last piece was removed is no longer a choice.
+            composerFilter = LibraryQuery.resolvedComposerFilter(composerFilter, in: pieces)
             pruneSelection()
         } catch {
             alert = .libraryUnreadable(error)
@@ -216,8 +242,14 @@ final class LibraryModel {
     /// a rejected file leaves the library untouched, so the honest result of
     /// dropping five files of which one is damaged is four imports and one
     /// named failure — not an abandoned batch.
-    func importPieces(from urls: [URL]) async {
-        guard !urls.isEmpty, !isWorking else { return }
+    ///
+    /// Returns what the run did, or nil when it did not run (nothing to import,
+    /// or another import or removal already holds the library). The picker and
+    /// the drop target ignore it; a Finder open reads it to report the result
+    /// over a screen that is not the library (#88).
+    @discardableResult
+    func importPieces(from urls: [URL]) async -> ImportSummary? {
+        guard !urls.isEmpty, !isWorking else { return nil }
         isWorking = true
         defer { isWorking = false }
 
@@ -241,6 +273,27 @@ final class LibraryModel {
             // the owner just dropped is the one already there.
             selection = first.id
         }
+        return summary
+    }
+
+    /// Returns once no import or removal is running.
+    ///
+    /// For a caller that must not be turned away by `importPieces`'s
+    /// `isWorking` guard — a file opened from Finder is queued behind the
+    /// operation in progress, not dropped (#88). Everything here is on the main
+    /// actor, so a caller that resumes and immediately calls `importPieces`
+    /// cannot be overtaken: `isWorking` is re-checked on every wake-up and set
+    /// again before `importPieces` first suspends.
+    func waitUntilIdle() async {
+        while isWorking {
+            await withCheckedContinuation { idleWaiters.append($0) }
+        }
+    }
+
+    private func resumeIdleWaiters() {
+        let waiters = idleWaiters
+        idleWaiters = []
+        waiters.forEach { $0.resume() }
     }
 
     // MARK: - Editing piece info
@@ -364,6 +417,10 @@ final class LibraryModel {
 
     func clearSearch() {
         searchText = ""
+    }
+
+    func clearComposerFilter() {
+        composerFilter = nil
     }
 
     /// Picks a field, keeping the direction that field last had — except that

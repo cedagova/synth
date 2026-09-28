@@ -276,6 +276,8 @@ private struct LibraryToolbar: View {
         HStack(spacing: 12) {
             searchField
 
+            composerMenu
+
             sortMenu
 
             Button {
@@ -354,6 +356,55 @@ private struct LibraryToolbar: View {
         .disabled(model.isLibraryEmpty)
     }
 
+    /// Narrows the list to one composer. Combines with the search field.
+    private var composerMenu: some View {
+        HStack(spacing: 4) {
+            Menu {
+                Button {
+                    model.clearComposerFilter()
+                } label: {
+                    if model.composerFilter == nil {
+                        Label("All Composers", systemImage: "checkmark")
+                    } else {
+                        Text("All Composers")
+                    }
+                }
+                Divider()
+                ForEach(model.composerFacet) { entry in
+                    Button {
+                        model.composerFilter = entry.filter
+                    } label: {
+                        let text = "\(entry.name) (\(entry.count))"
+                        if model.composerFilter == entry.filter {
+                            Label(text, systemImage: "checkmark")
+                        } else {
+                            Text(text)
+                        }
+                    }
+                }
+            } label: {
+                Label(model.composerFilterName ?? "All Composers", systemImage: "person")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .accessibilityLabel("Composer filter, \(model.composerFilterName ?? "all composers")")
+            .accessibilityHint("Shows only the pieces by one composer.")
+
+            if model.composerFilter != nil {
+                Button {
+                    model.clearComposerFilter()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Show every composer")
+                .accessibilityLabel("Clear the composer filter")
+            }
+        }
+        .disabled(model.isLibraryEmpty)
+    }
+
     private var sortMenu: some View {
         Menu {
             ForEach(LibrarySortField.allCases) { field in
@@ -410,13 +461,29 @@ private struct EmptyLibraryView: View {
 private struct NoSearchResultsView: View {
     @Bindable var model: LibraryModel
 
+    private var description: String {
+        switch model.composerFilter {
+        case nil:
+            return "No piece in your library matches “\(model.searchText)”."
+        case .unknown?:
+            return "No piece with an unknown composer matches “\(model.searchText)”."
+        case .named?:
+            return "No piece by \(model.composerFilterName ?? "this composer") matches “\(model.searchText)”."
+        }
+    }
+
     var body: some View {
         ContentUnavailableView {
             Label("No matching pieces", systemImage: "magnifyingglass")
         } description: {
-            Text("No piece in your library matches “\(model.searchText)”.")
+            Text(description)
         } actions: {
-            Button("Clear the Search") { model.clearSearch() }
+            if !model.searchText.isEmpty {
+                Button("Clear the Search") { model.clearSearch() }
+            }
+            if model.composerFilter != nil {
+                Button("Show All Composers") { model.clearComposerFilter() }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

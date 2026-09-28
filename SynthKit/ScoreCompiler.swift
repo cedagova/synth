@@ -249,6 +249,10 @@ private struct Compilation {
 
     var partNames: [String: String] = [:]
 
+    /// Rehearsal marks as met, part by part. Ordered and de-duplicated across
+    /// parts in `buildRehearsalMarks()`.
+    var rehearsalMarksMet: [RehearsalMark] = []
+
     /// Part identifiers already claimed, so no two parts can mint the same
     /// line identity.
     var usedPartIDs: Set<String> = []
@@ -320,8 +324,27 @@ private struct Compilation {
             playbackMeasures: playbackMeasures,
             tempoMap: tempoMap,
             expressionEvents: expressionEvents.sorted(),
-            report: report.finish()
+            report: report.finish(),
+            rehearsalMarks: buildRehearsalMarks()
         )
+    }
+
+    /// Score order is measure order; within one measure, the order the first
+    /// part to print each mark printed them. Every part of an orchestral score
+    /// usually carries its own copy of the same mark, so one measure and text
+    /// is one mark — but the same text at two measures is two, because both
+    /// are places the owner might mean.
+    private func buildRehearsalMarks() -> [RehearsalMark] {
+        var seen: Set<RehearsalMark> = []
+        var unique: [RehearsalMark] = []
+        for mark in rehearsalMarksMet where seen.insert(mark).inserted {
+            unique.append(mark)
+        }
+        // A stable sort: `unique` is already in first-met order within a
+        // measure, and only the measure decides between measures.
+        return unique.enumerated()
+            .sorted { ($0.element.sourceMeasureIndex, $0.offset) < ($1.element.sourceMeasureIndex, $1.offset) }
+            .map(\.element)
     }
 
     // MARK: Part list
@@ -1160,7 +1183,17 @@ private struct Compilation {
                         detail: "the notes are played at their written octave"
                     )
 
-                case "rehearsal", "dashes", "bracket", "eyeglasses", "image", "other-direction":
+                case "rehearsal":
+                    // Navigation only (D2): it changes nothing that sounds.
+                    let text = element.text
+                        .split(whereSeparator: \.isWhitespace)
+                        .joined(separator: " ")
+                    guard !text.isEmpty else { continue }
+                    rehearsalMarksMet.append(
+                        RehearsalMark(text: text, sourceMeasureIndex: measureIndex)
+                    )
+
+                case "dashes", "bracket", "eyeglasses", "image", "other-direction":
                     continue // visual only
 
                 default:

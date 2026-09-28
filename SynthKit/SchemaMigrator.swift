@@ -34,6 +34,11 @@ public struct MigrationOutcome: Equatable, Sendable {
     /// Names of the migrations applied by this call, in order.
     public let appliedMigrationNames: [String]
 
+    /// The pre-migration backup written by this call, if one was. `nil` when
+    /// nothing was pending, the store was brand new, or no backup directory
+    /// was given.
+    public let backup: LibraryBackup.Outcome?
+
     /// True when the store was already at the target version.
     public var wasAlreadyCurrent: Bool { appliedMigrationNames.isEmpty }
 }
@@ -303,11 +308,19 @@ public enum SchemaMigrator {
     ///   - database: the store to migrate.
     ///   - appVersion: recorded alongside the version row for diagnosis.
     ///   - migrations: injectable for tests; defaults to the shipped chain.
+    ///   - backupsDirectory: when given, a store that already has a schema is
+    ///     copied there (`LibraryBackup`) before any pending migration runs,
+    ///     and the migration is refused if that copy fails. A brand-new store
+    ///     (version 0) holds nothing to protect and is not backed up.
+    ///   - now: the backup's timestamp; injectable for tests.
     @discardableResult
     public static func migrate(
         _ database: SQLiteDatabase,
         appVersion: String,
-        migrations: [Migration] = SchemaMigrator.migrations
+        migrations: [Migration] = SchemaMigrator.migrations,
+        backupsDirectory: URL? = nil,
+        now: Date = Date(),
+        fileManager: FileManager = .default
     ) throws -> MigrationOutcome {
         precondition(
             migrations.enumerated().allSatisfy { $0.element.version == $0.offset + 1 },
@@ -329,7 +342,21 @@ public enum SchemaMigrator {
             return MigrationOutcome(
                 previousVersion: existing,
                 currentVersion: existing,
-                appliedMigrationNames: []
+                appliedMigrationNames: [],
+                backup: nil
+            )
+        }
+
+        // The backup completes before the migration transaction begins, and a
+        // failure here throws before anything is migrated.
+        var backup: LibraryBackup.Outcome?
+        if let backupsDirectory, existing > 0 {
+            backup = try LibraryBackup.write(
+                database,
+                schemaVersion: existing,
+                into: backupsDirectory,
+                date: now,
+                fileManager: fileManager
             )
         }
 
@@ -367,7 +394,8 @@ public enum SchemaMigrator {
         return MigrationOutcome(
             previousVersion: existing,
             currentVersion: target,
-            appliedMigrationNames: pending.map(\.name)
+            appliedMigrationNames: pending.map(\.name),
+            backup: backup
         )
     }
 

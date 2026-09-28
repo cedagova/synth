@@ -10,7 +10,13 @@ import Foundation
 ///   pieces/          imported MusicXML, kept verbatim
 ///   sounds/          synth patch and instrument-variant documents
 ///   assets/          downloaded instrument sample assets
+///   backups/         pre-migration copies of library.sqlite, newest 3 kept
+///                    (library-v<schema>-<UTC timestamp>.sqlite)
 /// ```
+///
+/// `backups/` is not created by `prepare()`: it appears the first time an
+/// existing library is migrated to a newer schema, so a library that has never
+/// been upgraded has none.
 ///
 /// The database holds metadata; bulk content lives beside it as files so it
 /// stays inspectable, backs up well, and can be written atomically.
@@ -38,6 +44,10 @@ public struct AppContainer: Sendable, Equatable {
 
     /// Downloaded instrument sample assets.
     public var assetsURL: URL { rootURL.appending(path: "assets") }
+
+    /// Pre-migration copies of the database, written by `SchemaMigrator` before
+    /// it upgrades an existing store (see `LibraryBackup`).
+    public var backupsURL: URL { rootURL.appending(path: "backups") }
 
     /// Every directory `prepare()` guarantees, in creation order.
     public var managedDirectoryURLs: [URL] { [rootURL, piecesURL, soundsURL, assetsURL] }

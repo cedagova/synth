@@ -88,6 +88,51 @@ final class SQLiteDatabaseTests: XCTestCase {
         XCTAssertEqual(try database.scalarInt("SELECT count(*) FROM t;"), 0)
     }
 
+    /// A successful rollback rethrows the body's error unchanged, so callers
+    /// matching on its type keep working.
+    func testASuccessfulRollbackRethrowsTheOriginalErrorUnchanged() throws {
+        XCTAssertThrowsError(
+            try database.withTransaction { _ in
+                throw StoreError.schemaVersionUnreadable
+            }
+        ) { error in
+            XCTAssertEqual(error as? StoreError, .schemaVersionUnreadable)
+        }
+    }
+
+    /// When the rollback itself fails, the thrown error says so and still
+    /// carries what the body threw.
+    func testAFailedRollbackIsThrownWithTheOriginalErrorReachable() throws {
+        try database.executeScript("CREATE TABLE t (a INTEGER);")
+
+        struct Boom: Error {}
+        XCTAssertThrowsError(
+            try database.withTransaction { db in
+                try db.execute("INSERT INTO t (a) VALUES (?);", [.integer(1)])
+                // End the transaction behind withTransaction's back, so its
+                // own ROLLBACK has nothing to roll back and fails.
+                try db.executeScript("COMMIT;")
+                throw Boom()
+            }
+        ) { error in
+            guard let failure = error as? TransactionRollbackFailed else {
+                return XCTFail("Expected TransactionRollbackFailed, got \(error)")
+            }
+            XCTAssertTrue(failure.originalError is Boom)
+            guard case StoreError.statementFailed(let sql, _, _) = failure.rollbackError else {
+                return XCTFail("Expected the rollback's statement failure, got \(failure.rollbackError)")
+            }
+            XCTAssertEqual(sql, "ROLLBACK;")
+            XCTAssertFalse((failure.errorDescription ?? "").isEmpty)
+        }
+
+        // The database is usable afterwards: no transaction is left open.
+        try database.withTransaction { db in
+            try db.execute("INSERT INTO t (a) VALUES (?);", [.integer(2)])
+        }
+        XCTAssertEqual(try database.scalarInt("SELECT count(*) FROM t;"), 2)
+    }
+
     func testTransactionCommitsAndReturnsItsValue() throws {
         try database.executeScript("CREATE TABLE t (a INTEGER);")
 

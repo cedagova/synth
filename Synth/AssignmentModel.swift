@@ -178,6 +178,7 @@ final class AssignmentModel {
     /// either.
     func refreshFromStore() {
         guard score != nil else { return }
+        endCompare()
         let before = lines.map { LineSound(lineID: $0.lineID, key: channelKey(for: $0)) }
         load(applyingToEngine: false, because: nil)
         let after = lines.map { LineSound(lineID: $0.lineID, key: channelKey(for: $0)) }
@@ -211,6 +212,7 @@ final class AssignmentModel {
             activePreset = preset
             lines = performance.lines
             keepSelectionValid()
+            keepReferenceValid()
             onPresetLoaded?(preset.content)
 
             if applyingToEngine { applyToEngine(performance) }
@@ -225,7 +227,7 @@ final class AssignmentModel {
     /// Puts the current preset — sounds and mixer — on the engine.
     private func applyToEngine(_ performance: PresetPerformance? = nil) {
         guard !isSuspendedByPlayThrough else { return }
-        guard let resolved = performance ?? currentPerformance() else { return }
+        guard let resolved = performance ?? audition ?? currentPerformance() else { return }
         do {
             // `PresetPerformance.apply(to:)` in two halves. The mixer half is
             // ASN001's, verbatim. The voice half is replaced by `voices(for:)`
@@ -235,7 +237,9 @@ final class AssignmentModel {
             let assignment = voices(for: resolved.lines)
             try engine.setVoices(assignment)
             resolved.applyMixer(to: engine)
-            flagSilentLines()
+            // `lines` is the active preset's; an audition's silent lines are
+            // not flagged onto it.
+            if audition == nil { flagSilentLines() }
         } catch {
             alert = AssignmentAlert(title: "Could not put this preset on the audio engine", error)
         }
@@ -745,6 +749,7 @@ final class AssignmentModel {
         var updated = lines[index].mixer
         change(&updated)
         guard updated != lines[index].mixer else { return }
+        endCompare()
 
         writeStrip(updated, toLine: lineID)
         lines[index] = withMixer(updated, on: lines[index])
@@ -765,6 +770,7 @@ final class AssignmentModel {
         let wanted = lines[index].mixer
         let stored = preset.line(withID: lineID)?.mixer
         guard wanted != stored else { return }
+        endCompare()
 
         do {
             activePreset = try store.presets.setMixer(wanted, forLine: lineID, in: preset)
@@ -781,6 +787,7 @@ final class AssignmentModel {
     /// Stores the whole-piece tempo on the active preset. Auto-saved.
     func saveTempoPercent(_ percent: Int) {
         guard let preset = activePreset, preset.content.tempoPercent != percent else { return }
+        endCompare()
         do {
             activePreset = try store.presets.setTempoPercent(percent, in: preset)
             presets = try store.presets.presets(forPieceID: preset.pieceID)
@@ -793,6 +800,7 @@ final class AssignmentModel {
     /// other custom value the preset holds (REQ-024). Auto-saved.
     func saveExpression(_ settings: ExpressionSettings) {
         guard let preset = activePreset, preset.content.expression != settings else { return }
+        endCompare()
         do {
             activePreset = try store.presets.setExpression(settings, in: preset)
             presets = try store.presets.presets(forPieceID: preset.pieceID)
@@ -805,6 +813,7 @@ final class AssignmentModel {
     /// other custom value the preset holds (REQ-024). Auto-saved.
     func saveProducedMaster(_ settings: ProducedMasterSettings) {
         guard let preset = activePreset, preset.content.producedMaster != settings else { return }
+        endCompare()
         do {
             activePreset = try store.presets.setProducedMaster(settings, in: preset)
             presets = try store.presets.presets(forPieceID: preset.pieceID)
@@ -817,6 +826,7 @@ final class AssignmentModel {
     /// value the preset holds (REQ-024, REQ-006). Auto-saved.
     func saveTuning(_ settings: TuningSettings) {
         guard let preset = activePreset, preset.content.tuning != settings else { return }
+        endCompare()
         do {
             activePreset = try store.presets.setTuning(settings, in: preset)
             presets = try store.presets.presets(forPieceID: preset.pieceID)
@@ -829,6 +839,7 @@ final class AssignmentModel {
     /// other custom value the preset holds (REQ-024). Auto-saved.
     func saveHumanization(_ settings: HumanizationSettings) {
         guard let preset = activePreset, preset.content.humanization != settings else { return }
+        endCompare()
         do {
             activePreset = try store.presets.setHumanization(settings, in: preset)
             presets = try store.presets.presets(forPieceID: preset.pieceID)
@@ -981,6 +992,106 @@ final class AssignmentModel {
         }
     }
 
+    // MARK: Compare with a reference preset (#92)
+
+    /// The preset Compare plays in place of the active one. Session state for
+    /// this open piece only — never stored (plan decision 9) — so a new piece,
+    /// which gets a new model, starts with none.
+    private(set) var referencePresetID: String?
+
+    /// The reference's resolved performance while Compare is on, nil otherwise.
+    ///
+    /// **A second performance beside the active one, never instead of it.**
+    /// `activePreset` and `lines` go on describing what is stored and what the
+    /// panel edits; only the engine hears this. Compare never calls
+    /// `PresetLibrary.activate` and never writes a preset.
+    private(set) var audition: PresetPerformance?
+
+    var isComparing: Bool { audition != nil }
+
+    var referencePreset: Preset? {
+        referencePresetID.flatMap { id in presets.first { $0.id == id } }
+    }
+
+    /// Compare needs a reference that exists and is not the active preset, and
+    /// the piece's own sounds on the lines (not the studio's play-through).
+    var canCompare: Bool {
+        guard let reference = referencePreset else { return false }
+        return reference.id != activePreset?.id && !isSuspendedByPlayThrough
+    }
+
+    /// Why Compare cannot start, for the status line; nil when it can.
+    var compareUnavailableReason: String? {
+        guard let reference = referencePreset else {
+            return "Choose a reference preset to compare with first."
+        }
+        if reference.id == activePreset?.id {
+            return "“\(reference.name)” is the active preset — choose another one to compare with."
+        }
+        if isSuspendedByPlayThrough {
+            return "Compare is unavailable while the sound studio is playing the piece."
+        }
+        return nil
+    }
+
+    /// Installed by `PlaybackModel`: puts the active preset back on the engine
+    /// if Compare is on. Called before any preset edit, activation or re-read,
+    /// so a change always lands on — and is heard as — the active preset.
+    var onCompareMustEnd: (() -> Void)?
+
+    /// Installed by `PlaybackModel`, which owns the timeline half of the switch;
+    /// the panel's Compare toggle calls it.
+    var onToggleCompare: (() -> Void)?
+
+    func toggleCompare() { onToggleCompare?() }
+
+    /// Pick the reference, or clear it with nil. Ends Compare if it is on, so
+    /// what is heard is never a reference nobody chose.
+    func chooseReference(presetID: String?) {
+        guard presetID != referencePresetID else { return }
+        endCompare()
+        referencePresetID = presetID.flatMap { id in presets.contains { $0.id == id } ? id : nil }
+    }
+
+    /// The reference, resolved against this piece's lines and ready to play,
+    /// or nil when Compare is unavailable. Reads only.
+    func referencePerformance() -> PresetPerformance? {
+        guard canCompare, let reference = referencePreset, let inventory else { return nil }
+        do {
+            return try PresetPerformance.resolve(
+                reference, inventory: inventory, library: store.sounds,
+                instruments: store.instruments
+            )
+        } catch {
+            alert = AssignmentAlert(title: "Could not read the reference preset", error)
+            return nil
+        }
+    }
+
+    /// Put `performance` — sounds and mix — on the engine in place of the
+    /// active preset. The caller has already paused and will resume.
+    func beginAudition(_ performance: PresetPerformance) {
+        audition = performance
+        applyToEngine(performance)
+    }
+
+    /// Put the active preset back on the engine.
+    func endAudition() {
+        guard audition != nil else { return }
+        audition = nil
+        applyToEngine()
+    }
+
+    private func endCompare() {
+        onCompareMustEnd?()
+    }
+
+    /// A deleted reference is forgotten, so Compare cannot come back to it.
+    private func keepReferenceValid() {
+        guard let id = referencePresetID, !presets.contains(where: { $0.id == id }) else { return }
+        referencePresetID = nil
+    }
+
     // MARK: Keyboard navigation (REQ-027)
 
     func selectNextLine() { moveSelection(by: 1) }
@@ -1021,6 +1132,7 @@ final class AssignmentModel {
             activePreset = preset
             lines = performance.lines
             keepSelectionValid()
+            keepReferenceValid()
             onPresetLoaded?(preset.content)
             applyToEngine(performance)
         } catch {
@@ -1036,6 +1148,7 @@ final class AssignmentModel {
     /// the panel shows what is really stored.
     private func write(_ what: String, _ body: (String) throws -> Void) {
         guard let pieceID = score?.pieceID else { return }
+        endCompare()
         do {
             try body(pieceID)
         } catch {

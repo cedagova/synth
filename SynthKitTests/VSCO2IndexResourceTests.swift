@@ -63,6 +63,7 @@ final class VSCO2IndexResourceTests: XCTestCase {
             (good + "84e2030f33b8631d4489e05afbe020508a51dbd1\tabc\tX.sfz\n", 2),  // bad size
             (good + "84e2030f\t2796\tX.sfz\n", 2),                                 // short SHA
             ("<html>404</html>\n", 1),                                             // not an index
+            (good.replacingOccurrences(of: "\n", with: "\r\n") + good, 1),         // CRLF line endings
         ]
         for (text, line) in cases {
             let bundle = try temporaryBundle(index: Data(text.utf8))

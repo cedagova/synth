@@ -164,10 +164,14 @@ issue text or pinned evidence.
 2. **Stems cover the lines audible in the current mix.** Muted lines (and,
    while solos are active, unsoloed lines) get no stem, so the stems sum to
    what the mix plays. Each stem keeps its line's fader and pan.
-3. **Stems never silently clip.** Without the ceiling a pre-master stem can
-   exceed full scale. The leaf either writes a format that holds such
-   values, or tells the user before publishing. The mechanism is the
-   implementer's choice.
+3. **Stems are written as 32-bit float, so they never clip.** Without the
+   ceiling a pre-master stem can exceed full scale, and AD-P6
+   (`SynthKit/MasterStage.swift:3-10`) treats an export that clips as a
+   defect, so warning and writing a clipped file is not allowed. Stems
+   always use 32-bit float samples in the chosen WAV/AIFF container,
+   whatever the mix bit-depth setting says. The stems sheet shows this
+   fixed depth. The saved mix export settings and the mix export's output
+   do not change, so no persisted or existing visible setting changes.
 4. **Stems never overwrite unrelated files.** The batch is published as a
    unit into a destination whose name collisions are resolved without
    overwriting existing files, unless the user confirms.
@@ -177,7 +181,11 @@ issue text or pinned evidence.
    byte-identity test still passes. The window is the performed span the
    loop plays, so a loop inside a repeat exports the heard pass.
 6. **Ring-out** = no note starts after the window end; sounding notes and
-   effects release for the existing capped release-tail length. Bit
+   effects release for the existing capped release-tail length. The
+   full-piece timeline stays untouched. Master loudness calibration is
+   measured from the loaded timeline (`PlaybackEngine.swift:596-600`), so
+   the window and ring-out must be applied at render/write time, never
+   by trimming the timeline. Bit
    identity is required from window start to window end, except any final
    stretch the master's look-ahead makes depend on later notes. The test
    states that stretch.
@@ -186,7 +194,10 @@ issue text or pinned evidence.
    range (`… mm. 12–24`). Stems ignore the loop range in this effort.
 8. **Compare is a latched toggle with a menu command and shortcut.** A
    macOS menu shortcut cannot reliably report key-up, so no hold gesture is
-   used. The issue allows "(or toggle)".
+   used. The issue allows "(or toggle)"; #92 is retitled
+   "Toggle-to-compare against a reference preset" to match. (The issue's
+   "Next Preset (⌃⌘Y)" is a slip: Next Preset is ⌃⌘V, and ⌃⌘Y is Rename
+   Preset.)
 9. **The reference preset is session-only.** It is per open piece and not
    persisted. Compare is unavailable when no reference is chosen, when the
    reference is the active preset, or when the reference is deleted.
@@ -236,9 +247,9 @@ All sides are owned by `cedagova/synth`.
   #92 adds a non-persisting audition entry point beside activation. The
   persisted active-preset contract (one active per piece) is untouched.
 - **`CompiledScore` (SynthKit):** #93 adds a rehearsal-marks field.
-  `CompiledScore` is `Codable`, so the field decodes as empty when absent.
-  Compiling it must not change any existing compiled output (timeline,
-  structure, tempo).
+  `CompiledScore` is never persisted, so no decoding compatibility is
+  needed. Compiling marks must not change any existing compiled output
+  (timeline, structure, tempo).
 - **`LibraryQuery` (SynthKit) ↔ library screen (app):** #94 adds a composer
   facet, a filter predicate, and the shared surname sort key; the text
   search contract is unchanged, and composer sort order changes by owner
@@ -284,7 +295,7 @@ All sides are owned by `cedagova/synth`.
 | ROOT | GROUP | None | cedagova/synth | Listening and export features: stems, loop-range export, preset compare, rehearsal marks, composer filter | DIRECT | None | https://github.com/cedagova/synth/issues/85 |
 | STEM090 | LEAF | ROOT | cedagova/synth | Export per-line stems | None | None | https://github.com/cedagova/synth/issues/90 |
 | LOOP091 | LEAF | ROOT | cedagova/synth | Export only the loop range | None | None | https://github.com/cedagova/synth/issues/91 |
-| CMPR092 | LEAF | ROOT | cedagova/synth | Hold-to-compare against a reference preset | None | None | https://github.com/cedagova/synth/issues/92 |
+| CMPR092 | LEAF | ROOT | cedagova/synth | Toggle-to-compare against a reference preset | None | None | https://github.com/cedagova/synth/issues/92 |
 | MARK093 | LEAF | ROOT | cedagova/synth | Go to rehearsal mark | None | None | https://github.com/cedagova/synth/issues/93 |
 | COMP094 | LEAF | ROOT | cedagova/synth | Filter the library by composer | None | None | https://github.com/cedagova/synth/issues/94 |
 

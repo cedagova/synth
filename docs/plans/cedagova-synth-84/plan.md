@@ -2,7 +2,7 @@
 
 - Planning issue: https://github.com/cedagova/synth/issues/84
 - Planning PR: https://github.com/cedagova/synth/pull/102
-- Status: Review
+- Status: Ready for implementation
 - Root classification: EFFORT
 - Delivery topology: DIRECT
 - Planner: Claude (implementation-planning-lead)
@@ -469,6 +469,6 @@ Not applicable: implementation work remains for all three leaves.
 
 ## Publication verification
 
-Pending until content approval: refine #84, #87, #88 and #89 bodies with
-planning metadata and the leaf contracts above, then run `plan
-reconcile-graph` and `plan verify-graph`.
+- Content accepted in independent review 5342717246 (head `2b36e9a`).
+- Published 2026-09-28: #84 refined as `GROUP` with `Implementation delivery: DIRECT`; #87, #88, #89 refined as `LEAF` with root/plan provenance, their original Problem/Proposal/Acceptance preserved verbatim (plus the P84-1 note under #87's rate bullet).
+- `plan validate --phase publication-ready`, `plan reconcile-graph` and `plan verify-graph` pass on the publication head: native sub-issues of #84 are exactly #87, #88, #89; no blocked-by edges.

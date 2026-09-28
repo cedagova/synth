@@ -95,6 +95,8 @@ struct PlaybackScreen: View {
         )) {
             ExportSheet(model: model.export, subtitle: exportSubtitle)
         }
+        // What Playback ▸ Go to Rehearsal Mark lists (see `RehearsalMarkMenu`).
+        .focusedSceneValue(\.rehearsalMarks, model.rehearsalMarks)
         .onChange(of: model.measureFocusRequests) { _, _ in focus = .measure }
         .onChange(of: model.timeFocusRequests) { _, _ in focus = .timeMinutes }
         .task { await model.prepare() }
@@ -661,6 +663,33 @@ private struct LoopControls: View {
                 .accessibilityLabel("Loop over that range of measures")
             }
             .textFieldStyle(.roundedBorder)
+
+            // Sections by rehearsal mark (plan decision 12). Text choices only
+            // (D2), and absent for a score that prints no marks.
+            let marks = model.rehearsalMarks
+            if !marks.isEmpty {
+                HStack(spacing: 8) {
+                    Menu("From Mark") {
+                        ForEach(marks) { target in
+                            Button(target.menuTitle) { model.setLoopStart(atRehearsalMark: target) }
+                        }
+                    }
+                    .fixedSize()
+                    .help("Start the loop at a rehearsal mark")
+                    .accessibilityLabel("Start the loop at a rehearsal mark")
+
+                    Menu("To Mark") {
+                        ForEach(marks.filter { $0.measureNumberBefore != nil }) { target in
+                            Button(target.menuTitle) { model.setLoopEnd(beforeRehearsalMark: target) }
+                        }
+                        Divider()
+                        Button("End of Piece") { model.setLoopEndAtPieceEnd() }
+                    }
+                    .fixedSize()
+                    .help("End the loop just before a rehearsal mark, or at the end of the piece")
+                    .accessibilityLabel("End the loop just before a rehearsal mark")
+                }
+            }
         }
     }
 }

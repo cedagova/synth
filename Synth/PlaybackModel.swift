@@ -158,6 +158,40 @@ final class PlaybackModel {
     /// D65-1): two pickers, and no third control.
     private(set) var tuning: TuningSettings
 
+    // MARK: Preset adoption (#96)
+
+    /// The one pending adoption of a loaded preset's performance settings, or
+    /// nil when none is pending. A newer load cancels it; see `adoptPreset`.
+    @ObservationIgnored private var adoptionTask: Task<Void, Never>?
+
+    /// Bumped by every re-realization when it starts. A realization that
+    /// finishes to find the counter moved was overtaken by a newer one, which
+    /// realizes under every setting now in force, so its own result is stale and
+    /// is dropped rather than loaded over the newer one. This is what keeps an
+    /// owner edit made during a pending adoption from being undone by it.
+    @ObservationIgnored private var realizationGeneration = 0
+
+    /// Re-realizations started and not yet returned to their caller. While one
+    /// is in flight the loaded timeline is about to be replaced, so it is no
+    /// guide to what the engine will end up playing — see `applyAdoptedPreset`.
+    @ObservationIgnored private var realizationsInFlight = 0
+
+    /// The tempo the loaded timeline was realized at. Differs from
+    /// `tempoPercent` only while a tempo change is still being realized, and is
+    /// what the playhead's position has to be read against in that window.
+    @ObservationIgnored private var timelineTempoPercent = TempoMap.defaultTempoPercent
+
+    /// How many times this piece has been realized. The one seam the tests need
+    /// to prove an adoption realizes once rather than once per setting.
+    @ObservationIgnored private(set) var realizationCount = 0
+
+    /// Test seam, nil in the app: awaited after a re-realization finishes and
+    /// before it is checked for being overtaken, so a test can hold an older
+    /// realization until a newer one has loaded — the one order the
+    /// `realizationGeneration` check exists for, and not one the thread pool can
+    /// be relied on to produce.
+    @ObservationIgnored var realizationDidFinish: (@MainActor () async -> Void)?
+
     /// Bumped so the view can move keyboard focus to a field a menu command
     /// asked for — the same mechanism the library uses for Find.
     private(set) var measureFocusRequests = 0
@@ -231,31 +265,8 @@ final class PlaybackModel {
         self.tuning = .standard
 
         wireExport()
-        // **Compared now, not when the task runs.** A preset load fires these
-        // on every open and refresh, usually with the value already in force.
-        // Queuing a task regardless left a stale "adopt 100%" waiting behind
-        // the owner's own "set 50%", and it ran during that change's
-        // realization and undid it. A value that already matches queues
-        // nothing.
-        assignment.onHumanizationLoaded = { [weak self] settings in
-            guard let self, settings != self.humanization else { return }
-            Task { await self.adoptPresetHumanization(settings) }
-        }
-        assignment.onExpressionLoaded = { [weak self] settings in
-            guard let self, settings != self.expression else { return }
-            Task { await self.adoptPresetExpression(settings) }
-        }
-        assignment.onProducedMasterLoaded = { [weak self] settings in
-            guard let self, settings != self.producedMaster else { return }
-            Task { await self.adoptPresetProducedMaster(settings) }
-        }
-        assignment.onTuningLoaded = { [weak self] settings in
-            guard let self, settings != self.tuning else { return }
-            Task { await self.adoptPresetTuning(settings) }
-        }
-        assignment.onTempoLoaded = { [weak self] percent in
-            guard let self, percent != self.tempoPercent else { return }
-            Task { await self.adoptPresetTempo(percent) }
+        assignment.onPresetLoaded = { [weak self] content in
+            self?.adoptPreset(content)
         }
     }
 
@@ -396,10 +407,8 @@ final class PlaybackModel {
             let compiled = source.scalingTempo(toPercent: tempoPercent)
             compiledScore = compiled
             navigator = PlaybackNavigator(score: compiled)
-            let realized = await Self.realize(
-                compiled, humanization: humanization, expression: expression
-            )
-            try loadIntoEngine(realized)
+            let realized = await realizeUnderCurrentSettings(compiled)
+            try loadIntoEngine(realized, tempoPercent: tempoPercent)
 
             // After the program exists, never before: the preset's mixer half
             // addresses the loaded program's lines, and its sound half replaces
@@ -451,6 +460,29 @@ final class PlaybackModel {
         engine.stopEngine()
     }
 
+    /// Realizes `score` under the humanization and expression in force now,
+    /// off the main actor. Every realization goes through here, which is what
+    /// makes `realizationCount` an honest count.
+    private func realizeUnderCurrentSettings(
+        _ score: CompiledScore
+    ) async -> PerformanceTimeline {
+        realizationCount += 1
+        return await Self.realize(score, humanization: humanization, expression: expression)
+    }
+
+    /// A re-realization that yields nil if a newer one started while it ran —
+    /// see `realizationGeneration`. The newer one carries every setting this
+    /// one would have, so dropping the older result loses nothing.
+    private func realizeUnlessOvertaken(_ score: CompiledScore) async -> PerformanceTimeline? {
+        realizationGeneration += 1
+        let generation = realizationGeneration
+        realizationsInFlight += 1
+        let realized = await realizeUnderCurrentSettings(score)
+        await realizationDidFinish?()
+        realizationsInFlight -= 1
+        return generation == realizationGeneration ? realized : nil
+    }
+
     private static func realize(
         _ score: CompiledScore,
         humanization: HumanizationSettings,
@@ -468,8 +500,9 @@ final class PlaybackModel {
 
     /// Hands a timeline to the engine on the main actor, which is the only
     /// thread that touches it.
-    private func loadIntoEngine(_ realized: PerformanceTimeline) throws {
+    private func loadIntoEngine(_ realized: PerformanceTimeline, tempoPercent: Int) throws {
         timeline = realized
+        timelineTempoPercent = tempoPercent
         // Before `load`, so the program is measured once as it is built rather
         // than built, measured and then measured again (MST001).
         engine.producedMaster = producedMaster
@@ -898,13 +931,7 @@ final class PlaybackModel {
         await apply(HumanizationSettings(isEnabled: humanization.isEnabled, intensity: intensity))
     }
 
-    /// A loaded or switched preset brought its own humanization: play under
-    /// it, but do not write it back — it is already what the preset stores.
-    func adoptPresetHumanization(_ settings: HumanizationSettings) async {
-        await apply(settings, savingToPreset: false)
-    }
-
-    private func apply(_ settings: HumanizationSettings, savingToPreset: Bool = true) async {
+    private func apply(_ settings: HumanizationSettings) async {
         guard settings != humanization else { return }
         humanization = settings
         intensityDraft = Double(settings.intensity)
@@ -912,9 +939,7 @@ final class PlaybackModel {
         // The setting is part of the preset (REQ-024), saved the way a mixer
         // move is: immediately, with a failure reported rather than discarded.
         // The setting still applies to this session either way.
-        if savingToPreset {
-            assignment.saveHumanization(settings)
-        }
+        assignment.saveHumanization(settings)
         await reRealize(
             announcing: Self.humanizationMessage(settings), changing: "humanization"
         )
@@ -937,20 +962,12 @@ final class PlaybackModel {
         await apply(ExpressionSettings(isEnabled: expression.isEnabled, amount: amount))
     }
 
-    /// A loaded or switched preset brought its own expression: play under it,
-    /// but do not write it back — it is already what the preset stores.
-    func adoptPresetExpression(_ settings: ExpressionSettings) async {
-        await apply(settings, savingToPreset: false)
-    }
-
-    private func apply(_ settings: ExpressionSettings, savingToPreset: Bool = true) async {
+    private func apply(_ settings: ExpressionSettings) async {
         guard settings != expression else { return }
         expression = settings
         expressionAmountDraft = Double(settings.amount)
 
-        if savingToPreset {
-            assignment.saveExpression(settings)
-        }
+        assignment.saveExpression(settings)
         await reRealize(announcing: Self.expressionMessage(settings), changing: "expression")
     }
 
@@ -980,21 +997,11 @@ final class PlaybackModel {
     /// group's row itself needs only the switch.
     var masterCalibration: MasterCalibration? { engine.masterCalibration }
 
-    /// A loaded or switched preset brought its own produced master: play under
-    /// it, but do not write it back — it is already what the preset stores.
-    func adoptPresetProducedMaster(_ settings: ProducedMasterSettings) async {
-        await apply(settings, savingToPreset: false)
-    }
-
-    private func apply(
-        _ settings: ProducedMasterSettings, savingToPreset: Bool = true
-    ) async {
+    private func apply(_ settings: ProducedMasterSettings) async {
         guard settings != producedMaster else { return }
         producedMaster = settings
 
-        if savingToPreset {
-            assignment.saveProducedMaster(settings)
-        }
+        assignment.saveProducedMaster(settings)
         engine.producedMaster = settings
         statusMessage = Self.producedMasterMessage(
             settings, calibration: engine.masterCalibration
@@ -1032,12 +1039,6 @@ final class PlaybackModel {
     /// about the model passing while the piece played at concert pitch.
     var loadedProgramTuning: TuningSettings? { engine.loadedProgram?.tuning }
 
-    /// A loaded or switched preset brought its own tuning: play under it, but do
-    /// not write it back — it is already what the preset stores.
-    func adoptPresetTuning(_ settings: TuningSettings) async {
-        await apply(settings, savingToPreset: false)
-    }
-
     /// **The one row in this group that rebuilds the program without re-realizing
     /// the piece**, and the reason is worth stating because it is neither of the
     /// other two mechanisms.
@@ -1059,13 +1060,11 @@ final class PlaybackModel {
     ///
     /// Everything else the group's rows share is kept: applied at once, written to
     /// the active preset at once, announced through the status bar's live region.
-    private func apply(_ settings: TuningSettings, savingToPreset: Bool = true) async {
+    private func apply(_ settings: TuningSettings) async {
         guard settings != tuning else { return }
         tuning = settings
 
-        if savingToPreset {
-            assignment.saveTuning(settings)
-        }
+        assignment.saveTuning(settings)
 
         guard timeline != nil else {
             statusMessage = Self.tuningMessage(settings)
@@ -1129,16 +1128,20 @@ final class PlaybackModel {
         }
 
         let wasPlaying = transportState == .playing
-        let resumeAt = positionMicroseconds
-        let realized = await Self.realize(
-            compiledScore, humanization: humanization, expression: expression
-        )
+        // In ticks, read against the tempo actually playing: a tempo adoption
+        // still being realized has already rescaled `compiledScore`.
+        let ticks = playheadTicks()
+        let percent = tempoPercent
+        guard let realized = await realizeUnlessOvertaken(compiledScore) else { return }
 
         do {
             // `load` stops the graph; the position, the preset's sounds and the
             // mix are all carried across by hand — see `restorePlayback`.
-            try loadIntoEngine(realized)
-            try restorePlayback(at: resumeAt, playing: wasPlaying)
+            try loadIntoEngine(realized, tempoPercent: percent)
+            try restorePlayback(
+                at: compiledScore.tempoMap.microseconds(atPlaybackTicks: ticks),
+                playing: wasPlaying
+            )
             statusMessage = message
             refreshTransport()
         } catch {
@@ -1165,12 +1168,6 @@ final class PlaybackModel {
         await applyTempo(PresetContent.clampedTempo(percent))
     }
 
-    /// A loaded or switched preset brought its own tempo: play under it, but
-    /// do not write it back — it is already what the preset stores.
-    func adoptPresetTempo(_ percent: Int) async {
-        await applyTempo(PresetContent.clampedTempo(percent), savingToPreset: false)
-    }
-
     /// The tempo control's whole mechanism: rescale the clock, realize the
     /// same notes against it, reload, and put the playhead back on the same
     /// *beat* — not the same second, which would now be somewhere else.
@@ -1181,16 +1178,14 @@ final class PlaybackModel {
     /// is the same one humanization pays: loading a program stops the graph
     /// for an instant, which is why this runs on commit and not on every
     /// slider value.
-    private func applyTempo(_ percent: Int, savingToPreset: Bool = true) async {
+    private func applyTempo(_ percent: Int) async {
         guard percent != tempoPercent else { return }
         tempoPercent = percent
         tempoDraft = Double(percent)
 
-        if savingToPreset {
-            assignment.saveTempoPercent(percent)
-        }
+        assignment.saveTempoPercent(percent)
 
-        guard let sourceScore, let oldScore = compiledScore else {
+        guard let sourceScore, compiledScore != nil else {
             statusMessage = Self.tempoMessage(percent, score: nil)
             return
         }
@@ -1198,23 +1193,14 @@ final class PlaybackModel {
         let wasPlaying = transportState == .playing
         // The same place in the music, found by score ticks, which the tempo
         // does not move.
-        let ticks = oldScore.tempoMap.playbackTicks(atMicroseconds: positionMicroseconds)
+        let ticks = playheadTicks()
 
-        let rescaled = sourceScore.scalingTempo(toPercent: percent)
-        compiledScore = rescaled
-        navigator = PlaybackNavigator(score: rescaled)
-        if let loop, let navigator {
-            // The loop is a pair of measures; its seconds have to be re-read.
-            self.loop = navigator.loopRange(
-                fromMeasureNumber: loop.startMeasureNumber, toMeasureNumber: loop.endMeasureNumber
-            )
-        }
-        let realized = await Self.realize(
-            rescaled, humanization: humanization, expression: expression
-        )
+        rescaleClock(to: percent, from: sourceScore)
+        guard let rescaled = compiledScore,
+              let realized = await realizeUnlessOvertaken(rescaled) else { return }
 
         do {
-            try loadIntoEngine(realized)
+            try loadIntoEngine(realized, tempoPercent: percent)
             // The same place in the *music* rather than the same second, which the
             // rescaled clock has moved.
             try restorePlayback(
@@ -1225,6 +1211,181 @@ final class PlaybackModel {
             refreshTransport()
         } catch {
             statusMessage = "Could not apply the tempo change: \(error)"
+        }
+    }
+
+    /// Where the playhead is in score ticks, which a tempo change does not move.
+    ///
+    /// Read against the tempo the *loaded timeline* was realized at, not
+    /// `compiledScore`'s: while a tempo change is still being realized the two
+    /// differ, and the engine is still playing the old one.
+    private func playheadTicks() -> Int {
+        guard let sourceScore else { return 0 }
+        let playing = timelineTempoPercent == tempoPercent
+            ? compiledScore : sourceScore.scalingTempo(toPercent: timelineTempoPercent)
+        return playing?.tempoMap.playbackTicks(atMicroseconds: positionMicroseconds) ?? 0
+    }
+
+    /// Rescale the clock, and everything read from it, to `percent`.
+    private func rescaleClock(to percent: Int, from sourceScore: CompiledScore) {
+        let rescaled = sourceScore.scalingTempo(toPercent: percent)
+        compiledScore = rescaled
+        navigator = PlaybackNavigator(score: rescaled)
+        if let loop, let navigator {
+            // The loop is a pair of measures; its seconds have to be re-read.
+            self.loop = navigator.loopRange(
+                fromMeasureNumber: loop.startMeasureNumber, toMeasureNumber: loop.endMeasureNumber
+            )
+        }
+    }
+
+    // MARK: Adopting a loaded preset (#96)
+
+    /// A loaded or switched preset brought its own performance settings: play
+    /// under them, but do not write them back — they are already what the
+    /// preset stores.
+    ///
+    /// **One ordered, cancellable unit, with one realization.** It used to be
+    /// five unstored tasks, one per setting, each free to re-realize and each
+    /// free to land in any order — so a second load arriving while the first's
+    /// tasks were pending could interleave with them, and a stale value could
+    /// land over a newer one. Now it is two halves:
+    ///
+    /// - **The settings, here and now**, in a fixed order — humanization,
+    ///   expression, produced master, tuning, tempo — with no suspension between
+    ///   them. Nothing can observe half a preset, and nothing can slip between
+    ///   the load and its values landing. A newer load simply lands over this one.
+    /// - **The engine, in one stored task**, which realizes once if any of the
+    ///   three timeline settings moved (or else rebuilds only for tuning, or only
+    ///   touches the bus for the master). A newer load cancels it, and a
+    ///   cancelled task applies nothing further; the newer one reconciles the
+    ///   engine with every setting now in force, including this one's.
+    ///
+    /// **An owner edit made meanwhile wins.** It lands on the model after these
+    /// settings did, so it is never overwritten; and its own realization, or the
+    /// adoption's if that starts later, reads every setting in force when it
+    /// starts. Whichever realization started last is the one loaded —
+    /// `realizationGeneration` drops the other — so the result carries both.
+    private func adoptPreset(_ content: PresetContent) {
+        var announcements: [AdoptionAnnouncement] = []
+
+        if content.humanization != humanization {
+            humanization = content.humanization
+            intensityDraft = Double(content.humanization.intensity)
+            announcements.append(.text(Self.humanizationMessage(content.humanization)))
+        }
+        if content.expression != expression {
+            expression = content.expression
+            expressionAmountDraft = Double(content.expression.amount)
+            announcements.append(.text(Self.expressionMessage(content.expression)))
+        }
+        if content.producedMaster != producedMaster {
+            producedMaster = content.producedMaster
+            announcements.append(.producedMaster)
+        }
+        if content.tuning != tuning {
+            tuning = content.tuning
+            announcements.append(.text(Self.tuningMessage(content.tuning)))
+        }
+        let percent = PresetContent.clampedTempo(content.tempoPercent)
+        if percent != tempoPercent {
+            tempoPercent = percent
+            tempoDraft = Double(percent)
+            if let sourceScore { rescaleClock(to: percent, from: sourceScore) }
+            announcements.append(.text(Self.tempoMessage(percent, score: sourceScore)))
+        }
+
+        // Nothing moved: the common case, since every open and refresh loads
+        // the preset already in force. A pending adoption, if any, is left to
+        // finish — it reconciles the engine with the settings in force when it
+        // runs, and those are exactly this preset's.
+        guard !announcements.isEmpty else { return }
+
+        adoptionTask?.cancel()
+        adoptionTask = Task { [weak self] in
+            await self?.applyAdoptedPreset(announcing: announcements)
+        }
+    }
+
+    /// The engine half of `adoptPreset`: bring the engine in line with every
+    /// performance setting now in force, doing the least work that achieves it.
+    private func applyAdoptedPreset(announcing announcements: [AdoptionAnnouncement]) async {
+        guard !Task.isCancelled else { return }
+        defer { if !Task.isCancelled { adoptionTask = nil } }
+
+        // Composed when read, not when queued: the produced master's sentence
+        // names the calibration, which exists only once the program is measured.
+        var message: String {
+            announcements.map { announcement in
+                switch announcement {
+                case .text(let text): return text
+                case .producedMaster:
+                    return Self.producedMasterMessage(
+                        producedMaster, calibration: engine.masterCalibration
+                    )
+                }
+            }.joined(separator: " ")
+        }
+
+        guard let timeline, let compiledScore else {
+            statusMessage = message
+            return
+        }
+
+        let wasPlaying = transportState == .playing
+        // A realization in flight will replace the loaded timeline with one
+        // realized under settings captured before this preset landed — an owner
+        // edit this preset may have just put back. Realizing again overtakes it,
+        // so what loads last is what the model now says.
+        let needsRealization = realizationsInFlight > 0
+            || timeline.settings.humanization != humanization
+            || timeline.settings.expression != expression
+            || timelineTempoPercent != tempoPercent
+
+        do {
+            if needsRealization {
+                let ticks = playheadTicks()
+                let percent = tempoPercent
+                guard let realized = await realizeUnlessOvertaken(compiledScore),
+                      !Task.isCancelled else { return }
+                // Loading carries the produced master and the tuning with it.
+                try loadIntoEngine(realized, tempoPercent: percent)
+                try restorePlayback(
+                    at: compiledScore.tempoMap.microseconds(atPlaybackTicks: ticks),
+                    playing: wasPlaying
+                )
+            } else {
+                if engine.producedMaster != producedMaster {
+                    engine.producedMaster = producedMaster
+                }
+                if engine.loadedProgram?.tuning != tuning {
+                    let resumeAt = positionMicroseconds
+                    try engine.setTuning(tuning)
+                    try restorePlayback(at: resumeAt, playing: wasPlaying)
+                }
+            }
+            statusMessage = message
+            refreshTransport()
+        } catch {
+            statusMessage = "Could not apply the preset's performance settings: \(error)"
+        }
+    }
+
+    /// One sentence of what an adoption changed, in the fixed order it applied
+    /// them.
+    private enum AdoptionAnnouncement: Sendable {
+        case text(String)
+        /// Composed after the engine has the setting, for the calibration.
+        case producedMaster
+    }
+
+    /// Waits for pending preset adoptions to finish — including one that
+    /// replaced the awaited one meanwhile — or returns at once when none is
+    /// pending. For tests, which need to observe the settled state.
+    func settlePresetAdoption() async {
+        while let task = adoptionTask {
+            await task.value
+            if adoptionTask == task { return }
         }
     }
 

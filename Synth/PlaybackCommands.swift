@@ -156,24 +156,44 @@ struct PlaybackCommands: Commands {
 
 /// Playback ▸ Go to Rehearsal Mark (plan decisions 11–13).
 ///
-/// **A `View`, not inline in `PlaybackCommands.body`, on purpose.** The
-/// `Commands` body is evaluated once and latches whatever it reads (see the
-/// type comment above), so a mark list or a `.disabled` there would be stuck
-/// at launch. A view's body is tracked by Observation like any other view, so
-/// this list follows the piece that is open and the item is disabled — not an
-/// empty submenu — when the piece prints no marks.
+/// **Fed by a focused scene value, not by reading the model.** Driving the
+/// built app showed why (see the type comment above): a view inside `Commands`
+/// that reads `AppModel` — directly, or through a value passed in from the
+/// `App` body — renders once at launch and never again, so the list stayed
+/// empty after a piece with marks opened. A focused value is SwiftUI's own
+/// channel from the active window to the menu bar, and the playback screen
+/// publishes its marks on it.
+///
+/// With no marks — or no piece open — the item is a plain disabled button:
+/// a disabled `Menu` was observed to stay enabled in the menu bar.
 struct RehearsalMarkMenu: View {
     let model: AppModel
+    @FocusedValue(\.rehearsalMarks) private var marks
 
     var body: some View {
-        let marks = model.playback?.rehearsalMarks ?? []
-        Menu("Go to Rehearsal Mark") {
-            ForEach(marks) { target in
-                Button(target.menuTitle) {
-                    model.playback?.goToRehearsalMark(target)
+        if let marks, !marks.isEmpty {
+            Menu("Go to Rehearsal Mark") {
+                ForEach(marks) { target in
+                    Button(target.menuTitle) {
+                        model.playback?.goToRehearsalMark(target)
+                    }
                 }
             }
+        } else {
+            Button("Go to Rehearsal Mark") {}
+                .disabled(true)
         }
-        .disabled(marks.isEmpty)
+    }
+}
+
+extension FocusedValues {
+    /// The open piece's rehearsal marks, published by `PlaybackScreen`.
+    var rehearsalMarks: [RehearsalMarkTarget]? {
+        get { self[RehearsalMarksKey.self] }
+        set { self[RehearsalMarksKey.self] = newValue }
+    }
+
+    private struct RehearsalMarksKey: FocusedValueKey {
+        typealias Value = [RehearsalMarkTarget]
     }
 }

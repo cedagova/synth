@@ -92,6 +92,8 @@ struct PlaybackScreen: View {
         )) {
             ExportSheet(model: model.export, subtitle: exportSubtitle)
         }
+        // What Playback ▸ Go to Rehearsal Mark lists (see `RehearsalMarkMenu`).
+        .focusedSceneValue(\.rehearsalMarks, model.rehearsalMarks)
         .onChange(of: model.measureFocusRequests) { _, _ in focus = .measure }
         .onChange(of: model.timeFocusRequests) { _, _ in focus = .timeMinutes }
         .task { await model.prepare() }

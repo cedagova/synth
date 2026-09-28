@@ -24,6 +24,9 @@ struct PlaybackScreen: View {
     @FocusState private var focus: Field?
     @State private var tab: Tab = .loop
 
+    /// The window's undo manager — the one the Edit menu's Undo and Redo reach.
+    @Environment(\.undoManager) private var undoManager
+
     fileprivate enum Field: Hashable {
         case measure
         case beat
@@ -95,6 +98,14 @@ struct PlaybackScreen: View {
         .onChange(of: model.measureFocusRequests) { _, _ in focus = .measure }
         .onChange(of: model.timeFocusRequests) { _, _ in focus = .timeMinutes }
         .task { await model.prepare() }
+        // Mix and preset undo is offered only while this screen is what the
+        // window shows (P84-7). The studio and the catalog replace this view
+        // rather than covering it, so appearing and disappearing are exactly
+        // "visible" and "not visible"; the history itself lives in the model
+        // and survives the trip.
+        .onAppear { model.assignment.attachUndoManager(undoManager) }
+        .onChange(of: undoManager) { _, manager in model.assignment.attachUndoManager(manager) }
+        .onDisappear { model.assignment.detachUndoManager() }
         // **No `.onDisappear { model.close() }`.**
         //
         // There is now a second reason this screen can disappear: the sound

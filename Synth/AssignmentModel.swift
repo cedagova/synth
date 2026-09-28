@@ -417,6 +417,20 @@ final class AssignmentModel {
         )
     }
 
+    /// The stems of the piece as it stands: the export request above, one
+    /// file per line the mix plays, named by the lines' display names (#90).
+    func stemExportRequest(
+        timeline: PerformanceTimeline, settings: AudioExportSettings, pieceTitle: String
+    ) -> AudioStemExportRequest? {
+        guard let performance = currentPerformance(), !lines.isEmpty else { return nil }
+        return performance.stemExportRequest(
+            timeline: timeline,
+            settings: settings,
+            pieceTitle: pieceTitle,
+            instruments: store.sampledInstruments
+        )
+    }
+
     /// What the export sheet has to warn about, or nil when what is playing is
     /// what will be written.
     ///

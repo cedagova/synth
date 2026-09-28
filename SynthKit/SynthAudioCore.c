@@ -203,6 +203,7 @@ static inline void synth_master_interval_peak(SynthRenderEngine *engine, int32_t
 static inline void synth_master_step(SynthRenderEngine *engine,
                                      float inLeft,
                                      float inRight,
+                                     int32_t ceilingBypassed,
                                      float *outLeft,
                                      float *outRight) {
     const int32_t mask = SYNTH_MASTER_LOOKAHEAD_FRAMES - 1;
@@ -219,14 +220,20 @@ static inline void synth_master_step(SynthRenderEngine *engine,
     engine->masterDelayRight[write] = inRight;
     engine->masterTarget[write] = 1.0f;
 
-    float peak = fabsf(inLeft);
-    const float other = fabsf(inRight);
-    if (other > peak) { peak = other; }
-    if (peak > SYNTH_MASTER_CEILING) {
-        synth_master_hold(engine, write,
-                          (SYNTH_MASTER_CEILING * SYNTH_MASTER_SAFETY) / peak);
+    /* A pre-master render never asks for a reduction, so every target stays
+       `1.0f` and the gain below stays exactly unity: the frame leaves the
+       lookahead unchanged, one lookahead later, as it would under the ceiling
+       with nothing to catch. */
+    if (!ceilingBypassed) {
+        float peak = fabsf(inLeft);
+        const float other = fabsf(inRight);
+        if (other > peak) { peak = other; }
+        if (peak > SYNTH_MASTER_CEILING) {
+            synth_master_hold(engine, write,
+                              (SYNTH_MASTER_CEILING * SYNTH_MASTER_SAFETY) / peak);
+        }
+        synth_master_interval_peak(engine, write);
     }
-    synth_master_interval_peak(engine, write);
 
     if (engine->masterNonUnity > 0) {
         const float scale = 1.0f / (float)SYNTH_MASTER_LOOKAHEAD_FRAMES;
@@ -636,6 +643,7 @@ static void synth_master_prime(SynthRenderEngine *engine,
                                int32_t anyRoomSend,
                                int32_t anySend,
                                int32_t producedMaster,
+                               int32_t ceilingBypassed,
                                float calibration,
                                float cohesionThreshold,
                                float master) {
@@ -662,7 +670,8 @@ static void synth_master_prime(SynthRenderEngine *engine,
             right *= master;
             float discardedLeft = 0.0f;
             float discardedRight = 0.0f;
-            synth_master_step(engine, left, right, &discardedLeft, &discardedRight);
+            synth_master_step(engine, left, right, ceilingBypassed,
+                              &discardedLeft, &discardedRight);
             (void)discardedLeft;
             (void)discardedRight;
         }
@@ -896,6 +905,8 @@ int32_t synth_audio_core_render(SynthRenderEngine *engine,
         const float cohesionThreshold = producedMaster
             ? atomic_load_explicit(&engine->cohesionThreshold, memory_order_relaxed)
             : 0.0f;
+        const int32_t ceilingBypassed =
+            atomic_load_explicit(&engine->ceilingBypassed, memory_order_relaxed);
         if (producedMaster != engine->cohesionWasEnabled) {
             /* Turning the setting on must not inherit whatever level the
                follower was left holding when it was turned off. */
@@ -906,7 +917,8 @@ int32_t synth_audio_core_render(SynthRenderEngine *engine,
         if (rendering) {
             if (engine->masterNeedsPrime) {
                 synth_master_prime(engine, anySolo, anyRoomSend, anySend,
-                                   producedMaster, calibration, cohesionThreshold, master);
+                                   producedMaster, ceilingBypassed,
+                                   calibration, cohesionThreshold, master);
             }
 
             synth_render_bus(engine, chunk,
@@ -934,7 +946,8 @@ int32_t synth_audio_core_render(SynthRenderEngine *engine,
 
                 float emitLeft = 0.0f;
                 float emitRight = 0.0f;
-                synth_master_step(engine, left, right, &emitLeft, &emitRight);
+                synth_master_step(engine, left, right, ceilingBypassed,
+                                  &emitLeft, &emitRight);
                 outLeft[offset + f] = emitLeft;
                 if (separateChannels) { outRight[offset + f] = emitRight; }
             }
@@ -1116,6 +1129,16 @@ void synth_engine_set_produced_master(SynthRenderEngine *engine, int32_t enabled
 int32_t synth_engine_produced_master(const SynthRenderEngine *engine) {
     if (engine == NULL) { return 0; }
     return atomic_load_explicit(&engine->producedMaster, memory_order_relaxed);
+}
+
+void synth_engine_set_ceiling_bypassed(SynthRenderEngine *engine, int32_t bypassed) {
+    if (engine == NULL) { return; }
+    atomic_store_explicit(&engine->ceilingBypassed, bypassed ? 1 : 0, memory_order_relaxed);
+}
+
+int32_t synth_engine_ceiling_bypassed(const SynthRenderEngine *engine) {
+    if (engine == NULL) { return 0; }
+    return atomic_load_explicit(&engine->ceilingBypassed, memory_order_relaxed);
 }
 
 void synth_engine_set_master_calibration(SynthRenderEngine *engine,

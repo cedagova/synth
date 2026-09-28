@@ -49,6 +49,36 @@ public enum AudioExportBitDepth: Int, CaseIterable, Sendable, Codable, Equatable
     public var displayName: String { "\(rawValue)-bit" }
 }
 
+/// How each sample is stored in the file.
+///
+/// The mix export always writes integer PCM at the owner's chosen depth, which
+/// is safe because the master's ceiling keeps it under full scale. A stem
+/// (#90) is pre-master, so nothing bounds it; it is written as 32-bit float,
+/// which carries a peak above full scale without clipping (AD-P6). Kept apart
+/// from `AudioExportBitDepth` so the mix sheet's depth choices and the saved
+/// mix settings do not change.
+public enum AudioSampleEncoding: Sendable, Equatable {
+    case integer(AudioExportBitDepth)
+    case float32
+
+    public var bitsPerSample: Int {
+        switch self {
+        case .integer(let depth): return depth.rawValue
+        case .float32: return 32
+        }
+    }
+
+    public var bytesPerSample: Int { bitsPerSample / 8 }
+
+    /// "24-bit", "32-bit float"
+    public var displayName: String {
+        switch self {
+        case .integer(let depth): return depth.displayName
+        case .float32: return "32-bit float"
+        }
+    }
+}
+
 /// Sample rates the export offers.
 ///
 /// 44.1 kHz is the CD-quality floor; the other two exist because the engine is

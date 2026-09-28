@@ -304,6 +304,13 @@ float synth_engine_master_gain(const SynthRenderEngine *engine);
 void    synth_engine_set_produced_master(SynthRenderEngine *engine, int32_t enabled);
 int32_t synth_engine_produced_master(const SynthRenderEngine *engine);
 
+/// Take the always-on ceiling out of the graph, for a pre-master render only
+/// (a stem export, #90, whose stems must sum back to the unlimited bus). Never
+/// set by live playback or the mix export, so AD-P6 still holds for both. The
+/// lookahead delay stays in place, so frame alignment does not change.
+void    synth_engine_set_ceiling_bypassed(SynthRenderEngine *engine, int32_t bypassed);
+int32_t synth_engine_ceiling_bypassed(const SynthRenderEngine *engine);
+
 /// Publish the analysis pass's two figures: the gain that brings this piece to
 /// the fixed loudness target, and where "loud for this piece" sits so cohesion
 /// has something piece-relative to work against. A `cohesionThreshold` of zero

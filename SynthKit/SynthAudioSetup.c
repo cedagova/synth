@@ -172,6 +172,7 @@ SynthRenderEngine *synth_engine_create(int32_t lineCount,
        always-on ceiling is the only part of the stage nobody can decline. */
     atomic_store_explicit(&engine->producedMaster, 0, memory_order_relaxed);
     atomic_store_explicit(&engine->calibrationGain, 1.0f, memory_order_relaxed);
+    atomic_store_explicit(&engine->ceilingBypassed, 0, memory_order_relaxed);
     atomic_store_explicit(&engine->cohesionThreshold, 0.0f, memory_order_relaxed);
     atomic_store_explicit(&engine->transportCommand, SynthTransportStopped, memory_order_relaxed);
     atomic_store_explicit(&engine->transportState, SynthTransportStopped, memory_order_relaxed);

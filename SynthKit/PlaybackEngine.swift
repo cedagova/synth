@@ -82,6 +82,13 @@ public final class PlaybackEngine: @unchecked Sendable {
     /// itself.
     private var producedMasterSetting: ProducedMasterSettings = .off
 
+    /// True for a pre-master render: cohesion, calibration and the always-on
+    /// ceiling are all taken out, so the output is the raw line sum (times the
+    /// master gain). Only a stem export (#90) sets it — stems have to sum back
+    /// to the unlimited bus, which no nonlinear stage allows — and it is never
+    /// set on the live engine, so AD-P6 still holds for playback and the mix.
+    private var masterStageBypassed = false
+
     /// The temperament and reference pitch the program is built with (TUN001,
     /// REQ-006).
     ///
@@ -658,6 +665,18 @@ public final class PlaybackEngine: @unchecked Sendable {
         }
     }
 
+    /// Take the whole master stage out of the graph — cohesion, calibration
+    /// and the ceiling — for a pre-master render (#90's stems). Survives a
+    /// program rebuild, like `producedMaster`, and skips the calibration
+    /// analysis while set, since nothing would use its figures.
+    public var bypassesMasterStage: Bool {
+        get { masterStageBypassed }
+        set {
+            masterStageBypassed = newValue
+            applyProducedMaster()
+        }
+    }
+
     /// What the analysis pass measured about the loaded program, or nil if it
     /// has not run. `MasterCalibration.statusSentence` is what the owner is
     /// told when it could not.
@@ -668,15 +687,15 @@ public final class PlaybackEngine: @unchecked Sendable {
     private func applyProducedMaster() {
         guard let program else { return }
 
-        if producedMasterSetting.isEnabled, calibration == nil, let timeline {
+        let isEnabled = producedMasterSetting.isEnabled && !masterStageBypassed
+        if isEnabled, calibration == nil, let timeline {
             calibration = MasterCalibration.calibrate(
                 timeline: timeline, voices: voices, sampleRate: program.sampleRate
             )
         }
 
-        synth_engine_set_produced_master(
-            program.engine, producedMasterSetting.isEnabled ? 1 : 0
-        )
+        synth_engine_set_produced_master(program.engine, isEnabled ? 1 : 0)
+        synth_engine_set_ceiling_bypassed(program.engine, masterStageBypassed ? 1 : 0)
         // Unity when there is nothing measured: a program whose analysis never
         // ran plays at the level it already had, never silence.
         let measured = calibration ?? .unity(.silentProgram)

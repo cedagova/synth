@@ -101,6 +101,30 @@ public struct AudioExporter: Sendable {
         fileManager: FileManager,
         started: Date
     ) throws -> AudioExportResult {
+        let rendered = try render(
+            into: staging.file,
+            opener: opener,
+            cancellation: cancellation,
+            started: started,
+            progress: { progress?($0) }
+        )
+        try staging.publish()
+        return rendered.result(url: staging.destination, request: request, started: started)
+    }
+
+    /// Render the whole program into `target` and close it, stopping for a
+    /// cancel between blocks and once more after the last one.
+    ///
+    /// The one render loop an export has: the single-file export above and
+    /// each stem of `AudioStemExporter` both come through here, so a stem is
+    /// the same engine, the same blocks and the same writer as the mix.
+    func render(
+        into target: StagedAudioFile,
+        opener: StagingFileOpening,
+        cancellation: AudioExportCancellation,
+        started: Date,
+        progress: (AudioExportProgress) -> Void
+    ) throws -> RenderedExport {
         // ── The engine's whole life starts here and ends at the end of this
         // function. `owner` is the thread that built it.
         let owner = Thread.current
@@ -123,7 +147,9 @@ public struct AudioExporter: Sendable {
         let totalFrames = program.totalFrames
         guard totalFrames > 0 else { throw AudioExportError.nothingToRender }
 
-        let writer = AudioFileWriter(settings: request.settings, frameCount: totalFrames)
+        let writer = AudioFileWriter(
+            settings: request.settings, frameCount: totalFrames, encoding: request.sampleEncoding
+        )
 
         // Refused here, before a byte is staged, because the alternative is a
         // header whose 32-bit size words saturate while the file keeps going —
@@ -138,10 +164,10 @@ public struct AudioExporter: Sendable {
             )
         }
 
-        let file = try staging.open(with: opener)
+        let file = try target.open(with: opener)
         defer { try? file.close() }
 
-        try staging.write(writer.header(), to: file)
+        try target.write(writer.header(), to: file)
 
         var rendered: Int64 = 0
         var ownershipChecks = 0
@@ -165,12 +191,12 @@ public struct AudioExporter: Sendable {
             for sample in block.left where abs(sample) > peak { peak = abs(sample) }
             for sample in block.right where abs(sample) > peak { peak = abs(sample) }
 
-            try staging.write(
+            try target.write(
                 writer.encode(left: block.left[...], right: block.right[...]), to: file
             )
             rendered += Int64(block.frameCount)
 
-            progress?(
+            progress(
                 AudioExportProgress(
                     renderedFrames: min(rendered, totalFrames),
                     totalFrames: totalFrames,
@@ -196,15 +222,34 @@ public struct AudioExporter: Sendable {
         // reports itself. Left unmapped, that failure reached the owner as a
         // bare POSIX message instead of "free up disk space"; and it must fail
         // the export rather than publishing a file whose tail never landed.
-        try staging.close(file)
-        try staging.publish()
+        try target.close(file)
 
-        return AudioExportResult(
-            url: staging.destination,
-            settings: request.settings,
+        return RenderedExport(
             frameCount: totalFrames,
             byteCount: writer.totalByteCount,
             peakLevel: peak,
+            ranOnMainThread: ranOnMainThread,
+            ownershipChecks: ownershipChecks
+        )
+    }
+}
+
+/// What one render into a staged file measured, before it is published.
+struct RenderedExport {
+    let frameCount: Int64
+    let byteCount: Int64
+    let peakLevel: Float
+    let ranOnMainThread: Bool
+    let ownershipChecks: Int
+
+    func result(url: URL, request: AudioExportRequest, started: Date) -> AudioExportResult {
+        AudioExportResult(
+            url: url,
+            settings: request.settings,
+            encoding: request.sampleEncoding,
+            frameCount: frameCount,
+            byteCount: byteCount,
+            peakLevel: peakLevel,
             duration: Date().timeIntervalSince(started),
             ranOnMainThread: ranOnMainThread,
             ownershipChecks: ownershipChecks
@@ -262,6 +307,15 @@ public struct AudioExportRequest: Sendable {
 
     public let settings: AudioExportSettings
 
+    /// True for a pre-master render: cohesion, calibration and the ceiling are
+    /// all taken out (`PlaybackEngine.bypassesMasterStage`). False for the mix
+    /// export; only a stem (#90) sets it.
+    public let bypassesMasterStage: Bool
+
+    /// How samples are written. Integer PCM at `settings.bitDepth` for the mix;
+    /// a stem is 32-bit float so a pre-master peak above full scale survives.
+    public let sampleEncoding: AudioSampleEncoding
+
     public init(
         timeline: PerformanceTimeline,
         voices: LineVoiceAssignment,
@@ -269,7 +323,9 @@ public struct AudioExportRequest: Sendable {
         masterGain: Float = 1,
         producedMaster: ProducedMasterSettings = .off,
         tuning: TuningSettings = .standard,
-        settings: AudioExportSettings = .standard
+        settings: AudioExportSettings = .standard,
+        bypassesMasterStage: Bool = false,
+        sampleEncoding: AudioSampleEncoding? = nil
     ) {
         self.timeline = timeline
         self.voices = voices
@@ -278,6 +334,8 @@ public struct AudioExportRequest: Sendable {
         self.producedMaster = producedMaster
         self.tuning = tuning
         self.settings = settings
+        self.bypassesMasterStage = bypassesMasterStage
+        self.sampleEncoding = sampleEncoding ?? .integer(settings.bitDepth)
     }
 
     /// Every line of the loaded program written, including ones the preset does
@@ -305,6 +363,7 @@ public struct AudioExportRequest: Sendable {
         }
         engine.masterGain = masterGain
         engine.producedMaster = producedMaster
+        engine.bypassesMasterStage = bypassesMasterStage
     }
 }
 
@@ -413,6 +472,9 @@ public final class AudioExportCancellation: @unchecked Sendable {
 public struct AudioExportResult: Sendable, Equatable {
     public let url: URL
     public let settings: AudioExportSettings
+    /// How the samples were stored: the settings' depth for the mix, 32-bit
+    /// float for a stem.
+    public let encoding: AudioSampleEncoding
     public let frameCount: Int64
     public let byteCount: Int64
     /// Largest absolute sample in the render, so a clipped export is a number
@@ -434,8 +496,12 @@ public struct AudioExportResult: Sendable, Equatable {
     }
 
     /// True when the render reached digital full scale, which for a float graph
-    /// means the mix was over unity somewhere.
-    public var didClip: Bool { peakLevel >= 1.0 }
+    /// means the mix was over unity somewhere. Never true of a float file,
+    /// which stores a peak above full scale as it is.
+    public var didClip: Bool {
+        guard case .integer = encoding else { return false }
+        return peakLevel >= 1.0
+    }
 }
 
 // MARK: - Failures
@@ -448,6 +514,13 @@ public enum AudioExportError: Error, Equatable {
     /// There is no loaded program, or it is zero frames long.
     case nothingToRender
 
+    /// A stem export found no line the mix plays: everything is muted.
+    case nothingAudible
+
+    /// A stem export would replace files already in the folder, and the owner
+    /// has not confirmed that. Raised before anything is rendered or written.
+    case wouldReplaceExistingFiles(folder: String, names: [String])
+
     /// The destination's directory is missing or refused the staged file.
     case destinationUnusable(path: String, reason: String)
 
@@ -456,6 +529,13 @@ public enum AudioExportError: Error, Equatable {
 
     /// The finished file could not be moved into place.
     case publishFailed(path: String, reason: String)
+
+    /// A stem batch failed to publish, and some files it had set aside to
+    /// replace could not be put back. They are kept, untouched, in
+    /// `backupFolder`.
+    case publishFailedOriginalsKept(
+        path: String, reason: String, names: [String], backupFolder: String
+    )
 
     /// The graph stopped producing frames before the program's own length.
     case renderStopped(atFrame: Int64, expectedFrames: Int64)
@@ -483,12 +563,21 @@ extension AudioExportError: LocalizedError {
             return "The export was cancelled."
         case .nothingToRender:
             return "This piece has nothing to export yet."
+        case .nothingAudible:
+            return "Every line is muted, so there are no stems to export."
+        case .wouldReplaceExistingFiles(let folder, let names):
+            return names.count == 1
+                ? "\(names[0]) already exists in \(Self.display(folder))."
+                : "\(names.count) of the stems already exist in \(Self.display(folder))."
         case .destinationUnusable(let path, let reason):
             return "Synth could not write to \(Self.display(path)). \(reason)"
         case .writeFailed(let path, let reason):
             return "Synth could not finish writing the export at \(Self.display(path)). \(reason)"
         case .publishFailed(let path, let reason):
             return "Synth could not save the finished export to \(Self.display(path)). \(reason)"
+        case .publishFailedOriginalsKept(let path, let reason, let names, _):
+            return "Synth could not save the stems to \(Self.display(path)), and could not "
+                + "put back \(names.count == 1 ? names[0] : "\(names.count) files it was replacing"). \(reason)"
         case .renderStopped(let frame, let expected):
             return "The render stopped after \(frame) of \(expected) frames."
         case .tooLongForContainer(let format, let minutes, _, _):
@@ -507,6 +596,10 @@ extension AudioExportError: LocalizedError {
             return "Nothing was written. The file you were exporting to is unchanged."
         case .nothingToRender:
             return "Wait for the piece to finish opening, then try again."
+        case .nothingAudible:
+            return "Unmute at least one line and export again. Nothing was written."
+        case .wouldReplaceExistingFiles:
+            return "Choose another folder, or confirm replacing them. Nothing was written."
         case .destinationUnusable:
             return "Choose another folder and try again. Nothing was written."
         case .writeFailed:
@@ -516,6 +609,10 @@ extension AudioExportError: LocalizedError {
                 """
         case .publishFailed:
             return "Check that the folder still exists and export again. Nothing was written."
+        case .publishFailedOriginalsKept(_, _, let names, let backupFolder):
+            return "Nothing was deleted. The original \(names.count == 1 ? "file is" : "files are") "
+                + "in \(backupFolder) — move \(names.count == 1 ? "it" : "them") back into the "
+                + "folder before exporting again."
         case .renderStopped, .engineCrossedThreads:
             return "Try the export again. Nothing was written."
         case .tooLongForContainer:
@@ -622,50 +719,8 @@ struct AudioExportStaging {
         )
     }
 
-    func open(with opener: StagingFileOpening) throws -> AppendableFile {
-        // The directory is freshly created, so nothing can be here; opening for
-        // *append* over a leftover would silently concatenate two exports, so
-        // the guarantee is made structural rather than assumed.
-        if fileManager.fileExists(atPath: stagedURL.path(percentEncoded: false)) {
-            try? fileManager.removeItem(at: stagedURL)
-        }
-        do {
-            return try opener.openForAppending(at: stagedURL)
-        } catch {
-            // A *write* failure, not a destination one. The owner's folder was
-            // already checked in `init`, and this path is now the private
-            // staging directory, so the realistic cause is a full disk — and
-            // "choose another folder" would be the wrong thing to tell them.
-            throw AudioExportError.writeFailed(
-                path: stagedURL.path(percentEncoded: false),
-                reason: (error as NSError).localizedDescription
-            )
-        }
-    }
-
-    func write(_ data: Data, to file: AppendableFile) throws {
-        guard !data.isEmpty else { return }
-        do {
-            try file.append(data)
-        } catch {
-            throw AudioExportError.writeFailed(
-                path: stagedURL.path(percentEncoded: false),
-                reason: (error as NSError).localizedDescription
-            )
-        }
-    }
-
-    /// Flushes and closes, reporting a failed flush as the write it is.
-    func close(_ file: AppendableFile) throws {
-        do {
-            try file.close()
-        } catch {
-            throw AudioExportError.writeFailed(
-                path: stagedURL.path(percentEncoded: false),
-                reason: (error as NSError).localizedDescription
-            )
-        }
-    }
+    /// The staged file itself, for the render to write into.
+    var file: StagedAudioFile { StagedAudioFile(url: stagedURL, fileManager: fileManager) }
 
     /// The moment the export becomes a file: one rename onto the destination.
     ///
@@ -710,6 +765,59 @@ struct AudioExportStaging {
         } catch {
             NSLog("Synth: could not clean up the staged export at %@: %@",
                   path, (error as NSError).localizedDescription)
+        }
+    }
+}
+
+/// One staged file: opened for appending, written, flushed, with every failure
+/// reported as the write it is. Shared by the single-file staging above and the
+/// stem batch's (`AudioStemStaging`).
+struct StagedAudioFile {
+    let url: URL
+    let fileManager: FileManager
+
+    func open(with opener: StagingFileOpening) throws -> AppendableFile {
+        // The directory is freshly created, so nothing can be here; opening for
+        // *append* over a leftover would silently concatenate two exports, so
+        // the guarantee is made structural rather than assumed.
+        if fileManager.fileExists(atPath: url.path(percentEncoded: false)) {
+            try? fileManager.removeItem(at: url)
+        }
+        do {
+            return try opener.openForAppending(at: url)
+        } catch {
+            // A *write* failure, not a destination one. The owner's folder was
+            // already checked, and this path is the private staging directory,
+            // so the realistic cause is a full disk — and "choose another
+            // folder" would be the wrong thing to tell them.
+            throw AudioExportError.writeFailed(
+                path: url.path(percentEncoded: false),
+                reason: (error as NSError).localizedDescription
+            )
+        }
+    }
+
+    func write(_ data: Data, to file: AppendableFile) throws {
+        guard !data.isEmpty else { return }
+        do {
+            try file.append(data)
+        } catch {
+            throw AudioExportError.writeFailed(
+                path: url.path(percentEncoded: false),
+                reason: (error as NSError).localizedDescription
+            )
+        }
+    }
+
+    /// Flushes and closes, reporting a failed flush as the write it is.
+    func close(_ file: AppendableFile) throws {
+        do {
+            try file.close()
+        } catch {
+            throw AudioExportError.writeFailed(
+                path: url.path(percentEncoded: false),
+                reason: (error as NSError).localizedDescription
+            )
         }
     }
 }

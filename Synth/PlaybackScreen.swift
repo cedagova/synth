@@ -95,6 +95,12 @@ struct PlaybackScreen: View {
         )) {
             ExportSheet(model: model.export, subtitle: exportSubtitle)
         }
+        .sheet(isPresented: Binding(
+            get: { model.stemExport.isPresented },
+            set: { model.stemExport.isPresented = $0 }
+        )) {
+            StemExportSheet(model: model.stemExport, subtitle: exportSubtitle)
+        }
         // What Playback ▸ Go to Rehearsal Mark lists (see `RehearsalMarkMenu`).
         .focusedSceneValue(\.rehearsalMarks, model.rehearsalMarks)
         .onChange(of: model.measureFocusRequests) { _, _ in focus = .measure }
@@ -1074,7 +1080,18 @@ private struct ExportControls: View {
                                    + "Also on the Playback menu as Shift Command E.")
                 .disabled(!model.isReady)
 
-                if model.export.isExporting {
+                Button {
+                    model.stemExport.present()
+                } label: {
+                    Label("Export Stems…", systemImage: "square.3.layers.3d.down.right")
+                }
+                .accessibilityLabel("Export one audio file per line")
+                .accessibilityHint("Renders each line the mix plays to its own WAV or AIFF file, "
+                                   + "before the master stage. Also on the Playback menu as "
+                                   + "Option Shift Command E.")
+                .disabled(!model.isReady)
+
+                if model.export.isExporting || model.stemExport.isExporting {
                     ProgressView()
                         .controlSize(.small)
                         .accessibilityHidden(true)
@@ -1084,13 +1101,11 @@ private struct ExportControls: View {
             // Deliberately visible on the transport as well as in the sheet: an
             // export runs in the background and the owner may well have closed
             // the sheet to keep listening.
+            if let status = model.stemExport.statusMessage {
+                ExportStatusText(status: status)
+            }
             if let status = model.export.statusMessage {
-                Text(status)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityLabel(status)
-                    .accessibilityAddTraits(.updatesFrequently)
+                ExportStatusText(status: status)
             } else {
                 Text("Writes exactly what you hear, including humanization, at CD quality "
                      + "or better.")
@@ -1099,6 +1114,20 @@ private struct ExportControls: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+}
+
+/// One export's status line on the transport.
+private struct ExportStatusText: View {
+    let status: String
+
+    var body: some View {
+        Text(status)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityLabel(status)
+            .accessibilityAddTraits(.updatesFrequently)
     }
 }
 

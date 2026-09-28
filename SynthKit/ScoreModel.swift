@@ -345,6 +345,27 @@ public struct PlaybackMeasure: Equatable, Sendable, Codable {
     }
 }
 
+// MARK: - Rehearsal marks
+
+/// A rehearsal mark (`<rehearsal>`): the letter or number a score prints over
+/// a section so players can say "from B".
+///
+/// Navigation only. It is never drawn (D2): the app shows the text in menus and
+/// loop fields and nowhere else.
+public struct RehearsalMark: Equatable, Hashable, Sendable, Codable {
+    /// The printed text, trimmed and with runs of whitespace collapsed.
+    public let text: String
+
+    /// Index into `CompiledScore.sourceMeasures` of the measure it is printed
+    /// in. A mark placed mid-measure still belongs to that measure.
+    public let sourceMeasureIndex: Int
+
+    public init(text: String, sourceMeasureIndex: Int) {
+        self.text = text
+        self.sourceMeasureIndex = sourceMeasureIndex
+    }
+}
+
 // MARK: - Compiled score
 
 /// A stored piece, compiled.
@@ -389,6 +410,21 @@ public struct CompiledScore: Equatable, Sendable, Codable {
     /// (definition D10).
     public let report: NotationReport
 
+    /// Rehearsal marks in score order, one per measure and text however many
+    /// parts print it. Empty for a score that prints none.
+    public var rehearsalMarks: [RehearsalMark] { storedRehearsalMarks ?? [] }
+
+    /// Nil rather than empty when there are none, so a score without marks
+    /// encodes to exactly the bytes it did before marks were compiled (the
+    /// frozen digests in `ScoreCompilerPurityTests` prove it).
+    private let storedRehearsalMarks: [RehearsalMark]?
+
+    private enum CodingKeys: String, CodingKey {
+        case pieceID, contentSHA256, ticksPerQuarter, workTitle, lines
+        case sourceMeasures, playbackMeasures, tempoMap, expressionEvents, report
+        case storedRehearsalMarks = "rehearsalMarks"
+    }
+
     public init(
         pieceID: String,
         contentSHA256: String,
@@ -399,7 +435,8 @@ public struct CompiledScore: Equatable, Sendable, Codable {
         playbackMeasures: [PlaybackMeasure],
         tempoMap: TempoMap,
         expressionEvents: [ScoreExpressionEvent] = [],
-        report: NotationReport
+        report: NotationReport,
+        rehearsalMarks: [RehearsalMark] = []
     ) {
         self.pieceID = pieceID
         self.contentSHA256 = contentSHA256
@@ -411,6 +448,7 @@ public struct CompiledScore: Equatable, Sendable, Codable {
         self.tempoMap = tempoMap
         self.expressionEvents = expressionEvents
         self.report = report
+        self.storedRehearsalMarks = rehearsalMarks.isEmpty ? nil : rehearsalMarks
     }
 
     /// This score with its clock scaled (see `TempoMap.scaled`). Everything
@@ -422,7 +460,8 @@ public struct CompiledScore: Equatable, Sendable, Codable {
             workTitle: workTitle, lines: lines, sourceMeasures: sourceMeasures,
             playbackMeasures: playbackMeasures,
             tempoMap: tempoMap.scaled(toTempoPercent: percent),
-            expressionEvents: expressionEvents, report: report
+            expressionEvents: expressionEvents, report: report,
+            rehearsalMarks: rehearsalMarks
         )
     }
 

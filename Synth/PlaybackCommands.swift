@@ -77,6 +77,8 @@ struct PlaybackCommands: Commands {
             }
             .keyboardShortcut("g", modifiers: .command)
 
+            RehearsalMarkMenu(model: model)
+
             // A different letter, not Shift-Command-G. Two menu items whose
             // shortcuts differ only by Shift are matched ambiguously: driving
             // the built app, Shift-Command-G either activated Go to Measure or
@@ -149,5 +151,29 @@ struct PlaybackCommands: Commands {
             }
             .keyboardShortcut("e", modifiers: [.command, .shift])
         }
+    }
+}
+
+/// Playback ▸ Go to Rehearsal Mark (plan decisions 11–13).
+///
+/// **A `View`, not inline in `PlaybackCommands.body`, on purpose.** The
+/// `Commands` body is evaluated once and latches whatever it reads (see the
+/// type comment above), so a mark list or a `.disabled` there would be stuck
+/// at launch. A view's body is tracked by Observation like any other view, so
+/// this list follows the piece that is open and the item is disabled — not an
+/// empty submenu — when the piece prints no marks.
+struct RehearsalMarkMenu: View {
+    let model: AppModel
+
+    var body: some View {
+        let marks = model.playback?.rehearsalMarks ?? []
+        Menu("Go to Rehearsal Mark") {
+            ForEach(marks) { target in
+                Button(target.menuTitle) {
+                    model.playback?.goToRehearsalMark(target)
+                }
+            }
+        }
+        .disabled(marks.isEmpty)
     }
 }

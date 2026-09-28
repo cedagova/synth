@@ -104,9 +104,6 @@ public final class PlaybackEngine: @unchecked Sendable {
     private var deviceObserver: AudioOutputDeviceObserver?
     private var configurationObserver: NSObjectProtocol?
 
-    /// What the caller asked for; nil means "follow the system default".
-    public private(set) var preferredDeviceUID: String?
-
     /// Reported after a device change so a UI can explain itself.
     public private(set) var lastDeviceEvent: DeviceEvent?
 
@@ -741,38 +738,25 @@ public final class PlaybackEngine: @unchecked Sendable {
 
     // MARK: Output devices (REQ-015)
 
-    /// Every device the system can play through, live-queried.
-    public var availableOutputDevices: [AudioOutputDevice] {
-        AudioOutputDeviceCatalog.outputDevices()
-    }
+    // **The system chooses the output, not the app.** Playback follows the
+    // macOS default device — Bluetooth speakers connecting, or a pick in
+    // Control Center, moves the music there — and there is deliberately no
+    // in-app picker or pinned device.
 
     /// The device the graph is currently rendering to.
     public var currentOutputDevice: AudioOutputDevice? {
         let id = avEngine.outputNode.auAudioUnit.deviceID
-        return availableOutputDevices.first { $0.deviceID == id }
-    }
-
-    /// Choose an output. Passing `nil` returns to following the system default,
-    /// which is also the initial behaviour.
-    ///
-    /// Playing across the switch is the point: the playhead and the transport
-    /// state are carried over, so the listener hears the music continue on the
-    /// new device rather than a restart.
-    @discardableResult
-    public func selectOutputDevice(uid: String?) throws -> Bool {
-        preferredDeviceUID = uid
-
-        guard let uid else {
-            return try moveToDevice(AudioOutputDeviceCatalog.defaultOutputDevice())
-        }
-        guard let device = availableOutputDevices.first(where: { $0.uid == uid }) else {
-            return false
-        }
-        return try moveToDevice(device)
+        return AudioOutputDeviceCatalog.outputDevices().first { $0.deviceID == id }
     }
 
     /// Point the graph at `device`, rebuilding only what the change requires.
-    private func moveToDevice(_ device: AudioOutputDevice?) throws -> Bool {
+    ///
+    /// Playing across the switch is the point: the playhead and the transport
+    /// state are carried over, so the listener hears the music continue on the
+    /// new device rather than a restart. Internal rather than private so tests
+    /// can drive a switch without changing the Mac's own default output.
+    @discardableResult
+    func moveToDevice(_ device: AudioOutputDevice?) throws -> Bool {
         guard case .realtime = mode else { throw EngineError.notInRealtimeMode }
         guard let device else { return false }
 
@@ -831,34 +815,18 @@ public final class PlaybackEngine: @unchecked Sendable {
         }
     }
 
-    /// The system default moved. Follow it only if the caller did not pin a
-    /// device.
+    /// The system default moved. Follow it.
     private func handleDefaultDeviceChanged() {
-        guard !isReconfiguring, preferredDeviceUID == nil else { return }
+        guard !isReconfiguring else { return }
         _ = try? moveToDevice(AudioOutputDeviceCatalog.defaultOutputDevice())
     }
 
-    /// A device appeared or disappeared. The disappearance of the pinned device
-    /// is the case that matters: unplugging an interface, or a Bluetooth
-    /// headset walking out of range.
+    /// A device appeared or disappeared. When one goes away, macOS moves the
+    /// default and `handleDefaultDeviceChanged` follows it; the case left here
+    /// is no output at all, which pauses with the playhead intact — the
+    /// failure behaviour issue #15 asks for.
     private func handleDeviceListChanged() {
         guard !isReconfiguring else { return }
-
-        let devices = availableOutputDevices
-        if let preferredDeviceUID {
-            if devices.contains(where: { $0.uid == preferredDeviceUID }) { return }
-
-            // The pinned device is gone. Fall back to the system default if one
-            // is left; otherwise pause with the playhead intact, which is the
-            // failure behaviour issue #15 asks for.
-            if let fallback = AudioOutputDeviceCatalog.defaultOutputDevice() {
-                self.preferredDeviceUID = nil
-                _ = try? moveToDevice(fallback)
-            } else {
-                pauseForDeviceLoss(previousDeviceName: preferredDeviceUID)
-            }
-            return
-        }
 
         if AudioOutputDeviceCatalog.defaultOutputDevice() == nil {
             pauseForDeviceLoss(previousDeviceName: "system default")

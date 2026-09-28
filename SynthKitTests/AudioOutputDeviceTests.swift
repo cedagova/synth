@@ -3,11 +3,14 @@ import CoreAudio
 import XCTest
 @testable import SynthKit
 
-/// Issue #15, REQ-015: output-device enumeration, in-app selection, following
-/// the system default, and graceful connect/disconnect.
+/// Issue #15, REQ-015: output-device enumeration, following the system default,
+/// and graceful connect/disconnect. There is no in-app device choice.
 ///
-/// **What can and cannot be tested here.** Enumeration and selection are real:
+/// **What can and cannot be tested here.** Enumeration and switching are real:
 /// they query the actual HAL and move a running graph onto a real device. A
+/// switch is driven through the engine's internal `moveToDevice`, the same call
+/// a system default change makes, because changing the Mac's own default
+/// output from a test would be a side effect on the owner's machine. A
 /// Bluetooth headset walking out of range cannot be staged from a test process
 /// — that needs hardware leaving the room — so the disconnect path is covered
 /// two ways instead: `SeekAndTransportTests` drives the production recovery
@@ -72,36 +75,18 @@ final class AudioOutputDeviceTests: XCTestCase {
         XCTAssertEqual(Set(devices.map(\.uid)).count, devices.count, "Two output devices share a UID.")
     }
 
-    // MARK: Selection
+    // MARK: Following the system default
 
-    /// A fresh engine follows the system default rather than pinning anything.
-    func testANewEngineFollowsTheSystemDefault() {
-        let engine = PlaybackEngine()
-        XCTAssertNil(engine.preferredDeviceUID, "A new engine should follow the system default.")
-    }
-
-    /// Selecting an unknown UID fails rather than silently doing nothing
-    /// visible, so a stale preference is detectable.
-    func testSelectingAnUnknownDeviceReportsFailure() throws {
+    /// A loaded engine renders to the system default, not some other device.
+    func testALoadedEngineRendersToTheSystemDefault() throws {
         _ = try requireOutputDevices()
-        let engine = PlaybackEngine()
-        let selected = try engine.selectOutputDevice(uid: "not-a-real-device-uid")
-        XCTAssertFalse(selected, "Selecting a nonexistent device reported success.")
-    }
-
-    /// Selecting a real device moves the graph onto it.
-    func testSelectingARealDeviceMovesTheGraph() throws {
-        let devices = try requireOutputDevices()
-        let target = try XCTUnwrap(devices.first)
+        let systemDefault = try XCTUnwrap(AudioOutputDeviceCatalog.defaultOutputDevice())
 
         let engine = PlaybackEngine()
         let timeline = try AudioRenderFixtures.timeline(AudioRenderFixtures.twoLineFixture())
         try engine.load(timeline: timeline)
 
-        let selected = try engine.selectOutputDevice(uid: target.uid)
-        XCTAssertTrue(selected, "Could not select \(target.name).")
-        XCTAssertEqual(engine.preferredDeviceUID, target.uid)
-        XCTAssertEqual(engine.currentOutputDevice?.uid, target.uid)
+        XCTAssertEqual(engine.currentOutputDevice?.uid, systemDefault.uid)
     }
 
     /// Switching output **while the transport is playing** keeps playing and
@@ -120,7 +105,7 @@ final class AudioOutputDeviceTests: XCTestCase {
         let timeline = try AudioRenderFixtures.timeline(MusicXMLScoreFixtures.keyboardFugueExposition(measureCount: 20))
         try engine.load(timeline: timeline)
 
-        try engine.selectOutputDevice(uid: devices[0].uid)
+        try engine.moveToDevice(devices[0])
         try engine.start()
         engine.play()
 
@@ -130,7 +115,7 @@ final class AudioOutputDeviceTests: XCTestCase {
         XCTAssertGreaterThan(positionBefore, 100_000, "Playback did not start on the first device.")
         XCTAssertEqual(engine.transportState, .playing)
 
-        let switched = try engine.selectOutputDevice(uid: devices[1].uid)
+        let switched = try engine.moveToDevice(devices[1])
         XCTAssertTrue(switched, "Could not switch to \(devices[1].name).")
 
         Thread.sleep(forTimeInterval: 0.6)
@@ -155,19 +140,5 @@ final class AudioOutputDeviceTests: XCTestCase {
         XCTAssertEqual(engine.pauseReason, .none)
         engine.stop()
         engine.stopEngine()
-    }
-
-    /// Returning to "follow the default" un-pins the device.
-    func testReturningToTheSystemDefaultUnpins() throws {
-        let devices = try requireOutputDevices()
-        let engine = PlaybackEngine()
-        let timeline = try AudioRenderFixtures.timeline(AudioRenderFixtures.twoLineFixture())
-        try engine.load(timeline: timeline)
-
-        try engine.selectOutputDevice(uid: devices[0].uid)
-        XCTAssertNotNil(engine.preferredDeviceUID)
-
-        try engine.selectOutputDevice(uid: nil)
-        XCTAssertNil(engine.preferredDeviceUID, "Selecting nil did not return to following the default.")
     }
 }

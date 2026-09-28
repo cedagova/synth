@@ -13,6 +13,14 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  # The one place the CI toolchain is pinned. Matches the Xcode that ships
+  # releases (release.yml excludes 26.3: its optimizer crashes on SynthKit).
+  # No fallback: a runner without this Xcode fails the run.
+  XCODE_VERSION: "26.2"
+  DERIVED_DATA: .build/DerivedData
+  RESULT_BUNDLE: .build/TestResults.xcresult
+
 jobs:
   build-test:
     name: Build and test (macOS, Apple Silicon)
@@ -23,41 +31,75 @@ jobs:
       - name: Check out
         uses: actions/checkout@v4
 
-      - name: Select Xcode
+      - name: Select pinned Xcode
+        id: xcode
         run: |
           set -euo pipefail
-          newest="$(/bin/ls -d /Applications/Xcode*.app | sort -V | tail -1)"
-          echo "Selecting $newest"
-          sudo xcode-select -s "$newest"
+          app="/Applications/Xcode_${XCODE_VERSION}.app"
+          if [ ! -d "$app" ]; then
+            echo "::error title=Pinned Xcode missing::Xcode ${XCODE_VERSION} is not installed at $app on this runner. Installed:"
+            /bin/ls -d /Applications/Xcode*.app | sort -V
+            exit 1
+          fi
+          sudo xcode-select -s "$app"
           xcodebuild -version
+          reported="$(xcodebuild -version | awk 'NR==1 {print $2}')"
+          if [ "$reported" != "$XCODE_VERSION" ]; then
+            echo "::error title=Pinned Xcode mismatch::$app reports Xcode $reported, expected ${XCODE_VERSION}"
+            exit 1
+          fi
+          build="$(xcodebuild -version | awk '/Build version/ {print $3}')"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
           swift --version
           uname -m
 
-      - name: Build app
-        run: |
-          set -euo pipefail
-          xcodebuild build \
-            -project Synth.xcodeproj \
-            -scheme Synth \
-            -configuration Debug \
-            -destination 'platform=macOS,arch=arm64' \
-            -derivedDataPath .build/DerivedData \
-            CODE_SIGNING_ALLOWED=NO
+      # Keyed on the exact Xcode build and the project definition. No
+      # restore-keys: a toolchain or project change misses and builds clean.
+      - name: Restore DerivedData cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.DERIVED_DATA }}
+          key: deriveddata-${{ runner.os }}-${{ runner.arch }}-xcode-${{ steps.xcode.outputs.build }}-${{ hashFiles('Synth.xcodeproj/**') }}
 
-      - name: Run tests
+      - name: Build for testing
         run: |
           set -euo pipefail
-          xcodebuild test \
+          xcodebuild build-for-testing \
             -project Synth.xcodeproj \
             -scheme Synth \
             -configuration Debug \
             -destination 'platform=macOS,arch=arm64' \
-            -derivedDataPath .build/DerivedData \
+            -derivedDataPath "$DERIVED_DATA" \
+            COMPILER_INDEX_STORE_ENABLE=NO \
             CODE_SIGNING_ALLOWED=NO
 
       - name: Verify the app declares no Intel slice
         run: |
           set -euo pipefail
-          binary=".build/DerivedData/Build/Products/Debug/Synth.app/Contents/MacOS/Synth"
+          binary="$DERIVED_DATA/Build/Products/Debug/Synth.app/Contents/MacOS/Synth"
           lipo -info "$binary"
           lipo -archs "$binary" | grep -qx 'arm64'
+
+      - name: Run tests
+        id: test
+        run: |
+          set -euo pipefail
+          rm -rf "$RESULT_BUNDLE"
+          xcodebuild test-without-building \
+            -project Synth.xcodeproj \
+            -scheme Synth \
+            -configuration Debug \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath "$DERIVED_DATA" \
+            -resultBundlePath "$RESULT_BUNDLE"
+
+      # Uploaded whenever tests ran, pass or fail. A run that reached the
+      # test step but left no bundle fails here rather than going quiet.
+      - name: Upload test results
+        if: always() && steps.test.outcome != 'skipped'
+        uses: actions/upload-artifact@v4
+        with:
+          name: TestResults-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.RESULT_BUNDLE }}
+          if-no-files-found: error
+          retention-days: 14

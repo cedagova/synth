@@ -29,6 +29,38 @@ public struct SQLiteRow: Equatable, Sendable {
     }
 }
 
+/// A transaction body threw, and rolling the transaction back failed too.
+///
+/// Thrown by `SQLiteDatabase.withTransaction` only in that double failure;
+/// when the rollback succeeds the body's own error is rethrown unchanged. The
+/// store may not be in its pre-transaction state, so this is never folded into
+/// the original error: both stay reachable.
+public struct TransactionRollbackFailed: Error, LocalizedError {
+    /// What the transaction body threw — the reason the rollback was attempted.
+    public let originalError: any Error
+
+    /// Why `ROLLBACK` itself failed.
+    public let rollbackError: any Error
+
+    public init(originalError: any Error, rollbackError: any Error) {
+        self.originalError = originalError
+        self.rollbackError = rollbackError
+    }
+
+    public var errorDescription: String? {
+        "\(Self.describe(originalError)) Undoing the partial change also failed, "
+            + "so the library may be left part-way through it: \(Self.describe(rollbackError))"
+    }
+
+    public var recoverySuggestion: String? {
+        "Quit and reopen Synth. If this keeps happening, restore the library from a backup."
+    }
+
+    private static func describe(_ error: any Error) -> String {
+        (error as? LocalizedError)?.errorDescription ?? (error as NSError).localizedDescription
+    }
+}
+
 /// A minimal, dependency-free wrapper over the system SQLite library.
 ///
 /// Deliberately small: open/close, multi-statement scripts, single
@@ -234,14 +266,17 @@ public final class SQLiteDatabase: @unchecked Sendable {
             try executeScriptLocked("COMMIT;")
             return result
         } catch {
-            // Roll back to the pre-transaction state. If the rollback itself
-            // fails the original error is still the one worth reporting, but
-            // the failure is logged rather than dropped.
+            // Roll back to the pre-transaction state. A successful rollback
+            // rethrows the original error unchanged, so callers matching on its
+            // type see exactly what the body threw. A failed rollback means the
+            // store may not be in its pre-transaction state, which the caller
+            // must hear about: it is thrown, carrying the original error.
             do {
                 try executeScriptLocked("ROLLBACK;")
             } catch let rollbackError {
                 NSLog("Synth: rollback after a failed transaction did not complete: %@",
                       String(describing: rollbackError))
+                throw TransactionRollbackFailed(originalError: error, rollbackError: rollbackError)
             }
             throw error
         }

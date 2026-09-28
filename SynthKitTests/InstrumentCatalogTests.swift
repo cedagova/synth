@@ -38,8 +38,14 @@ final class InstrumentCatalogTests: XCTestCase {
         }
     }
 
-    func testTheGitHubIndexParsedEveryLineItWasGiven() {
-        let lines = CuratedInstrumentLibraries.vsco2Index
+    func testTheGitHubIndexParsedEveryLineItWasGiven() throws {
+        let url = try XCTUnwrap(
+            CuratedInstrumentLibraries.frameworkBundle.url(
+                forResource: CuratedInstrumentLibraries.vsco2IndexResource.name,
+                withExtension: CuratedInstrumentLibraries.vsco2IndexResource.extension
+            )
+        )
+        let lines = try String(contentsOf: url, encoding: .utf8)
             .split(separator: "\n", omittingEmptySubsequences: true)
         XCTAssertEqual(
             CuratedInstrumentLibraries.vsco2CommunityEdition.assets.count,

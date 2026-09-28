@@ -59,6 +59,42 @@ public struct LibrarySort: Equatable, Sendable {
     }
 }
 
+/// One entry the composer filter can narrow the library to.
+///
+/// A named composer is identified by its stored name folded for case and
+/// diacritics, so "Dvořák" and "dvorak" are one entry; stored names are never
+/// edited or merged beyond that. Pieces with no composer — or a blank one —
+/// share the `unknown` entry.
+public enum ComposerFilter: Hashable, Sendable {
+    case named(String)
+    case unknown
+
+    /// The filter a piece belongs to.
+    public init(_ record: PieceRecord) {
+        if let name = record.composer.flatMap(LibraryQuery.nonEmpty) {
+            self = .named(LibraryQuery.foldedComposerName(name))
+        } else {
+            self = .unknown
+        }
+    }
+}
+
+/// One row of the composer filter: who, and how many pieces.
+public struct ComposerFacetEntry: Identifiable, Equatable, Sendable {
+    public let filter: ComposerFilter
+    /// The stored name as the owner wrote it, or "Unknown composer".
+    public let name: String
+    public let count: Int
+
+    public var id: ComposerFilter { filter }
+
+    public init(filter: ComposerFilter, name: String, count: Int) {
+        self.filter = filter
+        self.name = name
+        self.count = count
+    }
+}
+
 /// Search and ordering over the library's records.
 ///
 /// Pure functions over an already-loaded array rather than SQL. The library is
@@ -89,6 +125,102 @@ public enum LibraryQuery {
         records.filter { matches($0, searchText: searchText) }
     }
 
+    // MARK: - Composer filter
+
+    /// True when the piece belongs to `composer`; a nil filter matches all.
+    public static func matches(_ record: PieceRecord, composer: ComposerFilter?) -> Bool {
+        guard let composer else { return true }
+        return ComposerFilter(record) == composer
+    }
+
+    /// The composer filter's entries for `records`, with counts.
+    ///
+    /// Named composers are ordered by `surnameSortKey`, with the full name
+    /// breaking ties; "Unknown composer" is always last. Spellings that differ
+    /// only in case or diacritics are one entry, shown under the spelling most
+    /// pieces use (ties go to the one that sorts first).
+    public static func composerFacet(_ records: [PieceRecord]) -> [ComposerFacetEntry] {
+        var spellings: [ComposerFilter: [String: Int]] = [:]
+        var unknownCount = 0
+        for record in records {
+            let filter = ComposerFilter(record)
+            switch filter {
+            case .unknown:
+                unknownCount += 1
+            case .named:
+                let name = record.composer.flatMap(nonEmpty) ?? ""
+                spellings[filter, default: [:]][name, default: 0] += 1
+            }
+        }
+
+        var entries = spellings.map { filter, names -> ComposerFacetEntry in
+            // Most pieces wins; then the spelling that sorts first; then bytes,
+            // so the choice never depends on dictionary order.
+            let shown = names.max { lhs, rhs in
+                if lhs.value != rhs.value { return lhs.value < rhs.value }
+                switch compareComposers(lhs.key, rhs.key) {
+                case .orderedAscending: return false
+                case .orderedDescending: return true
+                case .orderedSame: return lhs.key > rhs.key
+                }
+            }!.key
+            return ComposerFacetEntry(filter: filter, name: shown, count: names.values.reduce(0, +))
+        }
+        entries.sort { lhs, rhs in
+            switch compareComposers(lhs.name, rhs.name) {
+            case .orderedAscending: return true
+            case .orderedDescending: return false
+            case .orderedSame:
+                guard case let .named(left) = lhs.filter, case let .named(right) = rhs.filter else {
+                    return false
+                }
+                return left < right
+            }
+        }
+        if unknownCount > 0 {
+            entries.append(ComposerFacetEntry(filter: .unknown, name: "Unknown composer", count: unknownCount))
+        }
+        return entries
+    }
+
+    /// `filter` if some record still belongs to it, otherwise nil — so a
+    /// filter whose last piece was removed clears itself.
+    public static func resolvedComposerFilter(
+        _ filter: ComposerFilter?,
+        in records: [PieceRecord]
+    ) -> ComposerFilter? {
+        guard let filter else { return nil }
+        return records.contains { ComposerFilter($0) == filter } ? filter : nil
+    }
+
+    /// The part of a composer's name that orders it: the text before a comma
+    /// when there is one ("Bach, Johann Sebastian"), otherwise the last word
+    /// ("Johann Sebastian Bach"), otherwise the whole name ("Palestrina").
+    ///
+    /// Computed at query time and never stored. Compound surnames written
+    /// "First Last" ("Ralph Vaughan Williams") file under their last word;
+    /// writing them in comma form files them correctly.
+    public static func surnameSortKey(_ name: String) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let comma = trimmed.firstIndex(of: ",") {
+            let before = trimmed[..<comma].trimmingCharacters(in: .whitespacesAndNewlines)
+            if !before.isEmpty { return before }
+        }
+        let words = trimmed.split(whereSeparator: { $0.isWhitespace })
+        return words.last.map(String.init) ?? trimmed
+    }
+
+    /// Surname first, then the full name, both in natural order.
+    static func compareComposers(_ left: String, _ right: String) -> ComparisonResult {
+        let bySurname = surnameSortKey(left).localizedStandardCompare(surnameSortKey(right))
+        guard bySurname == .orderedSame else { return bySurname }
+        return left.localizedStandardCompare(right)
+    }
+
+    static func foldedComposerName(_ name: String) -> String {
+        name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+    }
+
     /// The records in `sort` order.
     ///
     /// Two rules make this a total order, so the list never reshuffles between
@@ -109,13 +241,16 @@ public enum LibraryQuery {
         }
     }
 
-    /// Filter then order — what the library list actually shows.
+    /// Filter then order — what the library list actually shows. The composer
+    /// filter and the text search both apply.
     public static func arrange(
         _ records: [PieceRecord],
         searchText: String,
+        composer: ComposerFilter? = nil,
         sort: LibrarySort
     ) -> [PieceRecord] {
-        sorted(filtered(records, matching: searchText), by: sort)
+        let narrowed = records.filter { matches($0, composer: composer) }
+        return sorted(filtered(narrowed, matching: searchText), by: sort)
     }
 
     // MARK: - Ordering
@@ -161,8 +296,13 @@ public enum LibraryQuery {
         _ right: String,
         field: LibrarySortField
     ) -> ComparisonResult {
-        guard field != .importedAt else {
+        switch field {
+        case .importedAt:
             return left < right ? .orderedAscending : (left == right ? .orderedSame : .orderedDescending)
+        case .composer:
+            return compareComposers(left, right)
+        case .title, .movement:
+            break
         }
         // Natural ordering: "Movement 10" follows "Movement 2" rather than
         // preceding it, and case never decides a tie on its own.
@@ -181,7 +321,7 @@ public enum LibraryQuery {
         return .orderedSame
     }
 
-    private static func nonEmpty(_ value: String) -> String? {
+    static func nonEmpty(_ value: String) -> String? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }

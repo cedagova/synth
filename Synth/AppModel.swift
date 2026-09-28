@@ -75,6 +75,17 @@ final class AppModel {
         keyboard.install()
     }
 
+    /// The media keys, headphone controls and Control Center's Now Playing,
+    /// driving whichever piece is open (#87). Installed once by `SynthApp`;
+    /// tests build their own over a fake pair of centers.
+    @ObservationIgnored private(set) lazy var nowPlaying = NowPlayingControl(
+        centers: SystemNowPlayingCenters()
+    ) { [weak self] in self?.playback }
+
+    func installNowPlaying() {
+        nowPlaying.install()
+    }
+
     /// The instrument catalog, once it has been opened.
     ///
     /// Kept after the screen closes, deliberately: a 2.6 GB download must not
@@ -101,6 +112,21 @@ final class AppModel {
     /// the voices that are *already rendering*, which is how a piece can be
     /// played through the sound under edit without the piece stopping.
     let playbackChannel = SynthPatchLiveVoices(patch: .defaultVoice)
+
+    /// Scores opened from Finder, queued until the library can take them (#88).
+    @ObservationIgnored private(set) lazy var finderOpen = FinderOpenModel(
+        library: { [unowned self] in self.library },
+        isLibraryShowing: { [unowned self] in self.isLibraryShowing }
+    )
+
+    /// True when `RootView` is showing the library: the store is open and no
+    /// catalog, studio or transport is over it. Mirrors `RootView`'s order.
+    var isLibraryShowing: Bool {
+        guard library != nil else { return false }
+        if isInstrumentCatalogShowing, instrumentCatalog != nil { return false }
+        if isStudioShowing, studio != nil { return false }
+        return playback == nil
+    }
 
     /// The live library surface, once the store is open. The menu commands
     /// reach the library through this rather than through the view hierarchy.
@@ -401,6 +427,7 @@ final class AppModel {
             state = .ready(LibraryModel(store: opened))
             prepareInstrumentsForFirstRun()
             openLaunchPieceIfRequested(from: opened)
+            finderOpen.deliverPending()
         } catch {
             state = .failed(StoreFailure(error))
         }

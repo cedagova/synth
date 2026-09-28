@@ -103,6 +103,22 @@ final class AssignmentModel {
 
     private var score: CompiledScore?
 
+    /// This piece's mix and preset history (UND001). The model's own record is
+    /// the truth; the window's undo manager only *shows* it, and only while
+    /// the playback screen is what the window shows (P84-7).
+    @ObservationIgnored private var undoSteps: [UndoStep] = []
+    @ObservationIgnored private var redoSteps: [UndoStep] = []
+    @ObservationIgnored private weak var undoManager: UndoManager?
+    @ObservationIgnored private var isApplyingHistory = false
+
+    /// True while one of the transport's own text fields (measure, time, loop)
+    /// has focus. Set by `PlaybackScreen`, which owns that focus.
+    @ObservationIgnored private var isTransportFieldFocused = false
+
+    /// The preset a rename draft was begun on. A commit renames this preset
+    /// or nothing — never whichever preset happens to be active by then.
+    private var renamingPresetID: String?
+
     /// Hands a loaded preset's performance settings — humanization, expression,
     /// produced master, tuning and tempo — to the transport, which owns
     /// realization and adopts them as one unit (#96). Installed by
@@ -210,6 +226,7 @@ final class AssignmentModel {
 
             presets = try store.presets.presets(forPieceID: score.pieceID)
             activePreset = preset
+            dropRenameDraftUnlessOn(preset)
             lines = performance.lines
             keepSelectionValid()
             keepReferenceValid()
@@ -454,6 +471,14 @@ final class AssignmentModel {
         }
     }
 
+    /// A rename draft belongs to the preset it was begun on; once another
+    /// preset is active — a switch, an undo, a delete — the draft is dropped
+    /// rather than committed onto the wrong one.
+    private func dropRenameDraftUnlessOn(_ preset: Preset) {
+        guard isRenamingPreset, renamingPresetID != preset.id else { return }
+        cancelPresetRename()
+    }
+
     private func keepSelectionValid() {
         if let selectedLineID, lines.contains(where: { $0.lineID == selectedLineID }) { return }
         selectedLineID = lines.first?.lineID
@@ -483,6 +508,7 @@ final class AssignmentModel {
         selectedLineID = lineID
         renamingLineID = lineID
         lineNameDraft = entry.name
+        resyncUndoManager()
     }
 
     func beginRenameOfSelectedLine() {
@@ -493,6 +519,7 @@ final class AssignmentModel {
     func cancelLineRename() {
         renamingLineID = nil
         lineNameDraft = ""
+        resyncUndoManager()
     }
 
     func commitLineRename() {
@@ -763,24 +790,38 @@ final class AssignmentModel {
     /// row back to the persisted value, so the control never shows a number the
     /// library does not hold. `PresetLibrary` guarantees the store is untouched
     /// on a throw, so that value is still correct.
-    func commitMixer(forLine lineID: ScoreLineID, describedAs what: String = "mix") {
+    ///
+    /// A write that lands is one undo step (UND001): the preview/commit split
+    /// already makes a whole drag one commit, so a drag is one step for free.
+    /// Returns false only when a write was attempted and failed.
+    @discardableResult
+    func commitMixer(forLine lineID: ScoreLineID, describedAs what: String = "mix") -> Bool {
         guard let preset = activePreset,
-              let index = lines.firstIndex(where: { $0.lineID == lineID }) else { return }
+              let index = lines.firstIndex(where: { $0.lineID == lineID }) else { return true }
 
         let wanted = lines[index].mixer
         let stored = preset.line(withID: lineID)?.mixer
-        guard wanted != stored else { return }
+        guard wanted != stored else { return true }
         endCompare()
 
         do {
             activePreset = try store.presets.setMixer(wanted, forLine: lineID, in: preset)
             presets = try store.presets.presets(forPieceID: preset.pieceID)
             statusMessage = "\(lines[index].name) — \(AssignmentDisplay.mixSummary(lines))"
+            recordUndo(
+                .mixer(
+                    presetID: preset.id, lineID: lineID,
+                    before: stored ?? .neutral, after: wanted, what: what
+                ),
+                named: "\(what.capitalized) Change"
+            )
+            return true
         } catch {
             let persisted = stored ?? .neutral
             writeStrip(persisted, toLine: lineID)
             lines[index] = withMixer(persisted, on: lines[index])
             alert = AssignmentAlert(title: "Could not save the \(what) change", error)
+            return false
         }
     }
 
@@ -848,6 +889,12 @@ final class AssignmentModel {
         }
     }
 
+    /// What the engine's strip for a line holds right now — the audible half
+    /// of the mixer, read by the app tests to prove an undo reached the ear.
+    func engineStrip(for lineID: ScoreLineID) -> PlaybackEngine.LineMixer? {
+        engine.mixer(for: lineID)
+    }
+
     private func writeStrip(_ state: LineMixerState, toLine lineID: ScoreLineID) {
         guard !isSuspendedByPlayThrough, let strip = engine.mixer(for: lineID) else { return }
         strip.gain = Float(state.volume)
@@ -876,6 +923,7 @@ final class AssignmentModel {
             let created = try store.presets.duplicate(preset, makeActive: true)
             activePreset = created
             reloadPresetAndApply()
+            clearUndoHistory()
             beginPresetRename()
             statusMessage = "Made “\(created.name)” and switched to it."
         }
@@ -908,6 +956,7 @@ final class AssignmentModel {
             )
             activePreset = created
             reloadPresetAndApply()
+            clearUndoHistory()
             statusMessage = plan.summary(named: created.name)
         }
     }
@@ -915,37 +964,64 @@ final class AssignmentModel {
     func beginPresetRename() {
         guard let preset = activePreset else { return }
         isRenamingPreset = true
+        renamingPresetID = preset.id
         presetNameDraft = preset.name
+        resyncUndoManager()
     }
 
     func cancelPresetRename() {
         isRenamingPreset = false
+        renamingPresetID = nil
         presetNameDraft = ""
+        resyncUndoManager()
     }
 
     func commitPresetRename() {
-        guard let preset = activePreset else { return }
+        let beganOn = renamingPresetID
         let requested = presetNameDraft
         cancelPresetRename()
+        guard let preset = activePreset, preset.id == beganOn else { return }
         guard requested.trimmingCharacters(in: .whitespacesAndNewlines) != preset.name else { return }
+        renamePreset(preset, to: requested)
+    }
 
+    /// The one path a preset rename takes, whether the owner typed it or an
+    /// undo is putting a name back. A drafted name registers nothing; only a
+    /// rename that reaches the store is a step.
+    @discardableResult
+    private func renamePreset(_ preset: Preset, to requested: String) -> Bool {
         write("rename “\(preset.name)”") { pieceID in
             let renamed = try store.presets.rename(preset, to: requested)
             activePreset = renamed
             presets = try store.presets.presets(forPieceID: pieceID)
             statusMessage = "Renamed “\(preset.name)” to “\(renamed.name)”."
+            recordUndo(
+                .presetName(presetID: preset.id, before: preset.name, after: renamed.name),
+                named: "Preset Rename"
+            )
         }
     }
 
     /// REQ-024's switch. Immediate and audible: the sounds and the whole mix of
     /// the preset being left are already on disk, so there is nothing to save
     /// first and nothing of it survives into the one arriving.
-    func activate(presetID: String) {
-        guard let target = presets.first(where: { $0.id == presetID }), !target.isActive else { return }
-        write("switch to “\(target.name)”") { _ in
+    ///
+    /// A switch is itself an undo step, which is what keeps every older mixer
+    /// step pointed at the right preset: unwinding in order re-activates the
+    /// preset those steps changed before any of them is applied (P84-6).
+    @discardableResult
+    func activate(presetID: String) -> Bool {
+        guard let target = presets.first(where: { $0.id == presetID }), !target.isActive else {
+            return true
+        }
+        let previousID = activePreset?.id
+        return write("switch to “\(target.name)”") { _ in
             activePreset = try store.presets.activate(target)
             reloadPresetAndApply()
             statusMessage = "Switched to “\(target.name)” — \(AssignmentDisplay.mixSummary(lines))."
+            if let previousID {
+                recordUndo(.activePreset(before: previousID, after: target.id), named: "Preset Switch")
+            }
         }
     }
 
@@ -984,6 +1060,7 @@ final class AssignmentModel {
             }
             try store.presets.delete(preset)
             reloadPresetAndApply()
+            clearUndoHistory()
             let successor = activePreset?.name ?? PresetLibrary.initialPresetName
             statusMessage = wasTheOnlyOne
                 ? "Deleted “\(preset.name)”. A piece always has a preset, so “\(successor)” "
@@ -1130,6 +1207,7 @@ final class AssignmentModel {
             )
             presets = try store.presets.presets(forPieceID: score.pieceID)
             activePreset = preset
+            dropRenameDraftUnlessOn(preset)
             lines = performance.lines
             keepSelectionValid()
             keepReferenceValid()
@@ -1146,15 +1224,235 @@ final class AssignmentModel {
     /// `PresetLibrary` guarantees the store is untouched when a write throws, so
     /// there is nothing to undo here — only something to say, and a re-read so
     /// the panel shows what is really stored.
-    private func write(_ what: String, _ body: (String) throws -> Void) {
-        guard let pieceID = score?.pieceID else { return }
+    @discardableResult
+    private func write(_ what: String, _ body: (String) throws -> Void) -> Bool {
+        guard let pieceID = score?.pieceID else { return false }
         endCompare()
         do {
             try body(pieceID)
+            return true
         } catch {
             alert = AssignmentAlert(title: "Could not \(what)", error)
             load(applyingToEngine: false, because: nil)
+            return false
         }
+    }
+}
+
+// MARK: - Undo and redo (UND001, #89)
+
+/// One committed change the owner can take back.
+///
+/// Each records the preset (and line) it changed, so it can only ever be
+/// applied there (P84-6), and both sides of the change, so undo and redo are
+/// the same write in opposite directions.
+struct UndoStep: Equatable {
+    enum Change: Equatable {
+        case mixer(
+            presetID: String, lineID: ScoreLineID,
+            before: LineMixerState, after: LineMixerState, what: String
+        )
+        case presetName(presetID: String, before: String, after: String)
+        case activePreset(before: String, after: String)
+    }
+
+    let id = UUID()
+    let change: Change
+    let actionName: String
+}
+
+/// Why a step was refused rather than applied somewhere else.
+private struct UndoTargetGone: LocalizedError {
+    var errorDescription: String? { "The preset this change was made to is no longer there." }
+    var recoverySuggestion: String? { "Undo history for this piece has been cleared." }
+}
+
+extension AssignmentModel {
+    /// A text field on the playback screen has focus, or has let it go.
+    func setTransportFieldFocused(_ isFocused: Bool) {
+        guard isFocused != isTransportFieldFocused else { return }
+        isTransportFieldFocused = isFocused
+        resyncUndoManager()
+    }
+
+    /// True while any playback-screen text field is being edited: a preset or
+    /// line rename, or a transport field.
+    ///
+    /// **While it is, the window's manager holds none of the mix.** The field
+    /// editor records typing on that same manager, so once the owner has
+    /// undone their typing the next ⌘Z would otherwise fall through to the mix
+    /// — "undo in a focused text field undoes text, not the mix" (#89).
+    private var isEditingText: Bool {
+        isTransportFieldFocused || isRenamingPreset || renamingLineID != nil
+    }
+
+    /// The manager the mix steps are on right now: the window's, unless text
+    /// is being edited.
+    private var offeredManager: UndoManager? { isEditingText ? nil : undoManager }
+
+    /// Makes the window's manager hold exactly the model's record, or nothing
+    /// while text is being edited. From inside the manager's own undo, where
+    /// removing actions does not take, this waits until that undo returns.
+    private func resyncUndoManager() {
+        guard let manager = undoManager else { return }
+        guard !manager.isUndoing, !manager.isRedoing else {
+            DispatchQueue.main.async { [weak self, weak manager] in
+                MainActor.assumeIsolated {
+                    guard let self, let manager, manager === self.undoManager else { return }
+                    self.resyncUndoManager()
+                }
+            }
+            return
+        }
+        manager.removeAllActions(withTarget: self)
+        if !isEditingText { mirrorHistory(onto: manager) }
+    }
+
+    /// The playback screen is now what the window shows: put this piece's
+    /// history on the window's undo manager, so the Edit menu's Undo and Redo
+    /// offer it (with "Undo Volume Change" and the like) and ⌘Z / ⇧⌘Z reach it.
+    ///
+    /// **Rebuilt from the model's own record every time**, because the history
+    /// has to survive a trip into the sound studio and back while the window's
+    /// manager must not carry it there.
+    func attachUndoManager(_ manager: UndoManager?) {
+        guard manager !== undoManager else { return }
+        detachUndoManager()
+        guard let manager else { return }
+        undoManager = manager
+        resyncUndoManager()
+    }
+
+    /// The playback screen is no longer showing — the studio or the catalog
+    /// covers it, or the piece closed. Takes every step off the window's
+    /// manager so ⌘Z there can never change a mix the owner cannot see; the
+    /// model keeps the history for when the screen comes back.
+    func detachUndoManager() {
+        undoManager?.removeAllActions(withTarget: self)
+        undoManager = nil
+    }
+
+    /// Preset creation and deletion change which presets exist, so no older
+    /// step is allowed to survive them (P84-2).
+    func clearUndoHistory() {
+        undoSteps.removeAll()
+        redoSteps.removeAll()
+        resyncUndoManager()
+    }
+
+    private func recordUndo(_ change: UndoStep.Change, named name: String) {
+        guard !isApplyingHistory else { return }
+        let step = UndoStep(change: change, actionName: name)
+        undoSteps.append(step)
+        redoSteps.removeAll()
+        if let manager = offeredManager { register(step, on: manager) { $0.performUndo(step) } }
+    }
+
+    private func performUndo(_ step: UndoStep) {
+        // Defensive: the manager holds no mix step while text is edited.
+        guard !isEditingText else { return resyncUndoManager() }
+        guard undoSteps.last == step else { return clearUndoHistory() }
+        undoSteps.removeLast()
+        guard apply(step.change, undoing: true) else { return clearUndoHistory() }
+        redoSteps.append(step)
+        if let manager = offeredManager { register(step, on: manager) { $0.performRedo(step) } }
+    }
+
+    private func performRedo(_ step: UndoStep) {
+        guard !isEditingText else { return resyncUndoManager() }
+        guard redoSteps.last == step else { return clearUndoHistory() }
+        redoSteps.removeLast()
+        guard apply(step.change, undoing: false) else { return clearUndoHistory() }
+        undoSteps.append(step)
+        if let manager = offeredManager { register(step, on: manager) { $0.performUndo(step) } }
+    }
+
+    /// **Through the same setters the controls use** — engine first, store
+    /// second, the existing alert on failure — so there is one write path and
+    /// the strip, the row and the saved preset cannot disagree.
+    private func apply(_ change: UndoStep.Change, undoing: Bool) -> Bool {
+        isApplyingHistory = true
+        defer { isApplyingHistory = false }
+
+        switch change {
+        case let .mixer(presetID, lineID, before, after, what):
+            guard activePreset?.id == presetID,
+                  lines.contains(where: { $0.lineID == lineID }) else { return targetGone() }
+            let target = undoing ? before : after
+            preview(ofLine: lineID) { $0 = target }
+            selectedLineID = lineID
+            return commitMixer(forLine: lineID, describedAs: what)
+
+        case let .presetName(presetID, before, after):
+            guard let preset = activePreset, preset.id == presetID else { return targetGone() }
+            return renamePreset(preset, to: undoing ? before : after)
+
+        case let .activePreset(before, after):
+            let id = undoing ? before : after
+            guard presets.contains(where: { $0.id == id }) else { return targetGone() }
+            return activate(presetID: id)
+        }
+    }
+
+    private func targetGone() -> Bool {
+        alert = AssignmentAlert(title: "Could not undo that change", UndoTargetGone())
+        return false
+    }
+
+    /// One closed undo group per step, so two steps registered in the same
+    /// event (a rebuild, a test) stay two steps.
+    ///
+    /// `groupsByEvent` is off for the instant the group is open because with it
+    /// on, `beginUndoGrouping` at level 0 first opens the event's own group and
+    /// nests inside it — and every step of that event would then undo as one.
+    /// Inside an undo or redo the manager has its own group open and the step
+    /// simply joins it; so does a step made while some other group is open.
+    private func register(
+        _ step: UndoStep, on manager: UndoManager,
+        _ handler: @escaping @MainActor (AssignmentModel) -> Void
+    ) {
+        let standalone = manager.groupingLevel == 0 && !manager.isUndoing && !manager.isRedoing
+        let groupsByEvent = manager.groupsByEvent
+        if standalone {
+            manager.groupsByEvent = false
+            manager.beginUndoGrouping()
+        }
+        manager.registerUndo(withTarget: self) { model in
+            MainActor.assumeIsolated { handler(model) }
+        }
+        manager.setActionName(step.actionName)
+        if standalone {
+            manager.endUndoGrouping()
+            manager.groupsByEvent = groupsByEvent
+        }
+    }
+
+    /// Puts the model's record back on a manager that has none of it.
+    ///
+    /// The undo side is ordinary registration, oldest first. The redo side
+    /// cannot be registered directly, so each redo step is registered as a
+    /// placeholder undo and then undone: undoing a placeholder does nothing but
+    /// register the real redo action, which is exactly how a manager's redo
+    /// stack is built. Nothing is applied to the mix.
+    private func mirrorHistory(onto manager: UndoManager) {
+        for step in undoSteps {
+            register(step, on: manager) { $0.performUndo(step) }
+        }
+        guard !redoSteps.isEmpty else { return }
+        guard manager.groupingLevel == 0 else {
+            // Mid-event with a group open: undoing now would take that group
+            // with it. Rare (a screen change and an edit in the same event),
+            // and dropping redo is the safe loss.
+            redoSteps.removeAll()
+            return
+        }
+        for step in redoSteps.reversed() {
+            register(step, on: manager) { model in
+                guard let manager = model.undoManager else { return }
+                model.register(step, on: manager) { $0.performRedo(step) }
+            }
+        }
+        for _ in redoSteps { manager.undo() }
     }
 }
 

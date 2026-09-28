@@ -37,6 +37,9 @@
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		AA00000000000000000030 /* Synth */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				AA00000000000000000035 /* Exceptions for "Synth" folder in "Synth" target */,
+			);
 			path = Synth;
 			sourceTree = "<group>";
 		};
@@ -61,6 +64,13 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		AA00000000000000000035 /* Exceptions for "Synth" folder in "Synth" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = AA00000000000000000010 /* Synth */;
+		};
 		AA00000000000000000033 /* Exceptions for "SynthKit" folder in "SynthKit" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			publicHeaders = (
@@ -521,6 +531,7 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Synth/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -546,6 +557,7 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Synth/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.music";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (

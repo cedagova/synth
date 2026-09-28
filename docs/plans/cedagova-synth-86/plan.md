@@ -93,7 +93,8 @@ All at `cd7f1d5`.
 - #98: `ci.yml` runs `xcodebuild build` then `xcodebuild test` (a second
   build), selects the newest installed Xcode, caches nothing, and keeps no
   result bundle. The runner currently selects Xcode 26.3 (run
-  36449654066). Recent green main runs take about 9 minutes (run
+  36449654066); `release.yml` excludes 26.3 and shipped with 26.2 (run
+  34664211036). Recent green main runs take about 9 minutes (run
   34653660275: 22:21:48 → 22:30:52).
 - #99: `SynthAppTests` holds only `AppModelWiringTests`,
   `ExportWiringTests`, `PerformanceSettingsWiringTests`. They build a real
@@ -127,24 +128,27 @@ Six independent leaves in one repository, each one PR.
   migrate if that fails. It then keeps the newest three backups. A
   rollback failure is thrown alongside the original error.
 - #98: CI does `build-for-testing` once and `test-without-building`, pins
-  Xcode 26.3 in one place and fails loud if absent, caches DerivedData
+  Xcode 26.2 in one place and fails loud if absent, caches DerivedData
   keyed on Xcode version and project file, and always uploads the
   `.xcresult`.
-- #99: one direct test file per named model in `SynthAppTests`, on the
-  existing temp-directory harness.
+- #99: one direct test file per named model in `SynthAppTests` —
+  including `PlaybackModel` — on the existing temp-directory harness.
 - #100: the index becomes a TSV resource inside the SynthKit framework,
-  loaded once through the framework bundle, hash-pinned by a test; a load
-  failure is a hard error, never an empty catalog.
+  loaded once through the framework bundle, hash-pinned by a test. The
+  loader throws on a missing or unparseable resource; the static catalog
+  site (non-throwing, built once) stops with a message naming the
+  resource rather than yielding an empty catalog.
 
 ## Architecture decisions
 
 | ID | Decision | Why |
 | --- | --- | --- |
 | P86-1 | Topology `DIRECT`, no internal blocked-by edges. | Every leaf is independently releasable. #95 and #96 both touch the preset-load path in `PlaybackModel`; whichever merges second rebases. That is a routine conflict, not a dependency. |
-| P86-2 | #99 covers the five models its Problem names with no direct tests (`AssignmentModel`, `LibraryModel`, `SoundStudioModel`, `InstrumentEditorModel`, `SoundEditorModel`). `PlaybackModel`'s direct coverage comes from the #95 and #96 acceptance tests. | The acceptance says "each named model"; "start with" in the Proposal is an order, not a limit. Avoids duplicating #95/#96 tests. |
+| P86-2 | #99 covers all six models its Problem names: `AssignmentModel`, `LibraryModel`, `SoundStudioModel`, `InstrumentEditorModel`, `SoundEditorModel`, and `PlaybackModel`. `PlaybackModel`'s preset-read and preset-adoption paths stay with #95/#96; #99 covers its other state-changing actions. | The acceptance says "each named model"; "start with" in the Proposal is an order, not a limit. Splitting `PlaybackModel` coverage by path avoids duplicating #95/#96 tests without leaving it untested. |
 | P86-3 | #97 keeps the newest 3 backups and skips the backup when the store has no schema yet (a brand-new library, stored version 0). | The issue's "e.g. 3" is reversible; a fresh library holds nothing to protect, and backing it up would leave a file on every first launch. |
-| P86-4 | #98 pins Xcode 26.3, the version CI already uses. | Removes drift without changing today's toolchain. `release.yml`'s own Xcode selection (it excludes 26.3 for Release) is out of scope. |
+| P86-4 | #98 pins Xcode 26.2, the version releases ship with (release run 34664211036 selected `Xcode_26.2.0.app`). | `release.yml` excludes 26.3 because its optimizer crashes on SynthKit at -O; pinning CI to 26.2 makes CI test the shipping toolchain. `release.yml` itself stays out of scope; when its exclusion is dropped, the CI pin moves with it. |
 | P86-5 | #100 keeps the literal's existing tab-separated format as the resource, byte-for-byte. | The parser and the "identical catalog" acceptance stay trivial; no format conversion to review. |
+| P86-6 | #100's hard error: a throwing loader, plus a named-resource trap at the static catalog site (`InstrumentCatalog.libraries` is a non-throwing `static let`). | A missing bundled resource is a build defect, not an owner-recoverable state; the always-run resource tests catch it before it ships. Plumbing a throwing catalog through every static caller is out of proportion. |
 
 ## Execution graph and waves
 
@@ -169,8 +173,11 @@ All in `cedagova/synth`.
   internal to the app target.
 - `LibraryStore.open` / `SchemaMigrator` (SynthKit) own the backup step
   (#97). `AppContainer` gains a `backups` location and its layout doc
-  (AD3) is updated. `SQLiteDatabase.withTransaction`'s error contract
-  changes: a failed rollback is reported in the thrown error.
+  (AD3) is updated. `SQLiteDatabase.withTransaction` (seven production
+  callers, some matching on error type) keeps its error contract when the
+  rollback succeeds: the original error is rethrown unchanged. Only a
+  failed rollback changes what is thrown, and the original error stays
+  reachable from it.
 - `CuratedInstrumentLibraries` (SynthKit) owns loading the bundled
   resource (#100); callers see the same catalog values.
 - `.github/workflows/ci.yml` is the only CI file touched (#98).
@@ -258,7 +265,9 @@ the issue's existing Problem / Proposal / Acceptance text, which stays.
   identical rows in every table; a backup failure leaves the store at
   v(n-1) and the open fails with an error naming the backup; a fourth
   backup prunes the oldest; a brand-new library creates no backup; a
-  failed rollback surfaces in the thrown error.
+  failed rollback surfaces in the thrown error with the original error
+  reachable from it, and a successful rollback rethrows the original
+  error unchanged (existing error-type checks keep passing).
 - Constraints: backup completes before the migration transaction begins;
   pruning touches only backup-named files in `backups/`.
 - Dependencies: None.
@@ -269,7 +278,7 @@ the issue's existing Problem / Proposal / Acceptance text, which stays.
 - In scope: `.github/workflows/ci.yml` only.
 - Out of scope: `release.yml`; fixing flaky timing tests.
 - Acceptance: one build per run (`build-for-testing` +
-  `test-without-building`); Xcode 26.3 pinned in one place, and a missing
+  `test-without-building`); Xcode 26.2 pinned in one place, and a missing
   pin fails the run naming the version; DerivedData cache keyed on Xcode
   version and project file; `.xcresult` uploaded on every run, including
   failure, and downloadable from a failing run; before/after wall clock
@@ -282,9 +291,12 @@ the issue's existing Problem / Proposal / Acceptance text, which stays.
 
 - In scope: one test file each for `AssignmentModel` (mix, preset CRUD,
   auto-save), `LibraryModel` (import, rename, remove), `SoundStudioModel`,
-  `InstrumentEditorModel`, `SoundEditorModel`.
-- Out of scope: `PlaybackModel` (covered by #95/#96); `AppModel` wiring
-  (already covered).
+  `InstrumentEditorModel`, `SoundEditorModel`, and `PlaybackModel`
+  (state-changing actions other than preset read and adoption, e.g.
+  transport, tempo and performance-setting changes).
+- Out of scope: `PlaybackModel` preset read (#95) and preset adoption
+  (#96), which those leaves test; `AppModel` wiring (already covered);
+  the stale "undo … in this umbrella" wording (undo is #89 under #84).
 - Acceptance: each file covers the model's state-changing actions and at
   least one failure path, on a temp-directory store, with no dependency on
   audio hardware beyond what the existing wiring tests use.
@@ -301,9 +313,12 @@ the issue's existing Problem / Proposal / Acceptance text, which stays.
   libraries' data.
 - Acceptance: the catalog built from the resource is identical to the one
   built from the literal (compared before the literal is deleted); a test
-  pins the resource's SHA-256; a missing or unreadable resource is a hard
-  error, never an empty catalog; the resource loads through the framework
-  bundle.
+  pins the resource's SHA-256; the loader throws for a missing resource
+  and for a corrupt one (both tested); the static catalog site stops with
+  a message naming the resource instead of producing an empty catalog;
+  the resource loads through the framework bundle; the existing test that
+  reads `vsco2Index` directly (`InstrumentCatalogTests`) moves onto the
+  resource.
 - Dependencies: None.
 - Rollback: `git revert`.
 
@@ -327,7 +342,7 @@ the issue's existing Problem / Proposal / Acceptance text, which stays.
 | Known task-ordering race (preset adoption) | L096 |
 | Data safety around migrations | L097 (backup, retention, rollback-failure reporting); #36 stays standalone |
 | CI speed and determinism | L098 |
-| App-layer test coverage | L099 (five models), L095/L096 (PlaybackModel) |
+| App-layer test coverage | L099 (all six named models); L095/L096 add PlaybackModel's preset-read and adoption tests |
 | Data out of Swift source | L100 |
 
 No orphan or overlapping outcome: each child owns exactly one root outcome.
@@ -347,7 +362,7 @@ L095 and L096 share a file but not an outcome.
 
 ## Assumptions and open questions
 
-None requiring owner decision. Planner choices P86-1 to P86-5 are ordinary
+None requiring owner decision. Planner choices P86-1 to P86-6 are ordinary
 and reversible, recorded above. The timing-test flake on main is recorded
 as an out-of-scope observation, not planned here.
 

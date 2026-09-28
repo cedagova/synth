@@ -2,7 +2,7 @@
 
 - Planning issue: https://github.com/cedagova/synth/issues/85
 - Planning PR: https://github.com/cedagova/synth/pull/101
-- Status: In progress
+- Status: Review
 - Root classification: EFFORT
 - Delivery topology: DIRECT
 - Planner: Claude (implementation-planning-lead)
@@ -47,9 +47,9 @@ keeps matching live playback; no compressed formats.
   `cedagova/synth`, one PR, independently acceptable and releasable. Their
   model, engine, UI, and test work jointly produce one result each and are
   not split by layer.
-- **#94 — `LEAF`, pending one owner decision** (see Owner decision brief).
-  Its delivery shape is one PR either way; only its ordering rule, and
-  whether it also closes #30, depends on the answer.
+- **#94 — `LEAF`.** Its block on #30 is resolved by the recorded owner
+  decision (surname ordering, below); it delivers that convention and
+  closes #30 in the same PR.
 - No research node: every open technical question has a pinned-evidence
   answer or is an ordinary reversible choice recorded below.
 
@@ -146,8 +146,9 @@ engine, export, query) and the `Synth` app (menus, sheets, models).
   Playback submenu and as loop start/end choices.
 - **#94 composer filter** derives a composer facet (entries + counts +
   "Unknown composer") from the loaded pieces in `LibraryQuery`. It combines
-  with text search and is shown as a filter control in the library. Its
-  ordering rule depends on the owner decision below.
+  with text search and is shown as a filter control in the library. One
+  derived surname key orders both the filter list and the library's
+  composer sort (owner decision, Architecture decision 14).
 
 ## Architecture decisions
 
@@ -203,17 +204,24 @@ issue text or pinned evidence.
 13. **Rehearsal marks stay non-visual (D2).** They show only as text
     entries in menus and fields. Scores without marks disable the menu
     item.
+14. **Composer ordering is by surname (owner decision, 2026-09-28,
+    "Choose A").** A derived sort key — the text before a comma if present,
+    otherwise the last word, with the full name breaking ties — orders both
+    the library's composer sort and the composer filter list. Missing
+    composers stay last as "Unknown composer". The key is computed at query
+    time and never stored. Filter entries group by stored name, compared
+    case- and diacritic-insensitively. #94's PR closes #30.
 
 ## Execution graph and waves
 
 - **Topology `DIRECT`:** five independent leaves with no blocked-by edges;
   each merges to `main` on its own.
-- **Wave 1 (ready now):** #90, #91, #92, #93 in any order. #90 and #91 both
+- **Wave 1 (ready now):** #90, #91, #92, #93, #94 in any order. #90 and #91 both
   touch the export request, sheet, and naming. Whichever lands second
   rebases onto the first; that is a merge-conflict concern, not a
   dependency.
-- **#94:** ready once the owner decision below is recorded; no edge to the
-  other leaves.
+- **#94:** also ready now (owner decision recorded); no edge to the other
+  leaves.
 
 ## Interfaces and ownership
 
@@ -232,7 +240,9 @@ All sides are owned by `cedagova/synth`.
   Compiling it must not change any existing compiled output (timeline,
   structure, tempo).
 - **`LibraryQuery` (SynthKit) ↔ library screen (app):** #94 adds a composer
-  facet and filter predicate; the text search contract is unchanged.
+  facet, a filter predicate, and the shared surname sort key; the text
+  search contract is unchanged, and composer sort order changes by owner
+  decision.
 
 ## Risks and rabbit holes
 
@@ -311,56 +321,38 @@ not an orphan; no child asked for it.
   dedupe, repeat mapping), a regression proving existing compiled output is
   unchanged, and a navigator/menu-state test for a mark-less score.
 - **COMP094:** `LibraryQuery` tests for facet counts, Unknown composer,
-  the chosen ordering, and filter + search combination.
+  surname ordering (comma form, "First Last", single names, ties) in both
+  the sort and the filter list, and filter + search combination.
 - **Owner listening check** (optional, not a gate): try stems in a DAW and
   A/B compare by ear.
 
 ## Assumptions and open questions
 
+No open questions remain.
+
 Assumption: the owner's "decide during scoping" notes on #90 (master
 stage), #92 (hold vs toggle), and #93 (first pass vs each pass) let the
 planner settle them. They are recorded as Architecture decisions 1, 8, and
-11 and are reversible. #94's block on #30 is different: the owner recorded
-it as a blocking decision, so it is escalated below.
+11 and are reversible.
 
-### Owner decision brief — composer ordering for #94 (and #30)
+### Owner decision recorded — composer ordering for #94 (and #30)
 
-**Problem.** #94's filter lists composers, and #30 (still open) asks
-whether composers sort by surname or by the full stored name. Today
-"Antonín Dvořák" files under A. The filter list's order, and whether #94
-also changes the library's composer sort, depend on the answer.
+Presented 2026-09-28 in the planning thread as a decision brief. Problem:
+#94 needed an ordering for its composer list, and #30 (surname vs full
+stored name) was open; today "Antonín Dvořák" sorts under A. Facts: one
+free-text `pieces.composer` field, sorted on the full string, with no
+surname logic. Options:
 
-**Facts.** The composer is one free-text field (`pieces.composer`) taken
-from MusicXML `creator`. The sort is `localizedStandardCompare` on the full
-string. No surname logic exists anywhere. Grouping in the filter is by the
-stored name, compared case- and diacritic-insensitively, under either
-option. **Assumption:** most library files store "First Last", but some
-may store "Last, First" or initials.
+- **A — surname convention now (recommended):** one derived surname key
+  for the library sort and the filter; #94 closes #30. Nothing stored,
+  reversible. Known cost: compound surnames written "First Last" misfile
+  (e.g. "Ralph Vaughan Williams" under W).
+- **B — decouple:** the filter uses the current full-name order; #30 stays
+  open.
+- **C — defer #94** until #30 is decided separately.
 
-**Options.**
-
-- **A — Surname convention now (recommended).** A derived surname sort key
-  is used by both the library composer sort and the filter list. Rule: text
-  before a comma if present, otherwise the last word; the full name breaks
-  ties. #94 delivers it and closes #30. Benefit: classical ordering
-  everywhere, decided once. Cost: a heuristic that misfiles compound
-  surnames written "First Last" (e.g. "Ralph Vaughan Williams" files under
-  W). Nothing is stored, so it is fully reversible. The execution path
-  stays one leaf.
-- **B — Decouple.** The filter uses the library's current full-name order;
-  #30 stays open, and deciding it later changes both places together. This
-  is the smallest change. Dvořák stays under A until #30 is decided.
-  Reversible; one leaf.
-- **C — Defer #94.** Plan and ship #90–#93 now and leave #94 blocked on
-  #30. No composer work lands until #30 is decided separately.
-
-**Recommendation: A.** It resolves a question already raised twice, costs
-one derived key and no migration, and is easy to undo.
-
-**Blocks:** COMP094 (#94) acceptance and ordering; nothing else.
-
-**Reply to unblock:** `Choose A`, `Choose B`, or `Choose C` (or a named
-change to A's surname rule).
+**Owner reply: "A: Surname now" (2026-09-28).** Applied as Architecture
+decision 14; it unblocks COMP094 and nothing else.
 
 ## Satisfaction proof
 

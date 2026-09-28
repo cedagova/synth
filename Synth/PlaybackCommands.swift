@@ -148,6 +148,14 @@ struct PlaybackCommands: Commands {
                 model.playback?.export.present()
             }
             .keyboardShortcut("e", modifiers: [.command, .shift])
+
+            // One file per line the mix plays (#90). Option added to the mix
+            // export's shortcut: the same command, split by line.
+            Button("Export Stems…") {
+                model.playback?.stemExport.present()
+            }
+            .keyboardShortcut("e", modifiers: [.command, .shift, .option])
+            .disabled(model.playback?.isReady != true)
         }
     }
 }

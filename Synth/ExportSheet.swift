@@ -21,7 +21,9 @@ struct ExportSheet: View {
         VStack(alignment: .leading, spacing: 18) {
             header
             Divider()
-            ExportFormatControls(model: model)
+            ExportFormatControls(
+                settings: $model.settings, fixedDepth: nil, isDisabled: model.isExporting
+            )
             if let caveat = model.caveat() {
                 Label(caveat, systemImage: "info.circle")
                     .font(.callout)
@@ -166,14 +168,19 @@ struct ExportSheet: View {
 
 /// Format and quality. Three pickers, because the issue asks for a
 /// format/quality choice surface and these are the three things that choice is.
-private struct ExportFormatControls: View {
-    @Bindable var model: ExportModel
+///
+/// Shared by the mix and stem sheets. `fixedDepth` replaces the depth picker
+/// with a label, for the stems, which are always 32-bit float.
+struct ExportFormatControls: View {
+    @Binding var settings: AudioExportSettings
+    let fixedDepth: String?
+    let isDisabled: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             SectionHeading("Format and quality")
 
-            Picker("Format", selection: $model.settings.format) {
+            Picker("Format", selection: $settings.format) {
                 ForEach(AudioExportFormat.allCases, id: \.self) { format in
                     Text(format.displayName).tag(format)
                 }
@@ -183,7 +190,7 @@ private struct ExportFormatControls: View {
             .accessibilityHint("Both are uncompressed, so both are exactly what Synth plays.")
 
             HStack(spacing: 16) {
-                Picker("Sample rate", selection: $model.settings.sampleRate) {
+                Picker("Sample rate", selection: $settings.sampleRate) {
                     ForEach(AudioExportSampleRate.allCases, id: \.self) { rate in
                         Text(rate.displayName).tag(rate)
                     }
@@ -191,23 +198,32 @@ private struct ExportFormatControls: View {
                 .frame(maxWidth: 210)
                 .accessibilityLabel("Sample rate")
 
-                Picker("Depth", selection: $model.settings.bitDepth) {
-                    ForEach(AudioExportBitDepth.allCases, id: \.self) { depth in
-                        Text(depth.displayName).tag(depth)
+                if let fixedDepth {
+                    LabeledContent("Depth", value: fixedDepth)
+                        .frame(maxWidth: 190)
+                        .accessibilityLabel("Bit depth, \(fixedDepth)")
+                } else {
+                    Picker("Depth", selection: $settings.bitDepth) {
+                        ForEach(AudioExportBitDepth.allCases, id: \.self) { depth in
+                            Text(depth.displayName).tag(depth)
+                        }
                     }
+                    .frame(maxWidth: 190)
+                    .accessibilityLabel("Bit depth")
                 }
-                .frame(maxWidth: 190)
-                .accessibilityLabel("Bit depth")
             }
 
-            Text("44.1 kHz, 16-bit is CD quality. Higher settings make a larger "
-                 + "file, not a different performance.")
+            Text(fixedDepth == nil
+                 ? "44.1 kHz, 16-bit is CD quality. Higher settings make a larger "
+                    + "file, not a different performance."
+                 : "Stems are written before the master stage, so a loud line can go "
+                    + "past full scale. 32-bit float keeps those peaks instead of clipping them.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         // Greyed rather than hidden while a render is in flight: the owner can
         // still read what is being written.
-        .disabled(model.isExporting)
+        .disabled(isDisabled)
     }
 }

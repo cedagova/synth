@@ -189,6 +189,10 @@ final class PlaybackModel {
     /// one flag wide.
     let export: ExportModel
 
+    /// The "Export Stems…" surface for this piece (#90): one file per line
+    /// the mix plays, from the same request the mix export builds.
+    let stemExport: StemExportModel
+
     /// A seek asked for before the piece finished loading. The issue's failure
     /// clause: it queues rather than being dropped.
     ///
@@ -220,6 +224,7 @@ final class PlaybackModel {
         self.engine = engine
         self.assignment = AssignmentModel(store: store, engine: engine)
         self.export = ExportModel(pieceTitle: piece.title)
+        self.stemExport = StemExportModel(pieceTitle: piece.title)
         // The stored value lives on the piece's active preset and is adopted
         // in `prepare()`, before the first realization; this is only the value
         // for the instant before that.
@@ -279,6 +284,13 @@ final class PlaybackModel {
             // humanized the piece is: there is one realization, and both read
             // it.
             return self.assignment.exportRequest(timeline: timeline, settings: settings)
+        }
+        stemExport.caveat = { [weak self] in self?.assignment.exportCaveat }
+        stemExport.makeRequest = { [weak self] settings in
+            guard let self, let timeline = self.timeline else { return nil }
+            return self.assignment.stemExportRequest(
+                timeline: timeline, settings: settings, pieceTitle: self.piece.title
+            )
         }
     }
 
@@ -447,6 +459,7 @@ final class PlaybackModel {
         // finished after the piece closed would publish a file the owner has
         // stopped expecting. Cancelling leaves nothing behind, by construction.
         export.close()
+        stemExport.close()
         engine.stop()
         engine.stopEngine()
     }

@@ -55,6 +55,12 @@ final class StemExportModel {
     /// loudly with "nothing to export yet".
     var makeRequest: @MainActor (AudioExportSettings) -> AudioStemExportRequest? = { _ in nil }
 
+    /// Called before the sheet opens and again before a render starts, so the
+    /// piece is back on its active preset first — same contract as
+    /// `ExportModel.willExport`: stems always render the active preset, never
+    /// a reference being compared (#92, D5).
+    var willExport: @MainActor () -> Void = {}
+
     /// Same meaning as `ExportModel.caveat`.
     var caveat: @MainActor () -> String? = { nil }
 
@@ -120,6 +126,7 @@ final class StemExportModel {
 
     func present() {
         guard !isExporting else { return }
+        willExport()
         phase = .ready
         refreshPlan()
         isPresented = true
@@ -149,6 +156,7 @@ final class StemExportModel {
     /// publish too.
     func start(in folder: URL, confirmed: Set<String> = []) {
         guard !isExporting else { return }
+        willExport()
         guard let request = makeRequest(settings) else {
             phase = .failed(ExportFailure(AudioExportError.nothingToRender))
             return

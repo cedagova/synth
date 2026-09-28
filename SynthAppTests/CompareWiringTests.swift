@@ -284,6 +284,35 @@ final class CompareWiringTests: XCTestCase {
         playback.export.isPresented = false
     }
 
+    /// Stems follow the same rule (#90, D5): opening the stems sheet, and
+    /// starting a stem render, each end Compare, so the request is built from
+    /// the active preset's timeline.
+    func testStemExportEndsCompareSoItRendersTheActivePreset() async throws {
+        let (playback, _, _) = try await pieceWithAReference()
+        let fileLength = playback.totalMicroseconds
+
+        await playback.toggleCompare()
+        XCTAssertTrue(playback.isComparing)
+        playback.stemExport.present()
+        XCTAssertFalse(playback.isComparing, "Opening the stems sheet left Compare on.")
+        XCTAssertEqual(playback.totalMicroseconds, fileLength)
+        XCTAssertEqual(try XCTUnwrap(playback.timeline).settings.expression, .standard)
+
+        // Compare turned back on with the sheet open: starting the render ends it.
+        await playback.toggleCompare()
+        XCTAssertTrue(playback.isComparing)
+        let folder = directory.appending(path: "stems-compare")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        playback.stemExport.start(in: folder)
+        XCTAssertFalse(playback.isComparing, "Starting a stem render left Compare on.")
+        XCTAssertEqual(playback.totalMicroseconds, fileLength)
+        playback.stemExport.cancel()
+        for _ in 0..<600 where playback.stemExport.isExporting {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        playback.stemExport.isPresented = false
+    }
+
     /// Choosing another reference while comparing ends Compare rather than
     /// silently playing something else.
     func testChangingTheReferenceEndsCompare() async throws {

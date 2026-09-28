@@ -305,6 +305,8 @@ final class PlaybackModel {
             // it.
             return self.assignment.exportRequest(timeline: timeline, settings: settings)
         }
+        // Stems too (D5): Compare ends before the sheet opens and before a render.
+        stemExport.willExport = { [weak self] in self?.endCompare() }
         stemExport.caveat = { [weak self] in self?.assignment.exportCaveat }
         stemExport.makeRequest = { [weak self] settings in
             guard let self, let timeline = self.timeline else { return nil }

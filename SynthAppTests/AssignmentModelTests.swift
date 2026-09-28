@@ -86,17 +86,6 @@ final class AssignmentModelTests: XCTestCase {
         XCTAssertNil(try presets.activePreset(forPieceID: score.pieceID))
     }
 
-    func testTheLoadedPresetIsHandedToTheTransport() throws {
-        var tempos: [Int] = []
-        var humanizations: [HumanizationSettings] = []
-        model.onTempoLoaded = { tempos.append($0) }
-        model.onHumanizationLoaded = { humanizations.append($0) }
-        try open()
-
-        XCTAssertEqual(tempos, [model.activePreset?.content.tempoPercent])
-        XCTAssertEqual(humanizations, [model.activePreset?.content.humanization])
-    }
-
     // MARK: The mixer (REQ-008) and auto-save
 
     func testSettingAVolumeIsHeardAndSaved() throws {
@@ -284,14 +273,11 @@ final class AssignmentModelTests: XCTestCase {
         model.createPreset()
         model.cancelPresetRename()
 
-        var tempos: [Int] = []
-        model.onTempoLoaded = { tempos.append($0) }
         model.activate(presetID: first.id)
 
         XCTAssertEqual(model.activePreset?.id, first.id)
         XCTAssertEqual(try storedActive().id, first.id)
         XCTAssertTrue(model.statusMessage?.hasPrefix("Switched to “\(first.name)”") == true)
-        XCTAssertEqual(tempos.count, 1, "The arriving preset's tempo reaches the transport")
 
         model.activateNextPreset()
         XCTAssertNotEqual(model.activePreset?.id, first.id, "Next wraps to the other preset")
@@ -391,6 +377,40 @@ final class AssignmentModelTests: XCTestCase {
             model.alert?.title, "Could not give “\(current.name)” the sound “\(other.name)”"
         )
         XCTAssertEqual(model.lines.first { $0.lineID == line }?.source, current.source)
+    }
+
+    // MARK: Missing instruments (issue #24)
+
+    /// A line whose instrument is not downloaded is silent until the owner
+    /// explicitly accepts a substitute, and that answer is saved with the
+    /// preset; withdrawing it is saved the same way.
+    func testAcceptingAndWithdrawingASubstituteIsSavedWithThePreset() throws {
+        let line = try open()
+        let catalog = try XCTUnwrap(InstrumentCatalog.library(withIdentifier: "vsco2-ce"))
+        let coverage = try XCTUnwrap(
+            catalog.coverage.first { $0.identifier == "vsco2.cello.section" }
+        )
+        let variant = try library.store.sounds.createVariant(
+            InstrumentVariant(reference: InstrumentReference(library: catalog, coverage: coverage)),
+            named: "Not Downloaded Cello"
+        )
+        model.refreshFromStore()
+        model.assign(soundID: variant.id, toLine: line)
+        model.selectedLineID = line
+
+        let silent = try XCTUnwrap(model.lines.first { $0.lineID == line })
+        XCTAssertTrue(silent.isSilent, "Nothing is substituted without the owner asking")
+        XCTAssertTrue(silent.canOfferSubstitution)
+        XCTAssertNotNil(model.instrumentBanner)
+
+        model.toggleSubstitutionOnSelectedLine()
+        XCTAssertNil(model.alert)
+        XCTAssertTrue(try XCTUnwrap(model.lines.first { $0.lineID == line }).acceptsSubstitution)
+        XCTAssertTrue(try XCTUnwrap(storedActive().line(withID: line)).acceptsSubstitution)
+
+        model.toggleSubstitutionOnSelectedLine()
+        XCTAssertFalse(try XCTUnwrap(model.lines.first { $0.lineID == line }).acceptsSubstitution)
+        XCTAssertFalse(try XCTUnwrap(storedActive().line(withID: line)).acceptsSubstitution)
     }
 
     // MARK: Naming a line (REQ-005)

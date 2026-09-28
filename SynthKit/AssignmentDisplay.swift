@@ -177,8 +177,7 @@ public enum AssignmentDisplay {
     /// heard** — see `isHeard` below — and the two were the same thing only
     /// while every line had a sound it could actually play.
     public static func isRouted(_ line: ResolvedLine, whileSoloing isSoloing: Bool) -> Bool {
-        if line.mixer.isMuted { return false }
-        return isSoloing ? line.mixer.isSoloed : true
+        AudioStemExportRequest.isRouted(line.mixer, whileSoloing: isSoloing)
     }
 
     /// True when this line is producing sound.

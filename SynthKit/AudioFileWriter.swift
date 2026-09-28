@@ -32,14 +32,27 @@ public struct AudioFileWriter {
     public let settings: AudioExportSettings
     public let frameCount: Int64
 
-    public init(settings: AudioExportSettings, frameCount: Int64) {
+    /// How samples are stored. Integer PCM at `settings.bitDepth` unless the
+    /// caller asks otherwise; only a stem export (#90) asks for float.
+    public let encoding: AudioSampleEncoding
+
+    public init(
+        settings: AudioExportSettings,
+        frameCount: Int64,
+        encoding: AudioSampleEncoding? = nil
+    ) {
         self.settings = settings
         self.frameCount = max(0, frameCount)
+        self.encoding = encoding ?? .integer(settings.bitDepth)
     }
+
+    var bytesPerFrame: Int { settings.channelCount * encoding.bytesPerSample }
+
+    var payloadByteCount: Int64 { frameCount * Int64(bytesPerFrame) }
 
     /// Total size of the finished file, header included.
     public var totalByteCount: Int64 {
-        Int64(headerByteCount) + settings.payloadByteCount(frameCount: frameCount)
+        Int64(headerByteCount) + payloadByteCount
     }
 
     /// The largest file either container can honestly describe.
@@ -57,9 +70,11 @@ public struct AudioFileWriter {
     /// Size of the header, without building it — the sizes inside it do not
     /// change its length.
     var headerByteCount: Int {
-        switch settings.format {
-        case .wav: return 44      // "RIFF" + size + "WAVE" + fmt (8+16) + "data" + size
-        case .aiff: return 54     // "FORM" + size + "AIFF" + COMM (8+18) + SSND (8+8)
+        switch (settings.format, encoding) {
+        case (.wav, .integer): return 44   // "RIFF" + size + "WAVE" + fmt (8+16) + "data" + size
+        case (.aiff, .integer): return 54  // "FORM" + size + "AIFF" + COMM (8+18) + SSND (8+8)
+        case (.wav, .float32): return 58   // ... + fmt (8+18) + fact (8+4) + "data" + size
+        case (.aiff, .float32): return 92  // "FORM" + size + "AIFC" + FVER (8+4) + COMM (8+44) + SSND (8+8)
         }
     }
 
@@ -75,23 +90,32 @@ public struct AudioFileWriter {
 
     private func waveHeader() -> Data {
         let channels = settings.channelCount
-        let bits = settings.bitDepth.rawValue
+        let bits = encoding.bitsPerSample
         let rate = settings.sampleRate.rawValue
-        let blockAlign = settings.bytesPerFrame
-        let payload = settings.payloadByteCount(frameCount: frameCount)
+        let blockAlign = bytesPerFrame
+        let payload = payloadByteCount
+        let isFloat = encoding == .float32
 
         var fmt = Data()
-        fmt.appendLittle(UInt16(1))                       // WAVE_FORMAT_PCM
+        fmt.appendLittle(UInt16(isFloat ? 3 : 1))         // WAVE_FORMAT_IEEE_FLOAT / _PCM
         fmt.appendLittle(UInt16(channels))
         fmt.appendLittle(UInt32(rate))
         fmt.appendLittle(UInt32(rate * blockAlign))       // average bytes per second
         fmt.appendLittle(UInt16(blockAlign))
         fmt.appendLittle(UInt16(bits))
+        // A non-PCM format carries a `cbSize` word and a `fact` chunk with the
+        // frame count; the integer header stays byte-for-byte what it was.
+        if isFloat { fmt.appendLittle(UInt16(0)) }
 
         var body = Data("WAVE".utf8)
         body.append(Data("fmt ".utf8))
         body.appendLittle(UInt32(fmt.count))
         body.append(fmt)
+        if isFloat {
+            body.append(Data("fact".utf8))
+            body.appendLittle(UInt32(4))
+            body.appendLittle(sizeField(frameCount))
+        }
         body.append(Data("data".utf8))
         body.appendLittle(sizeField(payload))
 
@@ -105,21 +129,38 @@ public struct AudioFileWriter {
 
     private func aiffHeader() -> Data {
         let channels = settings.channelCount
-        let bits = settings.bitDepth.rawValue
-        let payload = settings.payloadByteCount(frameCount: frameCount)
+        let bits = encoding.bitsPerSample
+        let payload = payloadByteCount
+        let isFloat = encoding == .float32
 
         var comm = Data()
         comm.appendBig(UInt16(channels))
         comm.appendBig(sizeField(frameCount))              // numSampleFrames
         comm.appendBig(UInt16(bits))
         comm.append(Self.extended80(settings.sampleRate.hertz))
+        // Float needs AIFF-C: the extended COMM names the sample type
+        // (`fl32`, big-endian IEEE 754) and a Pascal-string description,
+        // padded to an even length.
+        if isFloat {
+            comm.append(Data("fl32".utf8))
+            let name = Data(Self.floatCompressionName.utf8)
+            comm.append(UInt8(name.count))
+            comm.append(name)
+            if (1 + name.count) % 2 != 0 { comm.append(UInt8(0)) }
+        }
 
         // SSND carries two words before the audio: the offset of the first
         // sample inside the chunk and the block-alignment hint. Both zero, which
         // is what every writer that is not aligning to a hardware block emits.
         let ssndPayload = Int64(8) + payload
 
-        var body = Data("AIFF".utf8)
+        var body = Data((isFloat ? "AIFC" : "AIFF").utf8)
+        if isFloat {
+            // The one AIFF-C version there is (May 1990).
+            body.append(Data("FVER".utf8))
+            body.appendBig(UInt32(4))
+            body.appendBig(UInt32(0xA280_5140))
+        }
         body.append(Data("COMM".utf8))
         body.appendBig(UInt32(comm.count))
         body.append(comm)
@@ -133,6 +174,9 @@ public struct AudioFileWriter {
         file.append(body)
         return file
     }
+
+    /// The description AIFF-C carries next to `fl32`: Apple's own spelling.
+    static let floatCompressionName = "32-bit floating point"
 
     /// A `Double` as the 80-bit IEEE 754 extended float AIFF stores its sample
     /// rate in — the one piece of the format with no modern equivalent.
@@ -187,7 +231,7 @@ public struct AudioFileWriter {
     /// using 32768 for both would wrap the loudest positive peak to silence.
     public func encode(left: ArraySlice<Float>, right: ArraySlice<Float>) -> Data {
         let frames = min(left.count, right.count)
-        var data = Data(capacity: frames * settings.bytesPerFrame)
+        var data = Data(capacity: frames * bytesPerFrame)
         var leftIndex = left.startIndex
         var rightIndex = right.startIndex
 
@@ -201,7 +245,22 @@ public struct AudioFileWriter {
     }
 
     private func appendSample(_ sample: Float, to data: inout Data) {
-        switch settings.bitDepth {
+        let depth: AudioExportBitDepth
+        switch encoding {
+        case .float32:
+            // Stored as rendered, never clamped: a stem above full scale keeps
+            // its peak (AD-P6). A non-finite sample is written as silence, as
+            // `quantize` does for the integer depths.
+            let bits = sample.isFinite ? sample.bitPattern : 0
+            switch settings.format {
+            case .wav: data.appendLittle(bits)
+            case .aiff: data.appendBig(bits)
+            }
+            return
+        case .integer(let chosen):
+            depth = chosen
+        }
+        switch depth {
         case .bits16:
             let value = Self.quantize(sample, maximum: 32_767, minimum: -32_768)
             let word = Int16(truncatingIfNeeded: value)

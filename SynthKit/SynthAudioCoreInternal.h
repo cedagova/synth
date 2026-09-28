@@ -258,6 +258,10 @@ struct SynthRenderEngine {
     /// Where "loud for this piece" is, in linear amplitude, for cohesion.
     /// Zero or less disables cohesion entirely.
     _Atomic float    cohesionThreshold;
+    /// Nonzero for a pre-master render (a stem export, #90): the ceiling's
+    /// detector is skipped, so its gain stays exactly `1.0f`. The lookahead
+    /// delay still runs, so output frame *k* is still program frame *k*.
+    _Atomic int32_t  ceilingBypassed;
 
     /* Render thread writes, control thread reads. */
     _Atomic int64_t  playheadFrame;

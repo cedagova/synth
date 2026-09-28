@@ -171,6 +171,11 @@ final class PlaybackModel {
     /// owner edit made during a pending adoption from being undone by it.
     @ObservationIgnored private var realizationGeneration = 0
 
+    /// Re-realizations started and not yet returned to their caller. While one
+    /// is in flight the loaded timeline is about to be replaced, so it is no
+    /// guide to what the engine will end up playing — see `applyAdoptedPreset`.
+    @ObservationIgnored private var realizationsInFlight = 0
+
     /// The tempo the loaded timeline was realized at. Differs from
     /// `tempoPercent` only while a tempo change is still being realized, and is
     /// what the playhead's position has to be read against in that window.
@@ -471,8 +476,10 @@ final class PlaybackModel {
     private func realizeUnlessOvertaken(_ score: CompiledScore) async -> PerformanceTimeline? {
         realizationGeneration += 1
         let generation = realizationGeneration
+        realizationsInFlight += 1
         let realized = await realizeUnderCurrentSettings(score)
         await realizationDidFinish?()
+        realizationsInFlight -= 1
         return generation == realizationGeneration ? realized : nil
     }
 
@@ -1121,7 +1128,9 @@ final class PlaybackModel {
         }
 
         let wasPlaying = transportState == .playing
-        let resumeAt = positionMicroseconds
+        // In ticks, read against the tempo actually playing: a tempo adoption
+        // still being realized has already rescaled `compiledScore`.
+        let ticks = playheadTicks()
         let percent = tempoPercent
         guard let realized = await realizeUnlessOvertaken(compiledScore) else { return }
 
@@ -1129,7 +1138,10 @@ final class PlaybackModel {
             // `load` stops the graph; the position, the preset's sounds and the
             // mix are all carried across by hand — see `restorePlayback`.
             try loadIntoEngine(realized, tempoPercent: percent)
-            try restorePlayback(at: resumeAt, playing: wasPlaying)
+            try restorePlayback(
+                at: compiledScore.tempoMap.microseconds(atPlaybackTicks: ticks),
+                playing: wasPlaying
+            )
             statusMessage = message
             refreshTransport()
         } catch {
@@ -1321,7 +1333,12 @@ final class PlaybackModel {
         }
 
         let wasPlaying = transportState == .playing
-        let needsRealization = timeline.settings.humanization != humanization
+        // A realization in flight will replace the loaded timeline with one
+        // realized under settings captured before this preset landed — an owner
+        // edit this preset may have just put back. Realizing again overtakes it,
+        // so what loads last is what the model now says.
+        let needsRealization = realizationsInFlight > 0
+            || timeline.settings.humanization != humanization
             || timeline.settings.expression != expression
             || timelineTempoPercent != tempoPercent
 

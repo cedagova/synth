@@ -489,6 +489,66 @@ final class PerformanceSettingsWiringTests: XCTestCase {
         try assertOwnerEditSurvived(owners, arriving: presets.second, on: playback)
     }
 
+    /// The reverse order (review of #110): an owner edit is still being
+    /// realized when a preset arrives whose settings equal what the engine is
+    /// already playing. The loaded timeline matches the preset, but it is about
+    /// to be replaced by the owner's — so the adoption must realize anyway and
+    /// overtake it, or the engine ends up on the owner's value while the model
+    /// shows the preset's.
+    func testALoadBackToThePlayingSettingsOvertakesAnInFlightHumanizationEdit() async throws {
+        let playback = try await openPreparedPiece()
+        let twin = try makeTwinOfTheActivePreset(on: playback)
+        let playing = playback.humanization
+        let gate = RealizationGate()
+        playback.realizationDidFinish = { await gate.holdFirst() }
+
+        let edit = Task { await playback.setHumanizationEnabled(!playing.isEnabled) }
+        try await gate.waitUntilHolding()
+        playback.assignment.activate(presetID: twin.id)
+        await playback.settlePresetAdoption()
+        gate.release()
+        await edit.value
+
+        XCTAssertEqual(playback.humanization, playing)
+        XCTAssertEqual(
+            try XCTUnwrap(playback.timeline).settings.humanization, playing,
+            "the owner's held realization loaded over the preset the model shows"
+        )
+    }
+
+    /// The same for tempo, whose realization also moves the clock.
+    func testALoadBackToThePlayingTempoOvertakesAnInFlightTempoEdit() async throws {
+        let playback = try await openPreparedPiece()
+        let twin = try makeTwinOfTheActivePreset(on: playback)
+        let playingTempo = playback.tempoPercent
+        let span = try XCTUnwrap(playback.timeline).totalMicroseconds
+        let gate = RealizationGate()
+        playback.realizationDidFinish = { await gate.holdFirst() }
+
+        let edit = Task { await playback.setTempoPercent(70) }
+        try await gate.waitUntilHolding()
+        playback.assignment.activate(presetID: twin.id)
+        await playback.settlePresetAdoption()
+        gate.release()
+        await edit.value
+
+        XCTAssertEqual(playback.tempoPercent, playingTempo)
+        XCTAssertEqual(
+            try XCTUnwrap(playback.timeline).totalMicroseconds, span,
+            "the owner's held 70% realization loaded over the preset's tempo"
+        )
+    }
+
+    /// A second preset identical to the active one, listed but not active.
+    private func makeTwinOfTheActivePreset(on playback: PlaybackModel) throws -> Preset {
+        let store = try XCTUnwrap(model.store)
+        let original = try XCTUnwrap(playback.assignment.activePreset)
+        let twin = try store.presets.duplicate(original, makeActive: false)
+        playback.assignment.refreshFromStore()
+        XCTAssertTrue(playback.assignment.presets.contains { $0.id == twin.id })
+        return twin
+    }
+
     private func assertOwnerEditSurvived(
         _ owners: HumanizationSettings, arriving preset: Preset, on playback: PlaybackModel,
         file: StaticString = #filePath, line: UInt = #line

@@ -427,19 +427,44 @@ final class PresetLibraryTests: XCTestCase {
         )
     }
 
-    func testReconcilingLinesKeepsTheStoredHumanization() throws {
+    /// Only the lines are reconciled: every piece-wide value the owner chose
+    /// survives a change to the piece's lines, in the returned preset and in
+    /// what is stored. The lines must actually differ, or reconcile returns
+    /// before rebuilding anything and the test proves nothing.
+    func testReconcilingChangedLinesKeepsEveryPieceWideSetting() throws {
         let piece = try importFugue()
         let score = try compile(piece)
-        let preset = try store.activePreset(for: score)
+        var saved = try store.activePreset(for: score)
 
-        let chosen = HumanizationSettings(isEnabled: false, intensity: 20)
-        let saved = try store.presets.setHumanization(chosen, in: preset)
+        let humanization = HumanizationSettings(isEnabled: false, intensity: 20)
+        let expression = ExpressionSettings(isEnabled: false, amount: 35)
+        let tuning = TuningSettings(temperament: .werckmeisterIII, referencePitch: .a415)
+        saved = try store.presets.setHumanization(humanization, in: saved)
+        saved = try store.presets.setExpression(expression, in: saved)
+        saved = try store.presets.setProducedMaster(.off, in: saved)
+        saved = try store.presets.setTuning(tuning, in: saved)
+        saved = try store.presets.setTempoPercent(80, in: saved)
 
+        // The piece loses a part, so its lines no longer match the preset's.
         let inventory = try store.lineInventory(for: score)
-        let reconciled = try store.presets.reconcile(
-            saved, with: inventory, palette: try store.sounds.allSounds()
+        let shrunk = LineInventory(
+            pieceID: inventory.pieceID, entries: Array(inventory.entries.dropLast())
         )
-        XCTAssertEqual(reconciled.content.humanization, chosen)
+        XCTAssertNotEqual(shrunk.lineIDs, saved.content.lines.map(\.lineID))
+
+        let reconciled = try store.presets.reconcile(
+            saved, with: shrunk, palette: try store.sounds.allSounds()
+        )
+        let stored = try XCTUnwrap(try store.presets.activePreset(forPieceID: piece.id))
+
+        XCTAssertEqual(reconciled.lines.map(\.lineID), shrunk.lineIDs)
+        for content in [reconciled.content, stored.content] {
+            XCTAssertEqual(content.humanization, humanization)
+            XCTAssertEqual(content.expression, expression)
+            XCTAssertEqual(content.producedMaster, .off)
+            XCTAssertEqual(content.tuning, tuning)
+            XCTAssertEqual(content.tempoPercent, 80)
+        }
     }
 
     /// A keyboard piece starts on the Default Voice, so a first open sounds

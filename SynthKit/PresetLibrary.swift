@@ -321,13 +321,13 @@ public final class PresetLibrary: @unchecked Sendable, PieceDependentStore, Soun
         }
 
         return try write(preset) { current in
-            (
-                name: current.name,
-                isActive: current.isActive,
-                // Only the lines are reconciled; the piece-wide values the
-                // preset holds (humanization) ride through untouched.
-                content: PresetContent(lines: rebuilt, humanization: current.content.humanization)
-            )
+            // Only the lines are reconciled. Every piece-wide value the preset
+            // holds — humanization, expression, master, tuning, tempo, and any
+            // added later — rides through untouched, because the content is
+            // copied rather than rebuilt field by field (issue #117).
+            var content = current.content
+            content.lines = rebuilt
+            return (name: current.name, isActive: current.isActive, content: content)
         }
     }
 

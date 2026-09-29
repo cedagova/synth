@@ -183,10 +183,16 @@ public enum AudioExportNaming {
 
     /// `"Prelude in C — Chamber.wav"`, with the preset dropped when it is the
     /// only one and the piece already says everything.
+    ///
+    /// A loop-range export (#91) appends the printed range —
+    /// `"Prelude in C — Chamber mm. 12–24.wav"`, or `"… m. 12"` for one
+    /// measure — and a long title is shortened before the range is, so the
+    /// range always survives.
     public static func suggestedFileName(
         pieceTitle: String,
         presetName: String?,
-        format: AudioExportFormat
+        format: AudioExportFormat,
+        range: LoopRange? = nil
     ) -> String {
         var stem = sanitized(pieceTitle)
         if stem.isEmpty { stem = "Untitled piece" }
@@ -194,11 +200,21 @@ public enum AudioExportNaming {
             let preset = sanitized(presetName)
             if !preset.isEmpty { stem += " — \(preset)" }
         }
+        let suffix = range.map { " " + rangeLabel($0) } ?? ""
         let limit = maximumSuggestedNameBytes - format.fileExtension.utf8.count - 1  // the dot
+            - suffix.utf8.count
         stem = truncated(stem, toByteCount: max(0, limit))
         stem = stem.trimmingCharacters(in: .whitespaces)
         if stem.isEmpty { stem = "Untitled piece" }
-        return "\(stem).\(format.fileExtension)"
+        return "\(stem)\(suffix).\(format.fileExtension)"
+    }
+
+    /// `"mm. 12–24"`, or `"m. 12"` for a one-measure loop: the printed
+    /// numbers the owner set the loop with.
+    public static func rangeLabel(_ range: LoopRange) -> String {
+        let start = truncated(sanitized(range.startMeasureNumber), toByteCount: 16)
+        let end = truncated(sanitized(range.endMeasureNumber), toByteCount: 16)
+        return start == end ? "m. \(start)" : "mm. \(start)–\(end)"
     }
 
     /// `text` shortened to at most `byteCount` UTF-8 bytes, never splitting a

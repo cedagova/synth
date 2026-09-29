@@ -24,6 +24,7 @@ struct ExportSheet: View {
             ExportFormatControls(
                 settings: $model.settings, fixedDepth: nil, isDisabled: model.isExporting
             )
+            ExportRangeControl(model: model)
             if let caveat = model.caveat() {
                 Label(caveat, systemImage: "info.circle")
                     .font(.callout)
@@ -163,6 +164,40 @@ struct ExportSheet: View {
         if case .finished = model.phase { return "Export Again…" }
         if case .failed = model.phase { return "Try Again…" }
         return "Choose Destination…"
+    }
+}
+
+/// "Loop range only" (#91): off each time the sheet opens, and disabled
+/// without a loop. It reads the transport's loop live, so clearing the loop
+/// while the sheet is open turns it off and says the whole piece will export.
+struct ExportRangeControl: View {
+    @Bindable var model: ExportModel
+
+    var body: some View {
+        let loop = model.currentLoop()
+        VStack(alignment: .leading, spacing: 6) {
+            SectionHeading("Range")
+            Toggle("Loop range only", isOn: Binding(
+                get: { model.loopRangeOnly && loop != nil },
+                set: { model.loopRangeOnly = $0 }
+            ))
+            .disabled(loop == nil || model.isExporting)
+            .accessibilityHint("Exports only the looped measures, letting the last notes ring out.")
+
+            Text(Self.caption(loop: loop, isOn: model.loopRangeOnly))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    static func caption(loop: LoopRange?, isOn: Bool) -> String {
+        guard let loop else {
+            return "No loop is set, so the whole piece is exported."
+        }
+        return isOn
+            ? "Exports \(loop.displayText), then lets the last notes ring out."
+            : "Exports the whole piece. Turn this on to export only \(loop.displayText)."
     }
 }
 

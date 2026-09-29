@@ -108,6 +108,22 @@ final class ExportModel {
     /// The active preset's name, for the suggested file name.
     var presetName: @MainActor () -> String? = { nil }
 
+    /// The loop the transport has set right now, or nil. Read live, so a loop
+    /// cleared while the sheet is open disables "Loop range only" at once.
+    var currentLoop: @MainActor () -> LoopRange? = { nil }
+
+    /// "Loop range only" (#91): the owner's choice for this export. Off each
+    /// time the sheet opens and never persisted (plan decision 7); it only
+    /// takes effect while a loop is set — see `window`.
+    var loopRangeOnly = false
+
+    /// What this export will render: the loop, when "Loop range only" is on
+    /// and a loop is set; otherwise nil, the whole piece. The one place that
+    /// decision is made, so the file name, the sheet and the render agree.
+    var window: LoopRange? {
+        loopRangeOnly ? currentLoop() : nil
+    }
+
     /// A sentence the sheet shows when what is playing is not what will be
     /// exported — the sound studio's play-through being the one case.
     var caveat: @MainActor () -> String? = { nil }
@@ -141,7 +157,8 @@ final class ExportModel {
     /// The file name the save panel opens on.
     var suggestedFileName: String {
         AudioExportNaming.suggestedFileName(
-            pieceTitle: pieceTitle, presetName: presetName(), format: settings.format
+            pieceTitle: pieceTitle, presetName: presetName(), format: settings.format,
+            range: window
         )
     }
 
@@ -194,6 +211,7 @@ final class ExportModel {
         guard !isExporting else { return }
         willExport()
         phase = .ready
+        loopRangeOnly = false
         isPresented = true
     }
 
@@ -215,7 +233,7 @@ final class ExportModel {
     func start(to destination: URL) {
         guard !isExporting else { return }
         willExport()
-        guard let request = makeRequest(settings) else {
+        guard let request = makeRequest(settings)?.windowed(to: window) else {
             phase = .failed(ExportFailure(AudioExportError.nothingToRender))
             return
         }

@@ -297,6 +297,7 @@ final class PlaybackModel {
         export.willExport = { [weak self] in self?.endCompare() }
         export.presetName = { [weak self] in self?.assignment.activePreset?.name }
         export.caveat = { [weak self] in self?.assignment.exportCaveat }
+        export.currentLoop = { [weak self] in self?.loop }
         export.makeRequest = { [weak self] settings in
             guard let self, let timeline = self.timeline else { return nil }
             // The timeline already carries the humanization that produced it,

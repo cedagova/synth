@@ -354,6 +354,11 @@ static void synth_engine_relocate(SynthRenderEngine *engine, int64_t frame) {
         }
         /* Step back onto a span that is still open so its end is not missed. */
         if (down && pedalIndex > 0) { pedalIndex--; }
+        /* Past a loop-range cut every pedal is up and stays up. */
+        if (engine->noteCutoffFrame > 0 && frame >= engine->noteCutoffFrame) {
+            down = 0;
+            pedalIndex = line->pedalSpanCount;
+        }
         line->nextPedalIndex = pedalIndex;
         line->pedalDown = down;
         if (line->voice.setSustainPedal) {
@@ -392,13 +397,18 @@ static void synth_render_line(SynthRenderEngine *engine,
                               float *outRight,
                               float *roomOut) {
     int32_t offset = 0;
+    /* A loop-range export's cut (#91), or INT64_MAX for every other render,
+       which leaves every comparison below exactly as it was. */
+    const int64_t cutoff = engine->noteCutoffFrame > 0 ? engine->noteCutoffFrame : INT64_MAX;
 
     while (offset < frameCount) {
         const int64_t now = blockStart + offset;
 
-        /* Apply every transition that falls exactly on `now`. */
+        /* Apply every transition that falls exactly on `now`. Nothing starts
+           at or after the cut. */
         while (line->nextEventIndex < line->eventCount
-               && line->events[line->nextEventIndex].onsetFrame <= now) {
+               && line->events[line->nextEventIndex].onsetFrame <= now
+               && line->events[line->nextEventIndex].onsetFrame < cutoff) {
             const SynthRenderEvent *event = &line->events[line->nextEventIndex];
 
             if (line->activeCount >= SYNTH_MAX_POLYPHONY) {
@@ -420,7 +430,8 @@ static void synth_render_line(SynthRenderEngine *engine,
             if (line->voice.noteOn) {
                 line->voice.noteOn(line->voice.state, event->midiNoteNumber, event->velocity);
             }
-            line->activeEndFrame[line->activeCount] = event->endFrame;
+            /* A note still held at the cut is released there. */
+            line->activeEndFrame[line->activeCount] = synth_min64(event->endFrame, cutoff);
             line->activeNote[line->activeCount] = event->midiNoteNumber;
             line->activeCount++;
             line->nextEventIndex++;
@@ -437,6 +448,17 @@ static void synth_render_line(SynthRenderEngine *engine,
             } else {
                 i++;
             }
+        }
+
+        /* At the cut the pedal comes up and no later span goes down. */
+        if (now >= cutoff && line->nextPedalIndex < line->pedalSpanCount) {
+            if (line->pedalDown) {
+                line->pedalDown = 0;
+                if (line->voice.setSustainPedal) {
+                    line->voice.setSustainPedal(line->voice.state, 0);
+                }
+            }
+            line->nextPedalIndex = line->pedalSpanCount;
         }
 
         while (line->nextPedalIndex < line->pedalSpanCount) {
@@ -466,6 +488,7 @@ static void synth_render_line(SynthRenderEngine *engine,
         if (line->nextEventIndex < line->eventCount) {
             boundary = synth_min64(boundary, line->events[line->nextEventIndex].onsetFrame);
         }
+        if (now < cutoff) { boundary = synth_min64(boundary, cutoff); }
         for (int32_t i = 0; i < line->activeCount; i++) {
             boundary = synth_min64(boundary, line->activeEndFrame[i]);
         }

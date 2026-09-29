@@ -352,6 +352,64 @@ final class ExportWiringTests: XCTestCase {
         XCTAssertTrue(playback.export.suggestedFileName.hasSuffix(".aiff"))
     }
 
+    // MARK: Loop range only (#91)
+
+    /// "Loop range only" follows the transport's loop: off each time the sheet
+    /// opens, no effect without a loop, the loop's range in the file name and
+    /// in the render when on, and back to the whole piece — visibly — when the
+    /// loop is cleared under an open sheet.
+    func testLoopRangeOnlyFollowsTheTransportsLoop() async throws {
+        let playback = try await openPreparedPiece(measureCount: 4)
+        let export = playback.export
+        let preset = try XCTUnwrap(playback.assignment.activePreset).name
+        export.settings.format = .wav
+
+        // No loop: the option has nothing to act on.
+        XCTAssertNil(export.currentLoop())
+        export.loopRangeOnly = true
+        XCTAssertNil(export.window, "Without a loop the export must be the whole piece.")
+        XCTAssertEqual(export.suggestedFileName, "\(playback.piece.title) — \(preset).wav")
+        XCTAssertEqual(
+            ExportRangeControl.caption(loop: nil, isOn: true),
+            "No loop is set, so the whole piece is exported."
+        )
+
+        playback.loopFromField = "2"
+        playback.loopToField = "3"
+        playback.setLoopFromFields()
+        let loop = try XCTUnwrap(playback.loop)
+        XCTAssertEqual(export.currentLoop(), loop, "The export must read the transport's loop.")
+
+        // Opening the sheet turns the option off: it is per export, never kept.
+        export.present()
+        XCTAssertFalse(export.loopRangeOnly)
+        XCTAssertNil(export.window)
+
+        export.loopRangeOnly = true
+        XCTAssertEqual(export.window, loop)
+        XCTAssertEqual(
+            export.suggestedFileName, "\(playback.piece.title) — \(preset) mm. 2–3.wav"
+        )
+
+        // The render is the loop's window: shorter than the piece, and the
+        // same length the exporter computes for it.
+        let url = exports.appending(path: "loop.wav")
+        let result = try await exportAndWait(playback, to: url)
+        let timeline = try XCTUnwrap(playback.timeline)
+        let full = try XCTUnwrap(playback.assignment.exportRequest(timeline: timeline, settings: .cdQuality))
+        let program = try RenderProgram(timeline: timeline, sampleRate: 44_100, voices: full.voices)
+        let start = RenderProgram.frame(forMicroseconds: loop.startMicroseconds, sampleRate: 44_100)
+        let end = RenderProgram.frame(forMicroseconds: loop.endMicroseconds, sampleRate: 44_100)
+        let tail = Int64((program.releaseTailSeconds * 44_100).rounded())
+        XCTAssertEqual(result.frameCount, min(program.totalFrames, end + tail) - start)
+        XCTAssertLessThan(result.frameCount, program.totalFrames)
+
+        // The loop cleared while the sheet is open: back to the whole piece.
+        playback.clearLoop()
+        XCTAssertNil(export.window)
+        XCTAssertEqual(export.suggestedFileName, "\(playback.piece.title) — \(preset).wav")
+    }
+
     // MARK: Cancel, from the main actor, against a real background render
 
     /// **The cancel path, end to end.** A render running on its own thread is

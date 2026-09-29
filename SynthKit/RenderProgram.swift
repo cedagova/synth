@@ -236,6 +236,18 @@ public final class RenderProgram: @unchecked Sendable {
         .microseconds(Self.microseconds(forFrame: totalFrames, sampleRate: sampleRate))
     }
 
+    /// Cut the performance at `frame` for a loop-range export (#91): no note
+    /// starts at or after it, sounding notes and pedals release there, and the
+    /// voices and effects ring out. Nil removes the cut.
+    ///
+    /// Applied to the built program rather than to the timeline on purpose:
+    /// master calibration is measured from the whole loaded timeline, so the
+    /// loop-range file keeps the full piece's loudness, and every frame before
+    /// the cut renders exactly as the full export does. Set before rendering.
+    func setNoteCutoff(frame: Int64?) {
+        synth_engine_set_note_cutoff_frame(engine, frame ?? 0)
+    }
+
     /// Index of the line with this identifier, or nil.
     public func index(of id: ScoreLineID) -> Int? {
         lineIDs.firstIndex(of: id)

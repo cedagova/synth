@@ -112,12 +112,17 @@ public struct AudioExporter: Sendable {
         return rendered.result(url: staging.destination, request: request, started: started)
     }
 
-    /// Render the whole program into `target` and close it, stopping for a
-    /// cancel between blocks and once more after the last one.
+    /// Render the program into `target` and close it, stopping for a cancel
+    /// between blocks and once more after the last one.
     ///
     /// The one render loop an export has: the single-file export above and
     /// each stem of `AudioStemExporter` both come through here, so a stem is
     /// the same engine, the same blocks and the same writer as the mix.
+    ///
+    /// With a `request.window` (#91) the loop still renders from frame 0 — the
+    /// pre-roll — and writes only the window's frames plus its ring-out, so the
+    /// written span is the full export's own samples rather than a second,
+    /// cold-started render of them (plan decisions 5–6).
     func render(
         into target: StagedAudioFile,
         opener: StagingFileOpening,
@@ -142,9 +147,18 @@ public struct AudioExporter: Sendable {
             throw AudioExportError.nothingToRender
         }
         request.applyMixer(to: engine)
+
+        guard program.totalFrames > 0 else { throw AudioExportError.nothingToRender }
+        let span = RenderSpan(
+            window: request.window, program: program, timeline: request.timeline
+        )
+        program.setNoteCutoff(frame: span.noteCutoffFrame)
         engine.play()
 
-        let totalFrames = program.totalFrames
+        // Everything below counts *written* frames; `renderEnd` is how far the
+        // engine runs, pre-roll included.
+        let totalFrames = span.writtenFrameCount
+        let renderEnd = span.renderEndFrame
         guard totalFrames > 0 else { throw AudioExportError.nothingToRender }
 
         let writer = AudioFileWriter(
@@ -170,10 +184,11 @@ public struct AudioExporter: Sendable {
         try target.write(writer.header(), to: file)
 
         var rendered: Int64 = 0
+        var written: Int64 = 0
         var ownershipChecks = 0
         var peak: Float = 0
 
-        while rendered < totalFrames {
+        while rendered < renderEnd {
             if cancellation.isCancelled { throw AudioExportError.cancelled }
 
             ownershipChecks += 1
@@ -181,34 +196,40 @@ public struct AudioExporter: Sendable {
                 throw AudioExportError.engineCrossedThreads
             }
 
-            let wanted = min(Self.blockFrames, totalFrames - rendered)
+            let wanted = min(Self.blockFrames, renderEnd - rendered)
             let block = try engine.renderOffline(frameCount: wanted)
             guard block.frameCount > 0 else {
                 throw AudioExportError.renderStopped(
-                    atFrame: rendered, expectedFrames: totalFrames
+                    atFrame: rendered, expectedFrames: renderEnd
                 )
             }
-            for sample in block.left where abs(sample) > peak { peak = abs(sample) }
-            for sample in block.right where abs(sample) > peak { peak = abs(sample) }
 
-            try target.write(
-                writer.encode(left: block.left[...], right: block.right[...]), to: file
-            )
+            // The part of this block at or after the window start. The whole
+            // block for a full export; nothing, during a loop's pre-roll.
+            let skip = Int(max(0, min(Int64(block.frameCount), span.writeStartFrame - rendered)))
+            if skip < block.frameCount {
+                let left = block.left[skip..<block.frameCount]
+                let right = block.right[skip..<block.frameCount]
+                for sample in left where abs(sample) > peak { peak = abs(sample) }
+                for sample in right where abs(sample) > peak { peak = abs(sample) }
+                try target.write(writer.encode(left: left, right: right), to: file)
+                written += Int64(block.frameCount - skip)
+            }
             rendered += Int64(block.frameCount)
 
             progress(
                 AudioExportProgress(
-                    renderedFrames: min(rendered, totalFrames),
-                    totalFrames: totalFrames,
+                    renderedFrames: min(rendered, renderEnd),
+                    totalFrames: renderEnd,
                     sampleRate: request.settings.sampleRate.hertz,
                     elapsed: Date().timeIntervalSince(started)
                 )
             )
         }
 
-        guard rendered == totalFrames else {
+        guard rendered == renderEnd, written == totalFrames else {
             throw AudioExportError.renderStopped(
-                atFrame: rendered, expectedFrames: totalFrames
+                atFrame: rendered, expectedFrames: renderEnd
             )
         }
 
@@ -231,6 +252,57 @@ public struct AudioExporter: Sendable {
             ranOnMainThread: ranOnMainThread,
             ownershipChecks: ownershipChecks
         )
+    }
+}
+
+/// Which frames an export renders and which it writes (#91).
+///
+/// Without a window: all of the program, written from frame 0 — the full
+/// export, unchanged. With one: the engine still runs from frame 0 so every
+/// voice, the room and the master arrive at the window start in exactly the
+/// state the full export has there (exact by pre-roll, plan decision 5); the
+/// performance is cut at the window end — no note starts after it, sounding
+/// notes and pedals release there — and the file keeps the program's own
+/// capped release tail after it for the ring-out (decision 6).
+///
+/// A window that reaches the end of the piece is not cut at all, so its tail
+/// is the full export's tail, byte for byte.
+struct RenderSpan: Equatable {
+    /// First frame written.
+    let writeStartFrame: Int64
+    /// Frame the engine stops at, exclusive. Also the last frame written.
+    let renderEndFrame: Int64
+    /// Where the performance is cut, or nil for none.
+    let noteCutoffFrame: Int64?
+
+    var writtenFrameCount: Int64 { max(0, renderEndFrame - writeStartFrame) }
+
+    init(window: LoopRange?, program: RenderProgram, timeline: PerformanceTimeline) {
+        let total = program.totalFrames
+        guard let window else {
+            self.init(writeStartFrame: 0, renderEndFrame: total, noteCutoffFrame: nil)
+            return
+        }
+        let rate = program.sampleRate
+        let start = min(max(0, RenderProgram.frame(forMicroseconds: window.startMicroseconds, sampleRate: rate)), total)
+        let end = RenderProgram.frame(forMicroseconds: window.endMicroseconds, sampleRate: rate)
+        let pieceEnd = RenderProgram.frame(forMicroseconds: timeline.totalMicroseconds, sampleRate: rate)
+        guard end < pieceEnd else {
+            self.init(writeStartFrame: start, renderEndFrame: total, noteCutoffFrame: nil)
+            return
+        }
+        let tail = Int64((program.releaseTailSeconds * rate).rounded())
+        self.init(
+            writeStartFrame: start,
+            renderEndFrame: max(start, min(total, end + tail)),
+            noteCutoffFrame: end
+        )
+    }
+
+    init(writeStartFrame: Int64, renderEndFrame: Int64, noteCutoffFrame: Int64?) {
+        self.writeStartFrame = writeStartFrame
+        self.renderEndFrame = renderEndFrame
+        self.noteCutoffFrame = noteCutoffFrame
     }
 }
 
@@ -316,6 +388,13 @@ public struct AudioExportRequest: Sendable {
     /// a stem is 32-bit float so a pre-master peak above full scale survives.
     public let sampleEncoding: AudioSampleEncoding
 
+    /// Export only this span of the performance (#91, "Loop range only"): the
+    /// performed measures the loop plays, then the ring-out. Nil — every
+    /// export but that one, and every stem — renders the whole piece exactly as
+    /// before. Applied at render time, never by trimming `timeline`, so the
+    /// loudness calibration is the whole piece's (`RenderSpan`).
+    public let window: LoopRange?
+
     public init(
         timeline: PerformanceTimeline,
         voices: LineVoiceAssignment,
@@ -325,7 +404,8 @@ public struct AudioExportRequest: Sendable {
         tuning: TuningSettings = .standard,
         settings: AudioExportSettings = .standard,
         bypassesMasterStage: Bool = false,
-        sampleEncoding: AudioSampleEncoding? = nil
+        sampleEncoding: AudioSampleEncoding? = nil,
+        window: LoopRange? = nil
     ) {
         self.timeline = timeline
         self.voices = voices
@@ -336,6 +416,25 @@ public struct AudioExportRequest: Sendable {
         self.settings = settings
         self.bypassesMasterStage = bypassesMasterStage
         self.sampleEncoding = sampleEncoding ?? .integer(settings.bitDepth)
+        self.window = window
+    }
+
+    /// This request limited to `window` (#91), or the whole piece for nil.
+    /// Everything else — timeline, sounds, mix, master, tuning, file settings —
+    /// is carried over unchanged.
+    public func windowed(to window: LoopRange?) -> AudioExportRequest {
+        AudioExportRequest(
+            timeline: timeline,
+            voices: voices,
+            mixer: mixer,
+            masterGain: masterGain,
+            producedMaster: producedMaster,
+            tuning: tuning,
+            settings: settings,
+            bypassesMasterStage: bypassesMasterStage,
+            sampleEncoding: sampleEncoding,
+            window: window
+        )
     }
 
     /// Every line of the loaded program written, including ones the preset does
@@ -379,7 +478,8 @@ extension PresetPerformance {
     public func exportRequest(
         timeline: PerformanceTimeline,
         settings: AudioExportSettings,
-        instruments: SampledInstrumentLibrary? = nil
+        instruments: SampledInstrumentLibrary? = nil,
+        window: LoopRange? = nil
     ) -> AudioExportRequest {
         AudioExportRequest(
             timeline: timeline,
@@ -396,7 +496,8 @@ extension PresetPerformance {
             masterGain: 1,
             producedMaster: preset.content.producedMaster,
             tuning: preset.content.tuning,
-            settings: settings
+            settings: settings,
+            window: window
         )
     }
 }

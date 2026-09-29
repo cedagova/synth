@@ -332,6 +332,11 @@ void synth_engine_set_total_frames(SynthRenderEngine *engine, int64_t totalFrame
     engine->totalFrames = totalFrames < 0 ? 0 : totalFrames;
 }
 
+void synth_engine_set_note_cutoff_frame(SynthRenderEngine *engine, int64_t frame) {
+    if (engine == NULL) { return; }
+    engine->noteCutoffFrame = frame > 0 ? frame : 0;
+}
+
 void synth_engine_set_sample_rate(SynthRenderEngine *engine, double sampleRate) {
     if (engine == NULL || sampleRate <= 0.0) { return; }
     engine->sampleRate = sampleRate;

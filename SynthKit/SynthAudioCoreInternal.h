@@ -236,6 +236,14 @@ struct SynthRenderEngine {
     double  sampleRate;
     int64_t totalFrames;
 
+    /// Where the performance is cut for a loop-range export (#91): no note
+    /// starts at or after this frame, every sounding note is released at it
+    /// and every sustain pedal is lifted, so what follows is the ring-out.
+    /// Zero or less means no cut, which is every render but that one — and
+    /// the render before the cut is bit-identical either way. Written by the
+    /// control thread while the engine is stopped, like `totalFrames`.
+    int64_t noteCutoffFrame;
+
     /* Control thread writes, render thread reads — except `transportCommand`,
        which the render thread also writes in two places: the end-of-piece latch
        and the overload watchdog, both of which retire a stale play command so

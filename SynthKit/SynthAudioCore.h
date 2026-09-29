@@ -218,6 +218,13 @@ void synth_engine_set_line_voice(SynthRenderEngine *engine,
 /// wants rendered. Playback pauses at this point with `SynthPauseReasonReachedEnd`.
 void synth_engine_set_total_frames(SynthRenderEngine *engine, int64_t totalFrames);
 
+/// Cut the performance at `frame` (#91, loop-range export): no note starts at or
+/// after it, sounding notes are released there and sustain pedals lifted, and
+/// the voices and effects ring out from that point. Zero or less removes the
+/// cut. Frames before the cut render bit-identically with or without it.
+/// Control thread, engine stopped.
+void synth_engine_set_note_cutoff_frame(SynthRenderEngine *engine, int64_t frame);
+
 /// Re-prepare every voice for a new sample rate and rebuild rate-derived
 /// constants. Control thread, engine stopped.
 ///
